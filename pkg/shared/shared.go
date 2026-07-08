@@ -62,28 +62,28 @@ func ContextForOptions(opts GlobalOptions) (context.Context, context.CancelFunc)
 }
 
 func UserClient(opts GlobalOptions) (*openlinker.Client, error) {
-	return newClient(opts, false)
-}
-
-func RuntimeClient(opts GlobalOptions) (*openlinker.Client, error) {
-	if strings.TrimSpace(opts.RuntimeToken) == "" {
-		return nil, errors.New("OPENLINKER_RUNTIME_TOKEN is required for delegate")
-	}
-	return newClient(opts, true)
-}
-
-func newClient(opts GlobalOptions, runtime bool) (*openlinker.Client, error) {
 	httpClient := &http.Client{Timeout: opts.Timeout}
 	options := []openlinker.Option{
 		openlinker.WithHTTPClient(httpClient),
 		openlinker.WithSDKAgent(SDKAgent),
 	}
-	if runtime {
-		options = append(options, openlinker.WithRuntimeToken(opts.RuntimeToken))
-	} else if strings.TrimSpace(opts.UserToken) != "" {
+	if strings.TrimSpace(opts.UserToken) != "" {
 		options = append(options, openlinker.WithUserToken(opts.UserToken))
 	}
 	return openlinker.NewClient(opts.APIBase, options...)
+}
+
+func RuntimeClient(opts GlobalOptions) (*openlinker.Runtime, error) {
+	if strings.TrimSpace(opts.RuntimeToken) == "" {
+		return nil, errors.New("OPENLINKER_RUNTIME_TOKEN is required for delegate")
+	}
+	httpClient := &http.Client{Timeout: opts.Timeout}
+	options := []openlinker.Option{
+		openlinker.WithHTTPClient(httpClient),
+		openlinker.WithSDKAgent(SDKAgent),
+		openlinker.WithRuntimeToken(opts.RuntimeToken),
+	}
+	return openlinker.NewRuntime(opts.APIBase, options...)
 }
 
 func Payload(stdin io.Reader, input, inputFile, text string) (any, error) {

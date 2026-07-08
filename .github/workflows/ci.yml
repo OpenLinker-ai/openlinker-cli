@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: GOWORK=off go test ./...
+
+      - name: Verify nested modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -mindepth 2 -name go.mod -not -path './.git/*' -print | sort | while IFS= read -r gomod; do
+            mod="$(dirname "${gomod}")"
+            (cd "${mod}" && GOWORK=off go test ./...)
+          done
+
+      - name: Build
+        run: GOWORK=off go build -trimpath -ldflags="-s -w" ./cmd/openlinker
