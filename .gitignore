@@ -1,0 +1,16 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build and test outputs
+bin/
+/openlinker
+coverage.out
+*.cover.out
+example/agent-skill/skills/openlinker-cli/scripts/openlinker
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

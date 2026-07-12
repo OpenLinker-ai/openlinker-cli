@@ -1,5 +1,7 @@
 # OpenLinker CLI
 
+Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
+
 Small JSON-first CLI for discovering and invoking OpenLinker Agents from a
 user/API context. It is intentionally thin over `openlinker-go`:
 
@@ -24,7 +26,9 @@ export OPENLINKER_USER_TOKEN=ol_user_xxx
 
 The CLI does not accept the retired `OPENLINKER_TOKEN`,
 `OPENLINKER_RUNTIME_TOKEN`, `OPENLINKER_DEMO_JWT`, or `OPENLINKER_API_URL`
-aliases. `--token` may be used to provide a User Token explicitly.
+aliases. `--token` may be used to provide a User Token explicitly, but the
+environment variable is safer for routine use because command-line arguments
+may be retained in shell history or exposed in process listings.
 
 Run identifiers may be injected by a surrounding environment for diagnostics:
 
@@ -36,6 +40,21 @@ export OPENLINKER_TRACE_ID=trace_xxx
 
 These values are context only. They do not authorize runtime delegation.
 
+## User Token grants
+
+Create and manage User Tokens outside this CLI. Give each token only the Core
+grants needed for the commands it will run:
+
+| Commands | Required grant |
+| --- | --- |
+| `context` | None; it makes no API request |
+| `agents search`, `agents get`, `agents card` | `agents:read` |
+| `run` | `agents:run` |
+| `runs get`, `runs children`, `runs events`, `runs messages`, `runs artifacts` | `runs:read` |
+
+An `agents:run` grant may be limited to one Agent. Grants do not replace Core's
+ownership, visibility, or run-state checks.
+
 ## Commands
 
 OpenLinker uses Cobra/pflag syntax. Use double-dash long flags such as `--api`,
@@ -43,7 +62,7 @@ OpenLinker uses Cobra/pflag syntax. Use double-dash long flags such as `--api`,
 
 ```bash
 openlinker --api http://localhost:8080 --timeout 60s context
-openlinker --api http://localhost:8080 --token ol_user_xxx run --agent agent_writer --text "hello"
+openlinker --api http://localhost:8080 run --agent agent_writer --text "hello"
 ```
 
 Inspect context without exposing credentials:
@@ -85,7 +104,7 @@ CLI can inspect child runs but does not create delegated child calls.
 
 Skills may use this CLI for Agent discovery, top-level user-authorized calls,
 and run inspection. Provide only `OPENLINKER_USER_TOKEN` with the minimum
-required scopes. Never expose a User Token in prompts or logs, and never give a
+required grants. Never expose a User Token in prompts or logs, and never give a
 Skill an Agent Token.
 
 When code executing inside Agent Node needs to call another Agent, use the
@@ -113,8 +132,19 @@ pkg/runs/artifacts
 ## Development
 
 ```bash
-go test ./...
-go test -race ./...
-go vet ./...
-go build ./cmd/openlinker
+GOWORK=off go test ./...
+GOWORK=off go test -race ./...
+GOWORK=off go vet ./...
+GOWORK=off go build ./cmd/openlinker
+
+cd example/agent-skill
+GOWORK=off go test ./...
 ```
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full contributor checks. Report
+security issues through [SECURITY.md](./SECURITY.md); use
+[SUPPORT.md](./SUPPORT.md) for reproducible bugs and feature requests.
+
+## License
+
+Apache-2.0. See [LICENSE](./LICENSE).

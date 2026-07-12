@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a change that fits the OpenLinker CLI boundary.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or contributor problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the command, output contract, or workflow you want.
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope fit
+      options:
+        - CLI commands
+        - JSON or output contract
+        - User Token boundary
+        - Agent discovery or top-level runs
+        - Run inspection
+        - Skills or examples
+        - Packaging or release
+        - Documentation
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: textarea
+    id: risks
+    attributes:
+      label: Grant, API, compatibility, or security impact
+      description: Note any User Token grant, Core API, openlinker-go, output, migration, or credential-handling impact.
+    validations:
+      required: false

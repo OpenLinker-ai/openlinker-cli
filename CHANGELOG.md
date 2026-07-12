@@ -14,6 +14,10 @@ runtime boundaries are stabilizing.
 - Reworked bundled Skills and examples around User Token discovery, top-level
   calls, and run inspection. Runtime delegation now points to Agent Node's
   run-scoped localhost helper.
+- Clarified the command-to-grant mapping and the boundary between this
+  user-facing CLI and Agent Node's Runtime v2 WebSocket/Pull responsibilities.
+- Added bilingual contributor, security, support, and release guidance plus
+  issue/PR templates, dependency updates, and complete release archives.
 
 ### Removed
 

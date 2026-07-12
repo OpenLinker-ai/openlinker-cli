@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible OpenLinker CLI bug.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include User Tokens, Agent Tokens, Authorization headers, private URLs, customer data, or vulnerability details. Use SECURITY.md for security reports. If the original command used `--token`, replace the flag and its value with “User Token supplied.”
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest reproducible sequence with sanitized inputs.
+      placeholder: |
+        1. Export a placeholder or redacted environment.
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: CLI version or commit
+      description: Binary version, release tag, or commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and sanitized arguments
+      description: Remove token flags and values, private paths, URLs, and customer input.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, and Go version when building from source.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Core API and SDK versions
+      description: Core API release or commit and the openlinker-go revision from go.mod, when relevant.
+    validations:
+      required: false
+  - type: textarea
+    id: output
+    attributes:
+      label: Sanitized stdout and stderr
+      description: Preserve the stdout/stderr distinction. Remove credentials and sensitive payloads completely.
+    validations:
+      required: false
