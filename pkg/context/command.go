@@ -8,10 +8,10 @@ import (
 func New(ioStreams shared.IO) *cobra.Command {
 	return &cobra.Command{
 		Use:   "context",
-		Short: "Print the current OpenLinker runtime context",
+		Short: "Print the current OpenLinker execution context",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return shared.WriteJSON(ioStreams.Stdout, map[string]any{
-				"api_base": ioStreams.FirstEnv("OPENLINKER_API_BASE", "OPENLINKER_API_URL"),
+				"api_base": ioStreams.Env("OPENLINKER_API_BASE"),
 				"run_id":   ioStreams.Env("OPENLINKER_RUN_ID"),
 				"agent_id": ioStreams.Env("OPENLINKER_AGENT_ID"),
 				"trace_id": ioStreams.Env("OPENLINKER_TRACE_ID"),

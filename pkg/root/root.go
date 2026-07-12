@@ -7,7 +7,6 @@ import (
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agents"
 	contextcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/context"
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/delegate"
 	runcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/run"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/runs"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
@@ -37,7 +36,7 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 
 	root := &cobra.Command{
 		Use:           "openlinker",
-		Short:         "JSON-first CLI for OpenLinker agents, skills, and automation",
+		Short:         "Discover, run, and inspect OpenLinker Agents",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -51,14 +50,12 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 		return nil
 	})
 	root.PersistentFlags().StringVar(&opts.APIBase, "api", opts.APIBase, "OpenLinker Core API base URL")
-	root.PersistentFlags().StringVar(&opts.UserToken, "token", opts.UserToken, "user JWT or API token")
-	root.PersistentFlags().StringVar(&opts.RuntimeToken, "runtime-token", opts.RuntimeToken, "runtime token for delegate commands")
+	root.PersistentFlags().StringVar(&opts.UserToken, "token", opts.UserToken, "OpenLinker User Token")
 	root.PersistentFlags().DurationVar(&opts.Timeout, "timeout", opts.Timeout, "request timeout")
 
 	root.AddCommand(contextcmd.New(ioStreams))
 	root.AddCommand(agents.New(ioStreams, opts))
 	root.AddCommand(runcmd.New(ioStreams, opts))
-	root.AddCommand(delegate.New(ioStreams, opts))
 	root.AddCommand(runs.New(ioStreams, opts))
 	return root
 }
@@ -70,7 +67,6 @@ func printUsage(stderr io.Writer) {
   openlinker [global flags] agents get --slug slug
   openlinker [global flags] agents card --slug slug [--extended]
   openlinker [global flags] run --agent agent_id [--input json|text] [--input-file file]
-  openlinker [global flags] delegate --agent agent_id [--parent-run run_id] [--reason text] [--input json|text]
   openlinker [global flags] runs get --id run_id
   openlinker [global flags] runs children --id run_id
   openlinker [global flags] runs events --id run_id [--limit n]
@@ -79,8 +75,7 @@ func printUsage(stderr io.Writer) {
 
 Global flags:
   --api             OpenLinker Core API base URL, default OPENLINKER_API_BASE or http://localhost:8080
-  --token           user token, default OPENLINKER_TOKEN / OPENLINKER_USER_TOKEN
-  --runtime-token   runtime token for delegate, default OPENLINKER_RUNTIME_TOKEN
+  --token           OpenLinker User Token, default OPENLINKER_USER_TOKEN
   --timeout         request timeout
 
 The CLI always writes JSON to stdout and never prints configured tokens.`)

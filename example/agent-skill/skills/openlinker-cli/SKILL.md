@@ -1,6 +1,6 @@
 ---
 name: openlinker-cli
-description: "Use this skill when an agent should interact with OpenLinker through the openlinker CLI: discover callable agents, start user-context runs, delegate to child agents from the current runtime run, or inspect run status/events/messages/artifacts. Prefer this skill for OpenLinker A2A delegation, multi-agent handoff, and run trace inspection."
+description: "Use this skill through Blades when a user-authorized task should discover OpenLinker Agents, start a top-level run, or inspect run status, children, events, messages, and artifacts."
 ---
 
 # OpenLinker CLI Skill
@@ -16,36 +16,34 @@ The executable script is:
 }
 ```
 
-Tokens and runtime context must come from environment variables. Never print or reveal token values.
+Credentials and context must come from environment variables. Never print or
+reveal credential values.
 
 The CLI uses Cobra/pflag syntax. Always pass long flags as separate double-dash arguments, for example `["--agent", "agent_writer"]`; do not use single-dash long flags such as `["-agent", "agent_writer"]`.
 
 ## Environment
 
-User-context commands use one of:
+The CLI accepts one credential:
 
 ```bash
-OPENLINKER_TOKEN
 OPENLINKER_USER_TOKEN
-OPENLINKER_DEMO_JWT
 ```
 
-Runtime delegation uses one of:
-
-```bash
-OPENLINKER_RUNTIME_TOKEN
-OPENLINKER_AGENT_TOKEN
-```
-
-Common variables:
+The API base is optional and defaults to the local Core API:
 
 ```bash
 OPENLINKER_API_BASE
-OPENLINKER_API_URL
+```
+
+The surrounding environment may also inject identifiers for diagnostics:
+
+```bash
 OPENLINKER_RUN_ID
 OPENLINKER_AGENT_ID
 OPENLINKER_TRACE_ID
 ```
+
+These identifiers are context only. They do not authorize calls.
 
 ## Commands
 
@@ -89,6 +87,16 @@ Get an agent by slug:
 }
 ```
 
+Get an extended Agent Card:
+
+```json
+{
+  "skill_name": "openlinker-cli",
+  "script_path": "scripts/openlinker",
+  "args": ["agents", "card", "--slug", "writer-agent", "--extended"]
+}
+```
+
 Start a top-level run:
 
 ```json
@@ -99,13 +107,13 @@ Start a top-level run:
 }
 ```
 
-Delegate from the current run:
+Inspect a run:
 
 ```json
 {
   "skill_name": "openlinker-cli",
   "script_path": "scripts/openlinker",
-  "args": ["delegate", "--agent", "agent_reviewer", "--reason", "review the draft", "--input", "{\"task\":\"review this draft\"}"]
+  "args": ["runs", "get", "--id", "run_xxx"]
 }
 ```
 
@@ -119,6 +127,19 @@ Inspect run children:
 }
 ```
 
+The same `runs` group can inspect `events`, `messages`, and `artifacts`.
+
+## Agent Runtime Boundary
+
+This CLI starts user-authorized top-level runs. It does not accept an Agent
+Token and does not create delegated child runs.
+
+When code running under OpenLinker Agent Node needs another Agent, use the
+run-scoped localhost helper injected by Agent Node. Follow the Agent Node
+documentation for the helper URL, authorization header, and idempotency rules;
+do not invent or copy helper credentials into a Skill.
+
 ## Stop Rule
 
-After a successful CLI JSON response, summarize the result and stop. Do not call the same OpenLinker command repeatedly unless the user asks for another query.
+After a successful CLI JSON response, summarize the result and stop. Do not
+repeat the same command unless the user asks for another query.

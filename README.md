@@ -1,25 +1,32 @@
 # OpenLinker CLI
 
-Small JSON-first Cobra CLI for OpenLinker agents, skills, and automation.
+Small JSON-first CLI for discovering and invoking OpenLinker Agents from a
+user/API context. It is intentionally thin over `openlinker-go`:
 
-The CLI is intentionally thin over the Go SDK. It is designed for agent-facing
-skills:
+- stdout is always JSON;
+- diagnostics and errors go to stderr;
+- the CLI accepts only an OpenLinker User Token and never prints it;
+- command implementations are split by subcommand under `pkg/`.
 
-- stdout is always JSON
-- diagnostics and errors go to stderr
-- tokens are read from flags or environment variables but are never printed
-- `delegate` defaults to the current OpenLinker run context from environment
-- command implementations are split by subcommand under `pkg/`
+The CLI is not an Agent runtime. Runtime v2 connections, WebSocket/Pull
+transport switching, durable execution, cancellation, and delegated Agent
+calls belong to [OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node).
+Agent Node gives an executing backend a run-scoped localhost helper for A2A
+delegation; do not pass a long-lived Agent Token to this CLI or to a business
+Agent process.
 
 ## Configuration
 
 ```bash
 export OPENLINKER_API_BASE=http://localhost:8080
-export OPENLINKER_TOKEN=ol_user_xxx
-export OPENLINKER_RUNTIME_TOKEN=ol_runtime_xxx
+export OPENLINKER_USER_TOKEN=ol_user_xxx
 ```
 
-Runtime context, usually injected by the OpenLinker runtime:
+The CLI does not accept the retired `OPENLINKER_TOKEN`,
+`OPENLINKER_RUNTIME_TOKEN`, `OPENLINKER_DEMO_JWT`, or `OPENLINKER_API_URL`
+aliases. `--token` may be used to provide a User Token explicitly.
+
+Run identifiers may be injected by a surrounding environment for diagnostics:
 
 ```bash
 export OPENLINKER_RUN_ID=run_xxx
@@ -27,27 +34,25 @@ export OPENLINKER_AGENT_ID=agent_xxx
 export OPENLINKER_TRACE_ID=trace_xxx
 ```
 
+These values are context only. They do not authorize runtime delegation.
+
 ## Commands
 
-OpenLinker uses Cobra/pflag style flags. Use double-dash long flags such as
-`--api`, `--agent`, and `--input`. Single-dash long flags like `-api` are not
-supported.
-
-Global flags:
+OpenLinker uses Cobra/pflag syntax. Use double-dash long flags such as `--api`,
+`--agent`, and `--input`; single-dash long flags are not supported.
 
 ```bash
 openlinker --api http://localhost:8080 --timeout 60s context
 openlinker --api http://localhost:8080 --token ol_user_xxx run --agent agent_writer --text "hello"
-openlinker --api http://localhost:8080 --runtime-token ol_runtime_xxx delegate --agent agent_reviewer --text "review this"
 ```
 
-Inspect runtime context without exposing credentials:
+Inspect context without exposing credentials:
 
 ```bash
 openlinker context
 ```
 
-Discover agents:
+Discover Agents:
 
 ```bash
 openlinker agents search --query "summarization" --callable
@@ -55,7 +60,7 @@ openlinker agents get --slug writer-agent
 openlinker agents card --slug writer-agent --extended
 ```
 
-Run an agent from a user/API context:
+Start a top-level run:
 
 ```bash
 openlinker run \
@@ -63,19 +68,7 @@ openlinker run \
   --input '{"task":"write a short summary"}'
 ```
 
-Delegate from the current OpenLinker run:
-
-```bash
-openlinker delegate \
-  --agent agent_reviewer \
-  --reason "review the generated summary" \
-  --input '{"task":"review this draft"}'
-```
-
-The command above uses `OPENLINKER_RUN_ID` as the parent run. Override it with
-`--parent-run` when needed.
-
-Inspect run state and A2A delegation traces:
+Inspect run state and A2A traces that already exist:
 
 ```bash
 openlinker runs get --id run_xxx
@@ -85,46 +78,28 @@ openlinker runs messages --id run_xxx
 openlinker runs artifacts --id run_xxx
 ```
 
-`runs children` is backed by `openlinker-go`'s `ListRunChildren` SDK method.
+`runs children` is backed by `openlinker-go`'s `ListRunChildren` method. The
+CLI can inspect child runs but does not create delegated child calls.
 
 ## Skill Guidance
 
-Skills should call this CLI instead of directly handling OpenLinker tokens. A
-skill can decide when to delegate, then run:
+Skills may use this CLI for Agent discovery, top-level user-authorized calls,
+and run inspection. Provide only `OPENLINKER_USER_TOKEN` with the minimum
+required scopes. Never expose a User Token in prompts or logs, and never give a
+Skill an Agent Token.
 
-```bash
-openlinker delegate --agent agent_xxx --reason "..." --input '{"task":"..."}'
-```
-
-Do not put tokens in skill files or command examples. Use environment variables,
-workload identity, or a credential broker outside of the agent prompt.
+When code executing inside Agent Node needs to call another Agent, use the
+run-scoped localhost helper injected by Agent Node. The official Agent Node
+documentation defines its URL, authorization header, and idempotency rules.
 
 ## Project Layout
 
-The executable entrypoint is intentionally small:
-
 ```text
 cmd/openlinker/main.go
-```
-
-Cobra command wiring lives in:
-
-```text
 pkg/root
-```
-
-Shared CLI utilities live in:
-
-```text
 pkg/shared
-```
-
-Each user-facing subcommand has its own package:
-
-```text
 pkg/context
 pkg/run
-pkg/delegate
 pkg/agents/search
 pkg/agents/get
 pkg/agents/card
@@ -137,8 +112,9 @@ pkg/runs/artifacts
 
 ## Development
 
-Run tests with:
-
 ```bash
 go test ./...
+go test -race ./...
+go vet ./...
+go build ./cmd/openlinker
 ```

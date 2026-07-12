@@ -1,38 +1,31 @@
 ---
 name: openlinker-cli-for-generic
-description: "Use this skill when an agent should interact with OpenLinker through the openlinker CLI: discover callable agents, start user-context runs, delegate to child agents from the current runtime run, or inspect run status/events/messages/artifacts. Prefer this skill for OpenLinker A2A delegation, multi-agent handoff, and run trace inspection."
+description: "Use this skill when a user-authorized task should discover OpenLinker Agents, start a top-level run, or inspect run status, children, events, messages, and artifacts through the openlinker CLI."
 ---
 
 # OpenLinker CLI Skill
 
-Use the `openlinker` CLI as the boundary between the agent and OpenLinker Core. Do not handle or print tokens directly. Assume credentials and runtime context are provided by the environment unless the user explicitly supplies flags.
+Use the `openlinker` CLI as the user/API boundary to OpenLinker Core. Do not
+handle or print tokens directly. Assume credentials and context are provided by
+the environment unless the user explicitly supplies flags.
 
 The CLI uses Cobra/pflag syntax. Always use double-dash long flags such as `--api`, `--agent`, `--input`, and `--id`; do not use single-dash long flags such as `-api`.
 
 ## Environment
 
-Required for most commands:
+The API base is optional and defaults to the local Core API:
 
 ```bash
 OPENLINKER_API_BASE=http://localhost:8080
 ```
 
-User-context commands use one of:
+The CLI accepts one credential:
 
 ```bash
-OPENLINKER_TOKEN
 OPENLINKER_USER_TOKEN
-OPENLINKER_DEMO_JWT
 ```
 
-Runtime delegation uses one of:
-
-```bash
-OPENLINKER_RUNTIME_TOKEN
-OPENLINKER_AGENT_TOKEN
-```
-
-Runtime context may be injected by OpenLinker:
+The surrounding environment may inject identifiers for diagnostics:
 
 ```bash
 OPENLINKER_RUN_ID
@@ -40,19 +33,19 @@ OPENLINKER_AGENT_ID
 OPENLINKER_TRACE_ID
 ```
 
-Never include real token values in prompts, skill files, logs, or final answers.
+These identifiers are context only. They do not authorize calls. Never include
+real token values in prompts, skill files, logs, or final answers.
 
 ## First Checks
 
-Check runtime context without exposing credentials:
+Check context without exposing credentials:
 
 ```bash
 openlinker context
 ```
 
-If a command needs user auth and fails with auth errors, ask the operator to provide `OPENLINKER_TOKEN` or `OPENLINKER_USER_TOKEN`.
-
-If `delegate` fails because no parent run is available, ask the operator to run inside an OpenLinker runtime assignment or set `OPENLINKER_RUN_ID`.
+If a command needs authentication and fails, ask the operator to provide
+`OPENLINKER_USER_TOKEN` outside the prompt.
 
 ## Discover Agents
 
@@ -76,7 +69,7 @@ openlinker agents card --slug writer-agent --extended
 
 Use discovery when the user gives a capability but not a concrete target agent id.
 
-## Start A User Run
+## Start a User Run
 
 Use `run` when acting from a user/API context and starting a top-level OpenLinker run:
 
@@ -91,30 +84,6 @@ Plain text input is allowed:
 ```bash
 openlinker run --agent agent_writer --text "write a short summary"
 ```
-
-## Delegate From Current Run
-
-Use `delegate` when the current agent should call another OpenLinker agent as a child run:
-
-```bash
-openlinker delegate \
-  --agent agent_reviewer \
-  --reason "review the draft" \
-  --input '{"task":"review this draft"}'
-```
-
-`delegate` defaults to `OPENLINKER_RUN_ID` as `parent_run_id` and `OPENLINKER_TRACE_ID` as `trace_id`.
-
-Override parent run only when the user or runtime explicitly provides it:
-
-```bash
-openlinker delegate \
-  --agent agent_reviewer \
-  --parent-run run_parent \
-  --input '{"task":"review this draft"}'
-```
-
-Prefer `delegate` over `run` for A2A handoff, multi-agent workflows, or any action that should appear as a child in OpenLinker traces.
 
 ## Inspect Runs
 
@@ -138,7 +107,17 @@ openlinker runs messages --id run_xxx
 openlinker runs artifacts --id run_xxx
 ```
 
-Use these after delegation to report the child run id, status, and parent-child relationship.
+Use these to report run state and any existing parent-child relationship.
+
+## Agent Runtime Boundary
+
+This CLI starts user-authorized top-level runs. It does not accept an Agent
+Token and does not create delegated child runs.
+
+When code running under OpenLinker Agent Node needs another Agent, use the
+run-scoped localhost helper injected by Agent Node. Follow the Agent Node
+documentation for the helper URL, authorization header, and idempotency rules;
+do not invent or copy helper credentials into a Skill.
 
 ## Output Handling
 

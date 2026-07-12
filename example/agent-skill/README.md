@@ -9,9 +9,9 @@ it locally before running this example.
 From the repository root:
 
 ```bash
-mkdir -p ./example/runtime/agent-skill/skills/openlinker-cli/scripts
-go build -o ./example/runtime/agent-skill/skills/openlinker-cli/scripts/openlinker ./cmd/cli
-chmod +x ./example/runtime/agent-skill/skills/openlinker-cli/scripts/openlinker
+mkdir -p ./example/agent-skill/skills/openlinker-cli/scripts
+go build -o ./example/agent-skill/skills/openlinker-cli/scripts/openlinker ./cmd/openlinker
+chmod +x ./example/agent-skill/skills/openlinker-cli/scripts/openlinker
 ```
 
 The generated file is a local build artifact. Do not commit it.
@@ -19,15 +19,15 @@ The generated file is a local build artifact. Do not commit it.
 ## Run
 
 ```bash
-cd example/runtime/agent-skill
+cd example/agent-skill
 
 OPENAI_API_KEY=sk-xxx \
 OPENLINKER_API_BASE=https://api.openlinker.ai \
-OPENLINKER_RUNTIME_TOKEN=ol_runtime_xxx \
+OPENLINKER_USER_TOKEN=ol_user_xxx \
 go run .
 ```
 
-Optional runtime context:
+Optional execution context:
 
 ```bash
 OPENLINKER_AGENT_ID=agent_xxx
@@ -36,14 +36,16 @@ OPENLINKER_TRACE_ID=trace_xxx
 ```
 
 The Skill asks Blades to invoke `scripts/openlinker` through
-`run_skill_script`. The CLI reads credentials and run context from the
-environment, so real tokens should stay outside `SKILL.md`, prompts, logs, and
-commits.
+`run_skill_script`. The CLI uses the User Token for discovery and top-level
+runs; real tokens must stay outside `SKILL.md`, prompts, logs, and commits.
+Delegated child calls are not a CLI feature. Agent runtimes use OpenLinker Agent
+Node's run-scoped localhost helper instead of exposing a long-lived Agent Token
+to the business Agent.
 
 ## Use the Skill Elsewhere
 
-Copy `skills/openlinker-cli` into your Agent project, build `cmd/cli` for the
-target machine, and place the resulting executable at:
+Copy `skills/openlinker-cli` into your Agent project, build `cmd/openlinker` for
+the target machine, and place the resulting executable at:
 
 ```text
 skills/openlinker-cli/scripts/openlinker

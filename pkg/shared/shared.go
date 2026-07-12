@@ -24,10 +24,9 @@ type IO struct {
 }
 
 type GlobalOptions struct {
-	APIBase      string
-	UserToken    string
-	RuntimeToken string
-	Timeout      time.Duration
+	APIBase   string
+	UserToken string
+	Timeout   time.Duration
 }
 
 func (io IO) Env(key string) string {
@@ -37,23 +36,14 @@ func (io IO) Env(key string) string {
 	return io.Getenv(key)
 }
 
-func (io IO) FirstEnv(keys ...string) string {
-	values := make([]string, 0, len(keys))
-	for _, key := range keys {
-		values = append(values, io.Env(key))
-	}
-	return FirstNonEmpty(values...)
-}
-
 func DefaultGlobalOptions(getenv func(string) string) GlobalOptions {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
 	return GlobalOptions{
-		APIBase:      FirstNonEmpty(getenv("OPENLINKER_API_BASE"), getenv("OPENLINKER_API_URL"), "http://localhost:8080"),
-		UserToken:    FirstNonEmpty(getenv("OPENLINKER_TOKEN"), getenv("OPENLINKER_USER_TOKEN"), getenv("OPENLINKER_DEMO_JWT")),
-		RuntimeToken: FirstNonEmpty(getenv("OPENLINKER_RUNTIME_TOKEN"), getenv("OPENLINKER_AGENT_TOKEN")),
-		Timeout:      60 * time.Second,
+		APIBase:   FirstNonEmpty(getenv("OPENLINKER_API_BASE"), "http://localhost:8080"),
+		UserToken: strings.TrimSpace(getenv("OPENLINKER_USER_TOKEN")),
+		Timeout:   60 * time.Second,
 	}
 }
 
@@ -71,19 +61,6 @@ func UserClient(opts GlobalOptions) (*openlinker.Client, error) {
 		options = append(options, openlinker.WithUserToken(opts.UserToken))
 	}
 	return openlinker.NewClient(opts.APIBase, options...)
-}
-
-func RuntimeClient(opts GlobalOptions) (*openlinker.Runtime, error) {
-	if strings.TrimSpace(opts.RuntimeToken) == "" {
-		return nil, errors.New("OPENLINKER_RUNTIME_TOKEN is required for delegate")
-	}
-	httpClient := &http.Client{Timeout: opts.Timeout}
-	options := []openlinker.Option{
-		openlinker.WithHTTPClient(httpClient),
-		openlinker.WithSDKAgent(SDKAgent),
-		openlinker.WithRuntimeToken(opts.RuntimeToken),
-	}
-	return openlinker.NewRuntime(opts.APIBase, options...)
 }
 
 func Payload(stdin io.Reader, input, inputFile, text string) (any, error) {
