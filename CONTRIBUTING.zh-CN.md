@@ -33,7 +33,7 @@ endpoint、本地 `.env`、客户输入，或包含敏感数据的响应 payload
 不适合放在这里：
 
 - Agent Token 处理或 Agent 凭据生命周期
-- Agent Runtime WebSocket/长轮询 session、mTLS、lease、resume、持久化 spool、
+- Agent Runtime 的 WebSocket/长轮询会话、mTLS、lease、resume、持久化 spool、
   取消或执行 adapter
 - 正在执行的 Agent 创建 child Run
 - Core registry 存储、服务端调度，以及 Hosted 计费、钱包、市场和 Dashboard
