@@ -10,7 +10,7 @@ user/API context. It is intentionally thin over `openlinker-go`:
 - the CLI accepts only an OpenLinker User Token and never prints it;
 - command implementations are split by subcommand under `pkg/`.
 
-The CLI is not an Agent runtime. Runtime v2 connections, WebSocket/Pull
+The CLI is not an Agent runtime. Agent Runtime connections, WebSocket/long-poll
 transport switching, durable execution, cancellation, and delegated Agent
 calls belong to [OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node).
 Agent Node gives an executing backend a run-scoped localhost helper for A2A

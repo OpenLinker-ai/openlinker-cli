@@ -30,7 +30,7 @@ Token”。
 ## 不在这里处理
 
 - 安全漏洞；请看 [SECURITY.zh-CN.md](./SECURITY.zh-CN.md)
-- Agent Node Runtime v2、WebSocket/Pull、mTLS、Agent Token、lease 或 adapter 行为
+- Agent Node、Agent Runtime WebSocket/长轮询、mTLS、Agent Token、lease 或 adapter 行为
 - Core 服务端存储、调度或 registry 实现
 - 商业计费、钱包、提现、市场或 Hosted Dashboard
 - 无法公开复现的私有部署调试

@@ -36,7 +36,7 @@ Changes that belong here include:
 Changes that do not belong here include:
 
 - Agent Token handling or Agent credential lifecycle
-- Runtime v2 WebSocket/Pull sessions, mTLS, leases, resume, durable spooling,
+- Agent Runtime WebSocket/long-poll sessions, mTLS, leases, resume, durable spooling,
   cancellation, or execution adapters
 - delegated child-run creation from an executing Agent
 - Core registry storage, server-side scheduling, or Hosted billing, wallet,

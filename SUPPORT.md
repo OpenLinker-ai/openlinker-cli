@@ -32,7 +32,7 @@ short note such as “User Token supplied” before posting it.
 ## Not supported here
 
 - vulnerabilities; follow [SECURITY.md](./SECURITY.md)
-- Agent Node Runtime v2, WebSocket/Pull, mTLS, Agent Token, lease, or adapter behavior
+- Agent Node, Agent Runtime WebSocket/long-poll, mTLS, Agent Token, lease, or adapter behavior
 - Core server storage, scheduling, or registry implementation
 - commercial billing, wallet, withdrawal, marketplace, or Hosted dashboard requests
 - private deployment debugging without reproducible public details

@@ -48,7 +48,7 @@ Remove Authorization headers and token values completely; partial masking is
 not a substitute for revocation. If a credential was exposed, revoke or
 replace it before sharing details.
 
-Agent Node Runtime v2, WebSocket/Pull, mTLS, Agent Token, lease, or durable
+Agent Node, Agent Runtime WebSocket/long-poll, mTLS, Agent Token, lease, or durable
 execution vulnerabilities should be reported against
 [OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node),
 with cross-repository impact noted when relevant.
