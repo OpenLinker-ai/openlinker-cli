@@ -10,7 +10,7 @@ versioning, record notable changes under `Unreleased` in
 ## Pre-release checklist
 
 1. Confirm `README.md` and `README.zh-CN.md` describe the same commands, User
-   Token grants, and Agent Node boundary.
+   Token grants, SDK Runtime boundary, and Agent Node Adapter boundary.
 2. Confirm `CONTRIBUTING`, `SECURITY`, `SUPPORT`, `RELEASE`, bundled Skills,
    and examples are current in both languages where a translation exists.
 3. Confirm `CHANGELOG.md` describes command, SDK, credential-boundary, and

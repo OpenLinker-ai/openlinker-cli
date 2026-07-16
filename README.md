@@ -10,12 +10,33 @@ user/API context. It is intentionally thin over `openlinker-go`:
 - the CLI accepts only an OpenLinker User Token and never prints it;
 - command implementations are split by subcommand under `pkg/`.
 
-The CLI is not an Agent runtime. Agent Runtime connections, WebSocket/long-poll
+The CLI is not an Agent runtime. Runtime connections, WebSocket/long-poll
 transport switching, durable execution, cancellation, and delegated Agent
-calls belong to [OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node).
-Agent Node gives an executing backend a run-scoped localhost helper for A2A
-delegation; do not pass a long-lived Agent Token to this CLI or to a business
-Agent process.
+calls belong to the official SDK Runtime Workers. Native handlers use their
+SDK `RuntimeContext`; [OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node)
+is only a temporary Adapter for existing HTTP, command, Codex, or A2A backends
+and gives those backends a run-scoped localhost helper. Do not pass a
+long-lived Agent Token to this CLI or to a business Agent process.
+
+The CLI calls the public Core contract in either a self-hosted or Hosted
+deployment. It does not call hosted service-listing, order, wallet, billing, or
+marketplace-operation APIs.
+
+## Status and installation
+
+The CLI is pre-1.0 and follows the Core API contract. Pin a release and review
+`CHANGELOG.md` before upgrading.
+
+Download a Linux, macOS, or Windows archive and its adjacent `.sha256` file
+from [GitHub Releases](https://github.com/OpenLinker-ai/openlinker-cli/releases),
+then verify the checksum before placing `openlinker` on your `PATH`. Go users
+can install a fixed release directly:
+
+```bash
+go install github.com/OpenLinker-ai/openlinker-cli/cmd/openlinker@v0.x.y
+```
+
+Replace `v0.x.y` with the release you have chosen.
 
 ## Configuration
 
@@ -33,17 +54,18 @@ may be retained in shell history or exposed in process listings.
 Run identifiers may be injected by a surrounding environment for diagnostics:
 
 ```bash
-export OPENLINKER_RUN_ID=run_xxx
-export OPENLINKER_AGENT_ID=agent_xxx
-export OPENLINKER_TRACE_ID=trace_xxx
+export OPENLINKER_RUN_ID=33333333-3333-4333-8333-333333333333
+export OPENLINKER_AGENT_ID=22222222-2222-4222-8222-222222222222
+export OPENLINKER_TRACE_ID=44444444-4444-4444-8444-444444444444
 ```
 
 These values are context only. They do not authorize runtime delegation.
 
 ## User Token grants
 
-Create and manage User Tokens outside this CLI. Give each token only the Core
-grants needed for the commands it will run:
+Create and manage User Tokens outside this CLI, either in Core Web under
+`/settings/user-tokens` or through Core's JWT-protected `/api/v1/user-tokens`
+API. Give each token only the Core grants needed for the commands it will run:
 
 | Commands | Required grant |
 | --- | --- |
@@ -62,7 +84,9 @@ OpenLinker uses Cobra/pflag syntax. Use double-dash long flags such as `--api`,
 
 ```bash
 openlinker --api http://localhost:8080 --timeout 60s context
-openlinker --api http://localhost:8080 run --agent agent_writer --text "hello"
+openlinker --api http://localhost:8080 run \
+  --agent 22222222-2222-4222-8222-222222222222 \
+  --text "hello"
 ```
 
 Inspect context without exposing credentials:
@@ -83,18 +107,18 @@ Start a top-level run:
 
 ```bash
 openlinker run \
-  --agent agent_writer \
+  --agent 22222222-2222-4222-8222-222222222222 \
   --input '{"task":"write a short summary"}'
 ```
 
 Inspect run state and A2A traces that already exist:
 
 ```bash
-openlinker runs get --id run_xxx
-openlinker runs children --id run_xxx
-openlinker runs events --id run_xxx
-openlinker runs messages --id run_xxx
-openlinker runs artifacts --id run_xxx
+openlinker runs get --id 33333333-3333-4333-8333-333333333333
+openlinker runs children --id 33333333-3333-4333-8333-333333333333
+openlinker runs events --id 33333333-3333-4333-8333-333333333333
+openlinker runs messages --id 33333333-3333-4333-8333-333333333333
+openlinker runs artifacts --id 33333333-3333-4333-8333-333333333333
 ```
 
 `runs children` is backed by `openlinker-go`'s `ListRunChildren` method. The
@@ -107,9 +131,11 @@ and run inspection. Provide only `OPENLINKER_USER_TOKEN` with the minimum
 required grants. Never expose a User Token in prompts or logs, and never give a
 Skill an Agent Token.
 
-When code executing inside Agent Node needs to call another Agent, use the
-run-scoped localhost helper injected by Agent Node. The official Agent Node
-documentation defines its URL, authorization header, and idempotency rules.
+Native SDK handlers call another Agent through their assignment-scoped
+`RuntimeContext` and must provide an idempotency key. Only an existing backend
+running behind Agent Node should use the run-scoped localhost helper injected
+by that Adapter. The Agent Node documentation defines its URL, authorization
+header, and idempotency rules.
 
 ## Project Layout
 
