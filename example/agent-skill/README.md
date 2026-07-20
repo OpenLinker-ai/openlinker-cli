@@ -1,5 +1,7 @@
 # OpenLinker Skill Agent Example
 
+[简体中文](README.zh-CN.md)
+
 This example shows how a Blades Agent can use the OpenLinker CLI through a
 Skill. The repository does not commit the compiled `openlinker` binary, so build
 it locally before running this example.
