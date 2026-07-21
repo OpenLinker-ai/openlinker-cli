@@ -11,11 +11,13 @@ import (
 
 func New(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command {
 	var (
-		agentID   string
-		input     string
-		inputFile string
-		text      string
-		metadata  string
+		agentID        string
+		input          string
+		inputFile      string
+		text           string
+		metadata       string
+		async          bool
+		idempotencyKey string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -38,11 +40,18 @@ func New(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out, err := client.RunAgent(ctx, openlinker.RunAgentRequest{
-				AgentID:  strings.TrimSpace(agentID),
-				Input:    payload,
-				Metadata: meta,
-			})
+			request := openlinker.RunAgentRequest{
+				AgentID:        strings.TrimSpace(agentID),
+				Input:          payload,
+				Metadata:       meta,
+				IdempotencyKey: strings.TrimSpace(idempotencyKey),
+			}
+			var out *openlinker.RunResponse
+			if async {
+				out, err = client.StartAgentRun(ctx, request)
+			} else {
+				out, err = client.RunAgent(ctx, request)
+			}
 			if err != nil {
 				return err
 			}
@@ -54,5 +63,7 @@ func New(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command {
 	cmd.Flags().StringVar(&inputFile, "input-file", "", "file containing JSON payload or plain text; use - for stdin")
 	cmd.Flags().StringVar(&text, "text", "", "plain text input")
 	cmd.Flags().StringVar(&metadata, "metadata", "", "JSON metadata")
+	cmd.Flags().BoolVar(&async, "async", false, "create the run and return without waiting for terminal state")
+	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "stable run-creation idempotency key")
 	return cmd
 }

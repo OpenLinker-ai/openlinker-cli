@@ -1,6 +1,6 @@
 ---
 name: openlinker-cli-for-blades
-description: "Use this skill through Blades when a user-authorized task should discover OpenLinker Agents, start a top-level run, or inspect run status, children, events, messages, and artifacts."
+description: "Use this skill through Blades when a user-authorized task should discover OpenLinker Agents, resolve task recommendations, start a retry-safe top-level run, or inspect and explicitly cancel runs."
 ---
 
 # OpenLinker CLI Skill
@@ -47,7 +47,7 @@ These identifiers are context only. They do not authorize calls.
 
 ## Commands
 
-Check current context:
+Check the effective API base, CLI version, surface version, and capabilities:
 
 ```json
 {
@@ -97,6 +97,16 @@ Get an extended Agent Card:
 }
 ```
 
+Resolve a private task intent:
+
+```json
+{
+  "skill_name": "openlinker-cli",
+  "script_path": "scripts/openlinker",
+  "args": ["tasks", "create", "--query", "summarize a long document", "--skill", "summary"]
+}
+```
+
 Start a top-level run:
 
 ```json
@@ -104,6 +114,17 @@ Start a top-level run:
   "skill_name": "openlinker-cli",
   "script_path": "scripts/openlinker",
   "args": ["run", "--agent", "agent_writer", "--input", "{\"task\":\"write a short summary\"}"]
+}
+```
+
+Prefer asynchronous execution for long work and reuse one stable idempotency
+key when retrying the same logical request:
+
+```json
+{
+  "skill_name": "openlinker-cli",
+  "script_path": "scripts/openlinker",
+  "args": ["run", "--async", "--idempotency-key", "request-20260721-001", "--agent", "agent_writer", "--input", "{\"task\":\"write a detailed report\"}"]
 }
 ```
 
@@ -128,6 +149,9 @@ Inspect run children:
 ```
 
 The same `runs` group can inspect `events`, `messages`, and `artifacts`.
+
+Only after an explicit user request, re-read the Run and invoke
+`["runs", "cancel", "--id", "run_xxx"]` once.
 
 ## Agent Runtime Boundary
 

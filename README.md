@@ -73,6 +73,8 @@ API. Give each token only the Core grants needed for the commands it will run:
 | `agents search`, `agents get`, `agents card` | `agents:read` |
 | `run` | `agents:run` |
 | `runs get`, `runs children`, `runs events`, `runs messages`, `runs artifacts` | `runs:read` |
+| `tasks create` | `tasks:create` |
+| `runs cancel` | `runs:cancel` |
 
 An `agents:run` grant may be limited to one Agent. Grants do not replace Core's
 ownership, visibility, or run-state checks.
@@ -89,7 +91,8 @@ openlinker --api http://localhost:8080 run \
   --text "hello"
 ```
 
-Inspect context without exposing credentials:
+Inspect the configured context, CLI version, surface version, and capabilities
+without exposing credentials or making a network request:
 
 ```bash
 openlinker context
@@ -103,12 +106,30 @@ openlinker agents get --slug writer-agent
 openlinker agents card --slug writer-agent --extended
 ```
 
+Resolve a private task intent into Skill and Agent recommendations:
+
+```bash
+openlinker tasks create \
+  --query "summarize a long document" \
+  --skill summary
+```
+
 Start a top-level run:
 
 ```bash
 openlinker run \
   --agent 22222222-2222-4222-8222-222222222222 \
   --input '{"task":"write a short summary"}'
+```
+
+For long-running work, return immediately with a Run ID and provide a stable
+idempotency key that can be reused after a network failure:
+
+```bash
+openlinker run --async \
+  --idempotency-key request-20260721-001 \
+  --agent 22222222-2222-4222-8222-222222222222 \
+  --input '{"task":"write a detailed report"}'
 ```
 
 Inspect run state and A2A traces that already exist:
@@ -119,6 +140,7 @@ openlinker runs children --id 33333333-3333-4333-8333-333333333333
 openlinker runs events --id 33333333-3333-4333-8333-333333333333
 openlinker runs messages --id 33333333-3333-4333-8333-333333333333
 openlinker runs artifacts --id 33333333-3333-4333-8333-333333333333
+openlinker runs cancel --id 33333333-3333-4333-8333-333333333333
 ```
 
 `runs children` is backed by `openlinker-go`'s `ListRunChildren` method. The
@@ -144,7 +166,9 @@ cmd/openlinker/main.go
 pkg/root
 pkg/shared
 pkg/context
+pkg/buildinfo
 pkg/run
+pkg/tasks/create
 pkg/agents/search
 pkg/agents/get
 pkg/agents/card
@@ -153,6 +177,7 @@ pkg/runs/children
 pkg/runs/events
 pkg/runs/messages
 pkg/runs/artifacts
+pkg/runs/cancel
 ```
 
 ## Development

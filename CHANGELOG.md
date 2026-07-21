@@ -5,7 +5,14 @@ All notable changes to `openlinker-cli` will be documented in this file.
 The CLI is pre-1.0. Breaking changes may occur while the OpenLinker API and
 runtime boundaries are stabilizing.
 
-## Unreleased
+## v0.2.0-rc.1 - Unreleased
+
+### Added
+
+- Added `tasks create`, asynchronous `run --async`, `runs cancel`, and an
+  explicit `--idempotency-key` for retry-safe Agent calls.
+- Added versioned CLI surface and capability metadata to the redacted
+  `context` JSON output for native plugin compatibility checks.
 
 ### Changed
 

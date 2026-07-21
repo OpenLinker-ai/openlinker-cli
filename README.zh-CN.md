@@ -68,6 +68,8 @@ Core grant：
 | `agents search`、`agents get`、`agents card` | `agents:read` |
 | `run` | `agents:run` |
 | `runs get`、`runs children`、`runs events`、`runs messages`、`runs artifacts` | `runs:read` |
+| `tasks create` | `tasks:create` |
+| `runs cancel` | `runs:cancel` |
 
 `agents:run` grant 可以收窄到单个 Agent。grant 不会跳过 Core 的所有权、可见性或
 Run 状态检查。
@@ -84,7 +86,7 @@ openlinker --api http://localhost:8080 run \
   --text "hello"
 ```
 
-查看当前上下文，不暴露凭据：
+查看当前上下文、CLI 版本、surface 版本和 capability；该命令不联网，也不暴露凭据：
 
 ```bash
 openlinker context
@@ -98,12 +100,29 @@ openlinker agents get --slug writer-agent
 openlinker agents card --slug writer-agent --extended
 ```
 
+把私有任务意图解析为 Skill 和 Agent 推荐：
+
+```bash
+openlinker tasks create \
+  --query "总结一份长文档" \
+  --skill summary
+```
+
 启动顶层 Run：
 
 ```bash
 openlinker run \
   --agent 22222222-2222-4222-8222-222222222222 \
   --input '{"task":"write a short summary"}'
+```
+
+长任务可立即返回 Run ID，并提供网络失败后可复用的稳定幂等键：
+
+```bash
+openlinker run --async \
+  --idempotency-key request-20260721-001 \
+  --agent 22222222-2222-4222-8222-222222222222 \
+  --input '{"task":"write a detailed report"}'
 ```
 
 查看已有 Run 状态和 A2A 轨迹：
@@ -114,6 +133,7 @@ openlinker runs children --id 33333333-3333-4333-8333-333333333333
 openlinker runs events --id 33333333-3333-4333-8333-333333333333
 openlinker runs messages --id 33333333-3333-4333-8333-333333333333
 openlinker runs artifacts --id 33333333-3333-4333-8333-333333333333
+openlinker runs cancel --id 33333333-3333-4333-8333-333333333333
 ```
 
 `runs children` 调用 `openlinker-go` 的 `ListRunChildren`。CLI 可以查看 child
@@ -137,7 +157,9 @@ cmd/openlinker/main.go
 pkg/root
 pkg/shared
 pkg/context
+pkg/buildinfo
 pkg/run
+pkg/tasks/create
 pkg/agents/search
 pkg/agents/get
 pkg/agents/card
@@ -146,6 +168,7 @@ pkg/runs/children
 pkg/runs/events
 pkg/runs/messages
 pkg/runs/artifacts
+pkg/runs/cancel
 ```
 
 ## 开发

@@ -1,6 +1,6 @@
 ---
 name: openlinker-cli-for-generic
-description: "Use this skill when a user-authorized task should discover OpenLinker Agents, start a top-level run, or inspect run status, children, events, messages, and artifacts through the openlinker CLI."
+description: "Use this skill when a user-authorized task should discover OpenLinker Agents, resolve task recommendations, start a retry-safe top-level run, or inspect and explicitly cancel runs through the openlinker CLI."
 ---
 
 # OpenLinker CLI Skill
@@ -38,7 +38,8 @@ real token values in prompts, skill files, logs, or final answers.
 
 ## First Checks
 
-Check context without exposing credentials:
+Check the effective API base, CLI version, surface version, and capabilities
+without exposing credentials:
 
 ```bash
 openlinker context
@@ -69,6 +70,12 @@ openlinker agents card --slug writer-agent --extended
 
 Use discovery when the user gives a capability but not a concrete target agent id.
 
+Resolve a private task intent when structured Skill matching is useful:
+
+```bash
+openlinker tasks create --query "summarize a long document" --skill summary
+```
+
 ## Start a User Run
 
 Use `run` when acting from a user/API context and starting a top-level OpenLinker run:
@@ -83,6 +90,16 @@ Plain text input is allowed:
 
 ```bash
 openlinker run --agent agent_writer --text "write a short summary"
+```
+
+Prefer asynchronous execution for long work and provide one stable idempotency
+key per logical request. Reuse the same key after an uncertain network result:
+
+```bash
+openlinker run --async \
+  --idempotency-key request-20260721-001 \
+  --agent agent_writer \
+  --input-file -
 ```
 
 ## Inspect Runs
@@ -105,6 +122,14 @@ Inspect events, messages, and artifacts:
 openlinker runs events --id run_xxx --limit 50
 openlinker runs messages --id run_xxx
 openlinker runs artifacts --id run_xxx
+```
+
+Only when the user explicitly requests cancellation, re-read the Run and then
+cancel it once:
+
+```bash
+openlinker runs get --id run_xxx
+openlinker runs cancel --id run_xxx
 ```
 
 Use these to report run state and any existing parent-child relationship.
