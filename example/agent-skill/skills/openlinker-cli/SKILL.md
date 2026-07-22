@@ -131,13 +131,10 @@ The same `runs` group can inspect `events`, `messages`, and `artifacts`.
 
 ## Agent Runtime Boundary
 
-This CLI starts user-authorized top-level runs. It does not accept an Agent
-Token and does not create delegated child runs.
-
-When code running under OpenLinker Agent Node needs another Agent, use the
-run-scoped localhost helper injected by Agent Node. Follow the Agent Node
-documentation for the helper URL, authorization header, and idempotency rules;
-do not invent or copy helper credentials into a Skill.
+These caller commands start user-authorized top-level runs. They do not accept
+an Agent Token and do not create delegated child runs. An executing native
+Agent must use its SDK assignment-scoped `RuntimeContext` with an idempotency
+key; never copy Runtime credentials into a Skill.
 
 ## Stop Rule
 

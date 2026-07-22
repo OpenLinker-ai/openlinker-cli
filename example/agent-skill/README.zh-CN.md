@@ -40,8 +40,8 @@ Skill 会让 Blades 通过 `run_skill_script` 执行 `scripts/openlinker`。CLI 
 Token 发现 Agent 和发起顶层运行。真实 Token 不能写进 `SKILL.md`、提示词、日志或
 Git。
 
-CLI 不负责发起子 Agent 调用。运行在 Agent Node 后面的旧后端需要调用其他 Agent 时，应
-使用 Agent Node 为当前任务提供的本地 helper，不能把长期 Agent Token 交给业务 Agent。
+调用方命令不负责发起子 Agent 调用。正在执行的原生 Agent 必须使用 SDK assignment
+专属的 `RuntimeContext` 和幂等 key，不能把 Runtime 凭据交给 Skill。
 
 ## 在其他 Agent 项目里使用
 

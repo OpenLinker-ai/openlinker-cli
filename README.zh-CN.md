@@ -2,19 +2,19 @@
 
 English documentation: [README.md](./README.md)
 
-OpenLinker CLI 是一个小型命令行工具，供用户或 API 调用方发现并运行 OpenLinker
-Agent。它的标准输出固定为 JSON，只对 `openlinker-go` 做一层轻量封装：
+OpenLinker CLI 是 JSON-first 调用客户端和可靠 Runtime Worker，只对
+`openlinker-go` 做轻量封装，并把两类凭据严格分开：
 
 - stdout 始终输出 JSON；
 - 诊断信息和错误写入 stderr；
-- CLI 只接受 OpenLinker User Token，并且不会打印它；
+- 调用方命令只接受 OpenLinker User Token；
+- `agent serve` 只接受 Agent Token 和所选 Provider 的鉴权；
 - 每个子命令的实现分别放在 `pkg/` 下。
 
-CLI 不是 Agent runtime。Runtime 连接、WebSocket/长轮询切换、持久化执行、取消和 Agent
-子调用属于官方 SDK Runtime Worker。原生 handler 使用 SDK `RuntimeContext`；
-[OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node)
-只为既有 HTTP、command、Codex、A2A backend 提供临时 Adapter，并向这些 backend 注入
-本次 Run 专用的 localhost helper。不要把长效 Agent Token 交给 CLI 或业务 Agent 进程。
+`agent serve` 直接运行官方 SDK Runtime Worker，支持 WebSocket/pull 选择、可靠交付、
+取消和 token-only 注册。Codex 与 Claude Adapter 按 Core 管理的 conversation 复用私有
+Provider session。`plugin serve` 为原生插件提供本地 stdio MCP 调用与 Agent Mode 控制面。
+调用方凭据与 Runtime 凭据不可互换。
 
 CLI 只调用自托管或 Hosted 部署中的 Core 公共契约，不调用 Hosted 的服务商品、订单、钱包、
 计费或市场运营 API。
@@ -56,6 +56,30 @@ export OPENLINKER_TRACE_ID=44444444-4444-4444-8444-444444444444
 
 这些值只是上下文，不提供 runtime 子调用权限。
 
+### Runtime Agent 配置
+
+前台 Provider 的最少必填项：
+
+```bash
+export OPENLINKER_URL=https://openlinker.example
+export OPENLINKER_AGENT_ID=22222222-2222-4222-8222-222222222222
+export OPENLINKER_AGENT_TOKEN=ol_agent_xxx
+export OPENLINKER_WORKSPACE=/absolute/minimal/workspace
+export CODEX_API_KEY=... # Claude 使用 ANTHROPIC_API_KEY
+
+openlinker agent serve --provider codex
+```
+
+`OPENLINKER_NODE_ID` 可省略；CLI 会生成一次并保存到 owner-only Agent 状态目录。每个
+直接 secret 都支持互斥的 `_FILE` 形式。本机可信环境可以使用 Provider 已登录状态代替
+API Key；官方生产镜像要求 Provider API Key。Agent Mode 配置文件从不保存凭据。
+
+非敏感配置包括 `OPENLINKER_AGENT_STATE_DIR`、`OPENLINKER_AGENT_TRANSPORT`、
+`OPENLINKER_AGENT_CAPACITY`、`OPENLINKER_AGENT_TIMEOUT_SECONDS`、
+`OPENLINKER_AGENT_SESSION_REUSE`，以及 Provider 对应的 model、web search、sandbox
+和 permission 变量。完整示例见
+[`deploy/.env.providers.example`](./deploy/.env.providers.example)。
+
 ## User Token 权限
 
 User Token 的创建和管理不属于 CLI，可在 Core Web 的 `/settings/user-tokens`，或通过
@@ -68,6 +92,8 @@ Core grant：
 | `agents search`、`agents get`、`agents card` | `agents:read` |
 | `run` | `agents:run` |
 | `runs get`、`runs children`、`runs events`、`runs messages`、`runs artifacts` | `runs:read` |
+| `tasks create` | `tasks:create` |
+| `runs cancel` | `runs:cancel` |
 
 `agents:run` grant 可以收窄到单个 Agent。grant 不会跳过 Core 的所有权、可见性或
 Run 状态检查。
@@ -84,7 +110,7 @@ openlinker --api http://localhost:8080 run \
   --text "hello"
 ```
 
-查看当前上下文，不暴露凭据：
+查看当前上下文、CLI 版本、surface 版本和 capability；该命令不联网，也不暴露凭据：
 
 ```bash
 openlinker context
@@ -98,12 +124,29 @@ openlinker agents get --slug writer-agent
 openlinker agents card --slug writer-agent --extended
 ```
 
+把私有任务意图解析为 Skill 和 Agent 推荐：
+
+```bash
+openlinker tasks create \
+  --query "总结一份长文档" \
+  --skill summary
+```
+
 启动顶层 Run：
 
 ```bash
 openlinker run \
   --agent 22222222-2222-4222-8222-222222222222 \
   --input '{"task":"write a short summary"}'
+```
+
+长任务可立即返回 Run ID，并提供网络失败后可复用的稳定幂等键：
+
+```bash
+openlinker run --async \
+  --idempotency-key request-20260721-001 \
+  --agent 22222222-2222-4222-8222-222222222222 \
+  --input '{"task":"write a detailed report"}'
 ```
 
 查看已有 Run 状态和 A2A 轨迹：
@@ -114,6 +157,25 @@ openlinker runs children --id 33333333-3333-4333-8333-333333333333
 openlinker runs events --id 33333333-3333-4333-8333-333333333333
 openlinker runs messages --id 33333333-3333-4333-8333-333333333333
 openlinker runs artifacts --id 33333333-3333-4333-8333-333333333333
+openlinker runs cancel --id 33333333-3333-4333-8333-333333333333
+```
+
+配置、诊断并把当前宿主作为 Agent 运行：
+
+```bash
+openlinker agent configure --provider codex \
+  --agent-id 22222222-2222-4222-8222-222222222222 \
+  --workspace /absolute/minimal/workspace \
+  --url https://openlinker.example
+openlinker agent doctor --provider codex
+openlinker agent serve --provider codex
+```
+
+原生插件 bridge（通常由插件 manifest 自动启动）：
+
+```bash
+openlinker plugin serve --host codex
+openlinker plugin serve --host claude
 ```
 
 `runs children` 调用 `openlinker-go` 的 `ListRunChildren`。CLI 可以查看 child
@@ -126,9 +188,8 @@ grant 的 `OPENLINKER_USER_TOKEN`。不要把 User Token 放进 prompt 或日志
 Agent Token 交给 Skill。
 
 原生 SDK handler 通过当前 assignment 的 `RuntimeContext` 调用另一个 Agent，并且必须
-提供幂等 key。只有运行在 Agent Node Adapter 后面的既有 backend 才使用它注入的本次
-Run 专用 localhost helper；helper 的 URL、Authorization header 和幂等规则以 Agent Node
-文档为准。
+提供幂等 key。Provider Runtime session 始终私有；Skill 和调用方命令只使用 Core
+conversation ID。
 
 ## 项目结构
 
@@ -137,7 +198,13 @@ cmd/openlinker/main.go
 pkg/root
 pkg/shared
 pkg/context
+pkg/buildinfo
+pkg/agent
+pkg/agentexec
+pkg/plugin
+pkg/pluginbridge
 pkg/run
+pkg/tasks/create
 pkg/agents/search
 pkg/agents/get
 pkg/agents/card
@@ -146,6 +213,11 @@ pkg/runs/children
 pkg/runs/events
 pkg/runs/messages
 pkg/runs/artifacts
+pkg/runs/cancel
+cmd/openlinker-runtime-entrypoint
+cmd/openlinker-provider-launcher
+cmd/openlinker-egress-gateway
+deploy
 ```
 
 ## 开发

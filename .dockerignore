@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.vscode
+.DS_Store
+dist
+coverage
+*.log
+.env
+.env.*
+!deploy/.env.providers.example
+artifacts
+tmp

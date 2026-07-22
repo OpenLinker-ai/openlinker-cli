@@ -33,6 +33,11 @@ func TestContextCommandRedactsCredentials(t *testing.T) {
 	if !strings.Contains(out, `"run_id": "run-1"`) || !strings.Contains(out, `"trace_id": "trace-1"`) {
 		t.Fatalf("context output missing run context: %s", out)
 	}
+	for _, field := range []string{`"cli_version": "dev"`, `"surface_version": "openlinker.cli.v1"`, `"runs.async"`, `"runs.cancel"`, `"tasks.create"`} {
+		if !strings.Contains(out, field) {
+			t.Fatalf("context output missing %s: %s", field, out)
+		}
+	}
 }
 
 func TestDefaultOptionsUseOnlyCanonicalEnvironment(t *testing.T) {
@@ -58,6 +63,18 @@ func TestDefaultOptionsUseOnlyCanonicalEnvironment(t *testing.T) {
 	}))
 	if legacyOnly.APIBase != "http://localhost:8080" || legacyOnly.UserToken != "" {
 		t.Fatalf("legacy aliases were accepted: %#v", legacyOnly)
+	}
+}
+
+func TestContextReportsEffectiveDefaultAPIBase(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := runCLI([]string{"context"}, strings.NewReader(""), stdout, stderr, testEnv(nil))
+	if code != 0 {
+		t.Fatalf("runCLI() code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"api_base": "http://localhost:8080"`) {
+		t.Fatalf("stdout = %s", stdout.String())
 	}
 }
 
@@ -124,6 +141,122 @@ func TestRunCommandSendsUserTokenAndInput(t *testing.T) {
 		t.Fatalf("runCLI() code = %d stderr=%s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"run_id": "run-started"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestRunCommandSupportsAsyncAndIdempotency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/runs" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Idempotency-Key"); got != "plugin-request-1" {
+			t.Fatalf("Idempotency-Key = %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := body["idempotency_key"]; exists {
+			t.Fatalf("idempotency key leaked into body: %#v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"run_id": "run-async",
+			"status": "pending",
+		})
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := runCLI([]string{
+		"--api", server.URL,
+		"--token", "user-token",
+		"run",
+		"--agent", "agent-target",
+		"--text", "hello",
+		"--async",
+		"--idempotency-key", "plugin-request-1",
+	}, strings.NewReader(""), stdout, stderr, testEnv(nil))
+	if code != 0 {
+		t.Fatalf("runCLI() code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"run_id": "run-async"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestTasksCreateCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/tasks/recommend" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["query"] != "summarize this" || body["template_id"] != "summary" {
+			t.Fatalf("body = %#v", body)
+		}
+		if got := body["skill_ids"].([]any); len(got) != 1 || got[0] != "summary" {
+			t.Fatalf("skill_ids = %#v", body["skill_ids"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"task_id":    "task-1",
+			"visibility": "private",
+			"recommendations": []map[string]any{{
+				"agent":       map[string]any{"id": "agent-1", "slug": "writer", "name": "Writer"},
+				"match_score": 0.9,
+				"why":         "matches summary",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := runCLI([]string{
+		"--api", server.URL,
+		"--token", "user-token",
+		"tasks", "create",
+		"--query", "summarize this",
+		"--template", "summary",
+		"--skill", "summary",
+		"--mcp-tool", "search_agents",
+		"--agent-slug", "writer",
+	}, strings.NewReader(""), stdout, stderr, testEnv(nil))
+	if code != 0 {
+		t.Fatalf("runCLI() code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"task_id": "task-1"`) || !strings.Contains(stdout.String(), `"slug": "writer"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
+func TestRunsCancelCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/runs/run-1/cancel" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"run_id":       "run-1",
+			"status":       "running",
+			"cancel_state": "requested",
+		})
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	code := runCLI([]string{
+		"--api", server.URL,
+		"--token", "user-token",
+		"runs", "cancel", "run-1",
+	}, strings.NewReader(""), stdout, stderr, testEnv(nil))
+	if code != 0 {
+		t.Fatalf("runCLI() code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"cancel_state": "requested"`) {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
 }

@@ -27,7 +27,10 @@ line.
 - JSON request and response handling
 - bundled Skill execution and environment forwarding
 - release archives and example build artifacts
-- rejection of Agent Tokens, runtime credentials, and retired aliases
+- separation of User Tokens, Agent Tokens, and provider credentials
+- Runtime transport recovery, token-only discovery policy, leases, and durable delivery
+- provider subprocess isolation, private session state, and cancellation
+- production entrypoint, read-only images, secret files, and egress filtering
 
 The environment variable is preferred for routine use. A token passed through
 `--token` may be retained in shell history or visible in a process listing.
@@ -48,10 +51,10 @@ Remove Authorization headers and token values completely; partial masking is
 not a substitute for revocation. If a credential was exposed, revoke or
 replace it before sharing details.
 
-Agent Node, Agent Runtime WebSocket/long-poll, mTLS, Agent Token, lease, or durable
-execution vulnerabilities should be reported against
-[OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node),
-with cross-repository impact noted when relevant.
+Runtime Worker, Agent Token, provider adapter, production image, and egress
+gateway vulnerabilities in this repository should be reported here. Issues in
+the compatible legacy Adapter remain in its own repository; note any
+cross-repository impact.
 
 ## Disclosure
 

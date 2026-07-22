@@ -2,9 +2,9 @@
 
 Chinese documentation: [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md)
 
-Thanks for helping improve OpenLinker CLI. This repository owns the small,
-JSON-first user/API client for Agent discovery, top-level runs, and run
-inspection.
+Thanks for helping improve OpenLinker CLI. This repository owns the JSON-first
+caller client, native plugin bridge, reliable Runtime Worker, provider
+adapters, and hardened production images.
 
 ## Development setup
 
@@ -31,23 +31,22 @@ Changes that belong here include:
 - User Token authentication for user-authorized Core API calls
 - Agent discovery, top-level run creation, and run inspection
 - `openlinker-go` integration
+- Agent Mode, token-only Runtime transport, and provider session adapters
+- local stdio MCP bridge and native plugin control tools
+- production entrypoint, provider isolation, and egress gateway
 - bundled Skills, examples, packaging, and CLI documentation
 
 Changes that do not belong here include:
 
-- Agent Token handling or Agent credential lifecycle
-- Agent Runtime WebSocket/long-poll sessions, mTLS, leases, resume, durable spooling,
-  cancellation, or execution adapters
 - delegated child-run creation from an executing Agent
 - Core registry storage, server-side scheduling, or Hosted billing, wallet,
   marketplace, and dashboard behavior
 
-Agent-side execution and delegation belong to
-[OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node).
-
 ## CLI rules
 
-- Accept only `OPENLINKER_USER_TOKEN` or the explicit `--token` User Token flag.
+- Caller commands accept only `OPENLINKER_USER_TOKEN` or the explicit `--token`
+  User Token flag; Runtime commands accept only their isolated Agent/provider
+  credential sources.
 - Prefer the environment variable in examples because command-line token values
   may enter shell history or process listings.
 - Never print credentials to stdout or stderr.
@@ -55,7 +54,8 @@ Agent-side execution and delegation belong to
 - Keep `OPENLINKER_RUN_ID`, `OPENLINKER_AGENT_ID`, and
   `OPENLINKER_TRACE_ID` as context only; they do not authorize calls.
 - Do not restore `delegate`, `--runtime-token`, legacy credential aliases, or
-  the retired runtime call-agent route.
+  the retired runtime call-agent route. Agent-side child calls use SDK
+  `RuntimeContext`, not caller credentials.
 - Describe User Token authorization as grants. Protocol fields that are
   explicitly named `scopes` may keep their protocol-defined name.
 

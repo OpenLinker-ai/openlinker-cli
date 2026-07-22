@@ -11,6 +11,8 @@ requests that fit OpenLinker CLI's open-source scope.
 - JSON stdout, diagnostic stderr, or exit-code behavior
 - User Token authentication without sharing the token value
 - Agent discovery, top-level run creation, and run inspection
+- `agent` / `plugin` commands, Runtime transports, provider sessions, and cancellation
+- Codex/Claude production images and egress gateway behavior
 - compatibility with a released Core API or `openlinker-go` revision
 - bundled Skills, examples, cross-platform binaries, and documentation
 
@@ -32,7 +34,6 @@ short note such as “User Token supplied” before posting it.
 ## Not supported here
 
 - vulnerabilities; follow [SECURITY.md](./SECURITY.md)
-- Agent Node, Agent Runtime WebSocket/long-poll, mTLS, Agent Token, lease, or adapter behavior
 - Core server storage, scheduling, or registry implementation
 - commercial billing, wallet, withdrawal, marketplace, or Hosted dashboard requests
 - private deployment debugging without reproducible public details
@@ -47,5 +48,6 @@ For issues that involve CLI and Core or an SDK together, include:
 - command name and sanitized arguments
 - sanitized HTTP status, stdout, and stderr
 
-For runtime transport or executing-Agent delegation problems, use the
-[OpenLinker Agent Node issue tracker](https://github.com/OpenLinker-ai/openlinker-agent-node/issues).
+For Runtime problems, also include the selected transport, provider CLI
+version, redacted `agent doctor` output, and whether the failure occurs in
+native plugin, foreground, or container mode.

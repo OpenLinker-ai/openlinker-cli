@@ -1,0 +1,73 @@
+name: Provider images
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile.providers"
+      - "deploy/**"
+      - "cmd/openlinker-egress-gateway/**"
+      - "cmd/openlinker-provider-launcher/**"
+      - "cmd/openlinker-runtime-entrypoint/**"
+      - "pkg/agent/**"
+      - "pkg/agentexec/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/images.yml"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  images:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: codex
+            image: openlinker-agent-codex
+          - target: claude
+            image: openlinker-agent-claude
+          - target: egress
+            image: openlinker-egress-gateway
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/openlinker-ai/${{ matrix.image }}
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-
+      - name: Build and optionally publish
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.providers
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.ref_type == 'tag' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: OPENLINKER_VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=providers-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=providers-${{ matrix.target }}
+          sbom: true
+          provenance: mode=max

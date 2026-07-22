@@ -1,0 +1,84 @@
+//go:build linux
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"runtime"
+	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
+)
+
+const (
+	runtimeUID  = 10001
+	runtimeGID  = 10001
+	providerUID = 10002
+	providerGID = 10002
+)
+
+var fixedProvider string
+
+func main() {
+	target, err := fixedProviderBinary(fixedProvider)
+	if err != nil {
+		fatal(err)
+	}
+	if os.Geteuid() != runtimeUID || os.Getegid() != runtimeGID {
+		fatal(errors.New("launcher must be invoked by the fixed Runtime UID/GID"))
+	}
+	runtime.LockOSThread()
+	if err := dropProviderPrivileges(); err != nil {
+		fatal(err)
+	}
+	argv := append([]string{target}, os.Args[1:]...)
+	if err := syscall.Exec(target, argv, os.Environ()); err != nil {
+		fatal(errors.New("start fixed Provider binary"))
+	}
+}
+
+func fixedProviderBinary(provider string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "codex":
+		return "/usr/local/bin/codex", nil
+	case "claude":
+		return "/usr/local/bin/claude", nil
+	default:
+		return "", errors.New("launcher Provider is not fixed at image build time")
+	}
+}
+
+func dropProviderPrivileges() error {
+	if err := unix.Setgroups([]int{}); err != nil {
+		return errors.New("clear Provider supplementary groups")
+	}
+	if err := unix.Setresgid(providerGID, providerGID, providerGID); err != nil {
+		return errors.New("drop Provider group identity")
+	}
+	if err := unix.Setresuid(providerUID, providerUID, providerUID); err != nil {
+		return errors.New("drop Provider user identity")
+	}
+	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
+		return errors.New("clear Provider ambient capabilities")
+	}
+	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+	data := [2]unix.CapUserData{}
+	if err := unix.Capset(&header, &data[0]); err != nil {
+		return errors.New("clear Provider capabilities")
+	}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return errors.New("lock Provider privilege boundary")
+	}
+	if os.Geteuid() != providerUID || os.Getegid() != providerGID {
+		return errors.New("Provider identity drop did not take effect")
+	}
+	return nil
+}
+
+func fatal(err error) {
+	fmt.Fprintln(os.Stderr, "openlinker Provider launcher:", err)
+	os.Exit(1)
+}

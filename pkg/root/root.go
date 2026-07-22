@@ -5,11 +5,14 @@ import (
 	"io"
 	"os"
 
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agents"
 	contextcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/context"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/plugin"
 	runcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/run"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/runs"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/tasks"
 	"github.com/spf13/cobra"
 )
 
@@ -53,25 +56,36 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 	root.PersistentFlags().StringVar(&opts.UserToken, "token", opts.UserToken, "OpenLinker User Token")
 	root.PersistentFlags().DurationVar(&opts.Timeout, "timeout", opts.Timeout, "request timeout")
 
-	root.AddCommand(contextcmd.New(ioStreams))
+	agentService := agent.NewService(ioStreams.Getenv, nil)
+	root.AddCommand(contextcmd.New(ioStreams, opts))
+	root.AddCommand(agent.New(ioStreams, agentService))
+	root.AddCommand(plugin.New(ioStreams, opts, agentService))
 	root.AddCommand(agents.New(ioStreams, opts))
 	root.AddCommand(runcmd.New(ioStreams, opts))
 	root.AddCommand(runs.New(ioStreams, opts))
+	root.AddCommand(tasks.New(ioStreams, opts))
 	return root
 }
 
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, `Usage:
   openlinker [global flags] context
+  openlinker agent configure --provider codex|claude --agent-id uuid --workspace path
+  openlinker agent serve [--provider codex|claude]
+  openlinker agent status
+  openlinker agent doctor
+  openlinker plugin serve --host codex|claude
   openlinker [global flags] agents search [--query q] [--tag tag] [--callable]
   openlinker [global flags] agents get --slug slug
   openlinker [global flags] agents card --slug slug [--extended]
-  openlinker [global flags] run --agent agent_id [--input json|text] [--input-file file]
+  openlinker [global flags] tasks create --query text [--skill id] [--mcp-tool name]
+  openlinker [global flags] run --agent agent_id [--input json|text] [--input-file file] [--async] [--idempotency-key key]
   openlinker [global flags] runs get --id run_id
   openlinker [global flags] runs children --id run_id
   openlinker [global flags] runs events --id run_id [--limit n]
   openlinker [global flags] runs messages --id run_id
   openlinker [global flags] runs artifacts --id run_id
+  openlinker [global flags] runs cancel --id run_id
 
 Global flags:
   --api             OpenLinker Core API base URL, default OPENLINKER_API_BASE or http://localhost:8080

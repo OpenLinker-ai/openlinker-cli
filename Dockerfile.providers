@@ -1,0 +1,93 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+ARG GO_VERSION=1.26.4
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b AS go-build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOWORK=off
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+COPY . .
+RUN go test ./cmd/openlinker-egress-gateway ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/pluginbridge
+ARG OPENLINKER_VERSION=container
+RUN test "${TARGETOS}" = linux \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo.Version=${OPENLINKER_VERSION}" -o /out/openlinker ./cmd/openlinker \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/openlinker-egress-gateway ./cmd/openlinker-egress-gateway \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=codex" -o /out/openlinker-provider-launcher-codex ./cmd/openlinker-provider-launcher \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=claude" -o /out/openlinker-provider-launcher-claude ./cmd/openlinker-provider-launcher \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=codex" -o /out/openlinker-runtime-entrypoint-codex ./cmd/openlinker-runtime-entrypoint \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=claude" -o /out/openlinker-runtime-entrypoint-claude ./cmd/openlinker-runtime-entrypoint
+
+FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320ac8d898416327bacf1bbfa AS provider-base
+ARG OPENLINKER_UID=10001
+ARG OPENLINKER_GID=10001
+ARG PROVIDER_UID=10002
+ARG PROVIDER_GID=10002
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid "${OPENLINKER_GID}" openlinker \
+ && groupadd --gid "${PROVIDER_GID}" provider \
+ && useradd --uid "${OPENLINKER_UID}" --gid "${OPENLINKER_GID}" --home-dir /runtime --no-create-home --shell /usr/sbin/nologin openlinker \
+ && useradd --uid "${PROVIDER_UID}" --gid "${PROVIDER_GID}" --home-dir /provider --no-create-home --shell /usr/sbin/nologin provider \
+ && install -d -o "${OPENLINKER_UID}" -g "${OPENLINKER_GID}" -m 0700 /runtime \
+ && install -d -o "${PROVIDER_UID}" -g "${PROVIDER_GID}" -m 0700 /provider \
+ && install -d -o "${OPENLINKER_UID}" -g "${OPENLINKER_GID}" -m 0555 /workspace
+COPY --from=go-build /out/openlinker /usr/local/bin/openlinker
+ENV OPENLINKER_AGENT_TRANSPORT=auto \
+    OPENLINKER_AGENT_CAPACITY=1 \
+    OPENLINKER_AGENT_TIMEOUT_SECONDS=1800 \
+    OPENLINKER_AGENT_SESSION_REUSE=true \
+    OPENLINKER_BLOCK_PRIVATE_NETWORK=true \
+    OPENLINKER_EGRESS_PROXY_URL=http://openlinker-egress-gateway:3128 \
+    TMPDIR=/tmp
+WORKDIR /workspace
+USER 0:0
+STOPSIGNAL SIGTERM
+
+FROM provider-base AS codex
+ARG CODEX_CLI_VERSION=0.145.0-alpha.27
+ARG CODEX_CLI_INTEGRITY=sha512-CqQmtU0avLks+u0xrh5AaLTXy90XAW+g9jWZ2W3NPMgBxjUbcsRiqANR/Ai0FHa7JIKD8qZwkfRWWrUAxIGt2w==
+RUN test "$(npm view "@openai/codex@${CODEX_CLI_VERSION}" dist.integrity)" = "${CODEX_CLI_INTEGRITY}" \
+ && npm install --global --ignore-scripts=false "@openai/codex@${CODEX_CLI_VERSION}" \
+ && codex --version \
+ && npm cache clean --force
+COPY --from=go-build /out/openlinker-runtime-entrypoint-codex /usr/local/bin/openlinker-runtime-entrypoint
+COPY --from=go-build /out/openlinker-provider-launcher-codex /usr/local/bin/openlinker-provider-launcher
+ENV OPENLINKER_CODEX_BIN=/usr/local/bin/openlinker-provider-launcher \
+    OPENLINKER_CODEX_SANDBOX=read-only \
+    OPENLINKER_CODEX_APPROVAL=never \
+    OPENLINKER_CODEX_WEB_SEARCH=disabled
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/openlinker-runtime-entrypoint"]
+LABEL org.opencontainers.image.title="OpenLinker Runtime Codex" \
+      org.opencontainers.image.description="OpenLinker CLI Runtime Worker with a pinned Codex CLI provider" \
+      org.opencontainers.image.source="https://github.com/OpenLinker-ai/openlinker-cli" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+FROM provider-base AS claude
+ARG CLAUDE_CODE_VERSION=2.1.215
+ARG CLAUDE_CODE_INTEGRITY=sha512-lsWBvyMyBqg/rOZ06o/HEhlpOzHsH8IBf9RH4u5gzizQ1LWS/oXAh5nqWNUu3hn2d8QkyYg0aseNzMDlGD+3qg==
+RUN test "$(npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.integrity)" = "${CLAUDE_CODE_INTEGRITY}" \
+ && npm install --global --ignore-scripts=false "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && claude --version \
+ && npm cache clean --force
+COPY --from=go-build /out/openlinker-runtime-entrypoint-claude /usr/local/bin/openlinker-runtime-entrypoint
+COPY --from=go-build /out/openlinker-provider-launcher-claude /usr/local/bin/openlinker-provider-launcher
+ENV OPENLINKER_CLAUDE_BIN=/usr/local/bin/openlinker-provider-launcher \
+    OPENLINKER_CLAUDE_PERMISSION=dontAsk \
+    OPENLINKER_CLAUDE_WEB_SEARCH=false
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/openlinker-runtime-entrypoint"]
+LABEL org.opencontainers.image.title="OpenLinker Runtime Claude" \
+      org.opencontainers.image.description="OpenLinker CLI Runtime Worker with a pinned Claude Code CLI provider" \
+      org.opencontainers.image.source="https://github.com/OpenLinker-ai/openlinker-cli" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35 AS egress
+COPY --from=go-build /out/openlinker-egress-gateway /usr/local/bin/openlinker-egress-gateway
+EXPOSE 3128
+ENTRYPOINT ["/usr/local/bin/openlinker-egress-gateway"]
+LABEL org.opencontainers.image.title="OpenLinker Egress Gateway" \
+      org.opencontainers.image.description="Restricted HTTP and HTTPS egress proxy for OpenLinker Runtime images" \
+      org.opencontainers.image.source="https://github.com/OpenLinker-ai/openlinker-cli" \
+      org.opencontainers.image.licenses="Apache-2.0"
