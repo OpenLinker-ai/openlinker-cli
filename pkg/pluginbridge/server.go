@@ -51,8 +51,9 @@ type rpcError struct {
 }
 
 type toolCallParams struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	Name      string          `json:"name"`
+	Arguments map[string]any  `json:"arguments,omitempty"`
+	Meta      json.RawMessage `json:"_meta,omitempty"`
 }
 
 type toolResult struct {
@@ -425,6 +426,7 @@ func (server *Server) configureAgent(arguments map[string]any) (toolResult, erro
 		Model: stringArgument(arguments, "model"), Transport: stringArgument(arguments, "transport"),
 		Capacity: int64(intArgument(arguments, "capacity")), TimeoutSeconds: intArgument(arguments, "timeout_seconds"),
 		SessionReuse: sessionReuse, WebSearch: webSearch,
+		CodexBaseURL: stringArgument(arguments, "codex_base_url"),
 		CodexSandbox: stringArgument(arguments, "codex_sandbox"), CodexApproval: stringArgument(arguments, "codex_approval"),
 		ClaudePermission: stringArgument(arguments, "claude_permission"), AllowedTools: stringSliceArgument(arguments, "allowed_tools"),
 	})

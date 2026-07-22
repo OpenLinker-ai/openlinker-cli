@@ -112,6 +112,7 @@ func TestConfigureCodexUsesFixedRuntimeBoundaries(t *testing.T) {
 	t.Setenv("OPENLINKER_NODE_ID", "")
 	t.Setenv("OPENLINKER_BLOCK_PRIVATE_NETWORK", "true")
 	t.Setenv("OPENLINKER_EGRESS_PROXY_URL", "http://gateway:3128")
+	t.Setenv("OPENLINKER_CODEX_BASE_URL", "https://router.example/v1")
 	if err := configure("codex", runtimeDir, workspace, false); err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +129,7 @@ func TestConfigureCodexUsesFixedRuntimeBoundaries(t *testing.T) {
 		"OPENLINKER_WORKSPACE":           workspace,
 		"OPENLINKER_AGENT_SESSION_REUSE": "true",
 		"OPENLINKER_CODEX_BIN":           "/usr/local/bin/openlinker-provider-launcher",
+		"OPENLINKER_CODEX_BASE_URL":      "https://router.example/v1",
 		"CODEX_API_KEY":                  "codex-test",
 		"HTTP_PROXY":                     "http://gateway:3128",
 		"NO_PROXY":                       "",

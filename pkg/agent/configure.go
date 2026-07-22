@@ -18,6 +18,7 @@ type ConfigureOptions struct {
 	TimeoutSeconds   int
 	SessionReuse     *bool
 	WebSearch        *bool
+	CodexBaseURL     string
 	CodexSandbox     string
 	CodexApproval    string
 	ClaudePermission string
@@ -70,6 +71,9 @@ func ConfigureNonSecret(getenv func(string) string, options ConfigureOptions) (C
 	}
 	if options.WebSearch != nil {
 		config.WebSearch = *options.WebSearch
+	}
+	if value := strings.TrimSpace(options.CodexBaseURL); value != "" {
+		config.CodexBaseURL = value
 	}
 	if value := strings.TrimSpace(options.CodexSandbox); value != "" {
 		config.CodexSandbox = value

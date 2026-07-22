@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,6 +55,50 @@ func TestServerInitializeAndToolListUseOnlyProtocolOutput(t *testing.T) {
 	}
 }
 
+func TestServerAcceptsCodexToolCallMetaAndRejectsOtherOuterFields(t *testing.T) {
+	dir := t.TempDir()
+	environment := map[string]string{"OPENLINKER_AGENT_CONFIG": filepath.Join(dir, "agent.json")}
+	getenv := func(key string) string { return environment[key] }
+	input := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diagnose_agent_mode","arguments":{},"_meta":{"threadId":"thread-1","progressToken":1,"x-codex-turn-metadata":{"turnId":"turn-1"}}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"diagnose_agent_mode","arguments":{},"unexpected":true}}` + "\n",
+	)
+	var stdout bytes.Buffer
+	server := &Server{Host: "codex", IO: shared.IO{Getenv: getenv}, Agent: agent.NewService(getenv, nil)}
+	if err := server.Serve(context.Background(), input, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	responses := map[float64]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		var response map[string]any
+		if err := json.Unmarshal([]byte(line), &response); err != nil {
+			t.Fatalf("invalid JSON-RPC output %q: %v", line, err)
+		}
+		responses[response["id"].(float64)] = response
+	}
+	if responses[1]["error"] != nil || responses[1]["result"] == nil {
+		t.Fatalf("Codex _meta tools/call failed: %#v", responses[1])
+	}
+	errorValue, ok := responses[2]["error"].(map[string]any)
+	if !ok || errorValue["code"] != float64(-32602) {
+		t.Fatalf("unknown outer field was not rejected: %#v", responses[2])
+	}
+}
+
+func TestConfigureAgentModeSchemaIncludesCodexBaseURL(t *testing.T) {
+	for _, definition := range toolDefinitions() {
+		if definition.Name != "configure_agent_mode" {
+			continue
+		}
+		properties := definition.InputSchema["properties"].(map[string]any)
+		if _, exists := properties["codex_base_url"]; !exists {
+			t.Fatal("configure_agent_mode schema is missing codex_base_url")
+		}
+		return
+	}
+	t.Fatal("configure_agent_mode tool is missing")
+}
+
 func TestServerCancellationDoesNotWaitForStdinEOF(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer writer.Close()
@@ -98,6 +143,31 @@ func TestAgentConfigurationToolRejectsSecrets(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "secrets") {
 		t.Fatalf("nested secret error = %v", err)
+	}
+}
+
+func TestAgentConfigurationToolStoresCodexBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	server := &Server{IO: shared.IO{Getenv: func(key string) string {
+		if key == "OPENLINKER_AGENT_CONFIG" {
+			return configPath
+		}
+		return ""
+	}}}
+	_, err := server.configureAgent(map[string]any{
+		"provider": "codex", "agent_id": "11111111-1111-4111-8111-111111111111", "workspace": dir,
+		"codex_base_url": "https://router.example/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"codex_base_url": "https://router.example/v1"`) {
+		t.Fatalf("stored config = %s", raw)
 	}
 }
 

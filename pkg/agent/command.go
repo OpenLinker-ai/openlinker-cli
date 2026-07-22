@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,7 +28,7 @@ func New(ioStreams shared.IO, service *Service) *cobra.Command {
 }
 
 func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
-	var provider, agentID, workspace, url, state, bin, model, transport, sandbox, approval, permission string
+	var provider, agentID, workspace, platformURL, state, bin, model, transport, codexBaseURL, sandbox, approval, permission string
 	var capacity int64
 	var timeout int
 	var webSearch, sessionReuse, enabled bool
@@ -53,7 +54,7 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 				}
 			}
 			if command.Flags().Changed("url") {
-				config.OpenLinkerURL = strings.TrimSpace(url)
+				config.OpenLinkerURL = strings.TrimSpace(platformURL)
 			}
 			if command.Flags().Changed("state-dir") {
 				config.StateDir, err = filepath.Abs(strings.TrimSpace(state))
@@ -81,6 +82,9 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 			}
 			if command.Flags().Changed("web-search") {
 				config.WebSearch = webSearch
+			}
+			if command.Flags().Changed("codex-base-url") {
+				config.CodexBaseURL = strings.TrimSpace(codexBaseURL)
 			}
 			if command.Flags().Changed("codex-sandbox") {
 				config.CodexSandbox = sandbox
@@ -113,7 +117,7 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().StringVar(&provider, "provider", "", "codex or claude")
 	command.Flags().StringVar(&agentID, "agent-id", "", "existing OpenLinker Agent UUID")
 	command.Flags().StringVar(&workspace, "workspace", "", "provider workspace")
-	command.Flags().StringVar(&url, "url", "", "public OpenLinker platform URL")
+	command.Flags().StringVar(&platformURL, "url", "", "public OpenLinker platform URL")
 	command.Flags().StringVar(&state, "state-dir", "", "private persistent Agent state directory")
 	command.Flags().StringVar(&bin, "provider-bin", "", "provider CLI binary")
 	command.Flags().StringVar(&model, "model", "", "provider model")
@@ -122,6 +126,7 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().IntVar(&timeout, "timeout", 1800, "provider execution timeout in seconds")
 	command.Flags().BoolVar(&sessionReuse, "session-reuse", true, "reuse provider sessions by Core conversation")
 	command.Flags().BoolVar(&webSearch, "web-search", false, "allow provider web search")
+	command.Flags().StringVar(&codexBaseURL, "codex-base-url", "", "Codex OpenAI-compatible API Base URL")
 	command.Flags().StringVar(&sandbox, "codex-sandbox", "read-only", "Codex sandbox mode")
 	command.Flags().StringVar(&approval, "codex-approval", "never", "Codex approval mode")
 	command.Flags().StringVar(&permission, "claude-permission", "dontAsk", "Claude permission mode")
@@ -200,6 +205,9 @@ func Diagnose(getenv func(string) string, providerOverride string) Diagnostic {
 	config.Workspace = firstNonEmpty(envValue(getenv, "OPENLINKER_WORKSPACE"), config.Workspace)
 	config.OpenLinkerURL = firstNonEmpty(envValue(getenv, "OPENLINKER_URL"), envValue(getenv, "OPENLINKER_API_BASE"), config.OpenLinkerURL)
 	runtimeOptionsErr := applyRuntimeEnvironment(&config, getenv)
+	if runtimeOptionsErr == nil {
+		runtimeOptionsErr = validateProviderPolicy(config)
+	}
 	check := func(name string, ok bool, success, failure string) {
 		if ok {
 			result.Checks[name] = success
@@ -258,7 +266,28 @@ func validateNonSecretConfig(config Config) error {
 	return validateProviderPolicy(config)
 }
 
+func validateCodexBaseURL(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || parsed.Opaque != "" {
+		return errors.New("Codex Base URL must be an absolute HTTP(S) URL with a host")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("Codex Base URL must use http or https")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return errors.New("Codex Base URL must not contain credentials, a query, or a fragment")
+	}
+	return nil
+}
+
 func validateProviderPolicy(config Config) error {
+	if err := validateCodexBaseURL(config.CodexBaseURL); err != nil {
+		return err
+	}
 	switch config.CodexSandbox {
 	case "", "read-only", "workspace-write":
 	default:

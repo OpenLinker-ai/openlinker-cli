@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 )
 
 func TestNodeIDIsGeneratedPersistedAndConflictsFail(t *testing.T) {
@@ -58,11 +61,12 @@ func TestConfigureNonSecretNeverWritesCredentials(t *testing.T) {
 	getenv := func(key string) string { return environment[key] }
 	config, _, err := ConfigureNonSecret(getenv, ConfigureOptions{
 		Provider: "codex", AgentID: "11111111-1111-4111-8111-111111111111", Workspace: dir,
+		CodexBaseURL: "https://router.example/v1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Provider != "codex" {
+	if config.Provider != "codex" || config.CodexBaseURL != "https://router.example/v1" {
 		t.Fatalf("config = %#v", config)
 	}
 	raw, err := os.ReadFile(configPath)
@@ -83,6 +87,7 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 		"OPENLINKER_AGENT_TIMEOUT_SECONDS": "90",
 		"OPENLINKER_AGENT_SESSION_REUSE":   "false",
 		"OPENLINKER_CODEX_MODEL":           "gpt-test",
+		"OPENLINKER_CODEX_BASE_URL":        "https://router.example/v1",
 		"OPENLINKER_CODEX_WEB_SEARCH":      "enabled",
 		"OPENLINKER_CODEX_SANDBOX":         "workspace-write",
 		"OPENLINKER_CODEX_APPROVAL":        "never",
@@ -91,8 +96,61 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if config.Transport != "pull" || config.Capacity != 3 || config.TimeoutSeconds != 90 || config.SessionReuse ||
-		config.Model != "gpt-test" || !config.WebSearch || config.CodexSandbox != "workspace-write" {
+		config.Model != "gpt-test" || config.CodexBaseURL != "https://router.example/v1" || !config.WebSearch || config.CodexSandbox != "workspace-write" {
 		t.Fatalf("environment overrides = %#v", config)
+	}
+}
+
+func TestValidateCodexBaseURL(t *testing.T) {
+	workspace := t.TempDir()
+	base := defaultConfig()
+	base.Provider = "codex"
+	base.AgentID = "11111111-1111-4111-8111-111111111111"
+	base.Workspace = workspace
+
+	for _, value := range []string{"https://router.example/v1", "http://127.0.0.1:8080/v1"} {
+		config := base
+		config.CodexBaseURL = value
+		if err := validateNonSecretConfig(config); err != nil {
+			t.Fatalf("valid Codex Base URL %q: %v", value, err)
+		}
+	}
+	for _, value := range []string{
+		"router.example/v1", "ftp://router.example/v1", "https://user:pass@router.example/v1",
+		"https://router.example/v1?debug=true", "https://router.example/v1#fragment",
+	} {
+		config := base
+		config.CodexBaseURL = value
+		if err := validateNonSecretConfig(config); err == nil {
+			t.Fatalf("invalid Codex Base URL %q was accepted", value)
+		}
+	}
+}
+
+func TestConfigureCommandStoresCodexBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config", "agent.json")
+	environment := map[string]string{"OPENLINKER_AGENT_CONFIG": configPath}
+	var stdout bytes.Buffer
+	command := newConfigureCommand(shared.IO{
+		Getenv: func(key string) string { return environment[key] },
+		Stdout: &stdout,
+	})
+	command.SetArgs([]string{
+		"--provider", "codex",
+		"--agent-id", "11111111-1111-4111-8111-111111111111",
+		"--workspace", dir,
+		"--codex-base-url", "https://router.example/v1",
+	})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"codex_base_url": "https://router.example/v1"`) {
+		t.Fatalf("stored config = %s", raw)
 	}
 }
 

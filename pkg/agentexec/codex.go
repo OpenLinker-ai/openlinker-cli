@@ -115,14 +115,17 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 	} else {
 		args = append(args, "-c", `web_search="disabled"`)
 	}
+	if value := strings.TrimSpace(config.CodexBaseURL); value != "" {
+		args = append(args, "-c", fmt.Sprintf("openai_base_url=%q", value))
+	}
 	if sessionID != "" {
-		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--ignore-user-config", "--ignore-rules", "--json")
+		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json")
 		if config.Model != "" {
 			args = append(args, "--model", config.Model)
 		}
 		return append(args, sessionID, "-")
 	}
-	args = append(args, "exec", "--ignore-user-config", "--ignore-rules", "-C", workspace, "--sandbox", sandbox, "--color", "never")
+	args = append(args, "exec", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "-C", workspace, "--sandbox", sandbox, "--color", "never")
 	if persistent {
 		args = append(args, "--json")
 	} else {
@@ -142,7 +145,7 @@ func runCodexCommand(ctx context.Context, cancel context.CancelFunc, bin string,
 	if environment == nil {
 		environment = os.Environ()
 	}
-	allowlist := append([]string{"CODEX_API_KEY", "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"}, config.EnvAllowlist...)
+	allowlist := append([]string{"CODEX_API_KEY", "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"}, config.EnvAllowlist...)
 	command.Env = sanitizedEnvironment(environment, allowlist)
 	command.Stdin = strings.NewReader(prompt)
 	stdout := newLimitedOutputBuffer(cancel)

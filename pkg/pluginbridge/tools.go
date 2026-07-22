@@ -56,6 +56,7 @@ func toolDefinitions() []toolDefinition {
 			"model": stringProperty("Provider model"), "transport": map[string]any{"type": "string", "enum": []string{"auto", "websocket", "pull"}},
 			"capacity": map[string]any{"type": "integer", "minimum": 1, "maximum": 1024}, "timeout_seconds": map[string]any{"type": "integer", "minimum": 1},
 			"session_reuse": map[string]any{"type": "boolean"}, "web_search": map[string]any{"type": "boolean"},
+			"codex_base_url": stringProperty("Codex OpenAI-compatible API Base URL"),
 			"codex_sandbox":  map[string]any{"type": "string", "enum": []string{"read-only", "workspace-write"}},
 			"codex_approval": stringProperty("Codex approval mode"), "claude_permission": stringProperty("Claude permission mode"),
 			"allowed_tools": stringArray("Claude allowed tools"),

@@ -20,6 +20,9 @@ runtime boundaries are stabilizing.
 
 ### Changed
 
+- Made native Codex MCP calls accept Codex client `_meta`, added a validated
+  OpenAI-compatible Base URL setting, and allowed new or resumed sessions to
+  run from non-Git workspaces.
 - Pinned `openlinker-go` to the Runtime v2-only SDK revision that exposes Agent
   credentials exclusively as Agent Tokens.
 - Reworked bundled Skills and examples around User Token discovery, top-level
