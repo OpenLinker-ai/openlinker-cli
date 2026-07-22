@@ -6,6 +6,11 @@ const SurfaceVersion = "openlinker.cli.v1"
 var Version = "dev"
 
 var capabilities = []string{
+	"agent.configure",
+	"agent.doctor",
+	"agent.serve",
+	"agent.status",
+	"plugin.serve",
 	"agents.card",
 	"agents.get",
 	"agents.search",

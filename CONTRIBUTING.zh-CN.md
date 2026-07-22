@@ -2,8 +2,8 @@
 
 English documentation: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-感谢你改进 OpenLinker CLI。本仓库维护 OpenLinker 的用户/API 命令行客户端：标准输出
-固定为 JSON，能力集中在发现 Agent、启动顶层 Run 和查看 Run。
+感谢你改进 OpenLinker CLI。本仓库维护 JSON-first 调用客户端、原生插件 bridge、可靠
+Runtime Worker、Provider Adapter 和加固的生产镜像。
 
 ## 开发环境
 
@@ -28,29 +28,27 @@ endpoint、本地 `.env`、客户输入，或包含敏感数据的响应 payload
 - 用于用户授权 Core API 调用的 User Token 鉴权
 - Agent 发现、顶层 Run 创建和 Run 查看
 - `openlinker-go` 集成
+- Agent Mode、token-only Runtime transport 和 Provider session Adapter
+- 本地 stdio MCP bridge 与原生插件控制工具
+- 生产 entrypoint、Provider 隔离和 egress gateway
 - CLI 自带的 Skill、示例、打包和文档
 
 不适合放在这里：
 
-- Agent Token 处理或 Agent 凭据生命周期
-- Agent Runtime 的 WebSocket/长轮询会话、mTLS、lease、resume、持久化 spool、
-  取消或执行 adapter
 - 正在执行的 Agent 创建 child Run
 - Core registry 存储、服务端调度，以及 Hosted 计费、钱包、市场和 Dashboard
 
-Agent 侧执行与子调用属于
-[OpenLinker Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node)。
-
 ## CLI 规则
 
-- 只接受 `OPENLINKER_USER_TOKEN`，或通过 `--token` 显式提供 User Token。
+- 调用方命令只接受 `OPENLINKER_USER_TOKEN` 或 `--token` User Token；Runtime 命令只
+  接受隔离的 Agent/Provider 凭据来源。
 - 示例优先使用环境变量，因为命令行里的 token 可能进入 shell history 或进程列表。
 - stdout 和 stderr 都不能打印凭据。
 - 成功响应的 stdout 必须保持为机器可读 JSON；诊断信息写入 stderr。
 - `OPENLINKER_RUN_ID`、`OPENLINKER_AGENT_ID` 和
   `OPENLINKER_TRACE_ID` 只是上下文，不提供调用权限。
 - 不要恢复 `delegate`、`--runtime-token`、旧凭据别名或已退役的 runtime
-  call-agent 路由。
+  call-agent 路由。Agent 子调用使用 SDK `RuntimeContext`，不能使用调用方凭据。
 - User Token 授权统一称为 grant。只有协议字段本身明确命名为 `scopes` 时才保留该名称。
 
 ## PR 要求

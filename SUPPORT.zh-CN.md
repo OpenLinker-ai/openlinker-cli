@@ -11,6 +11,8 @@ English documentation: [SUPPORT.md](./SUPPORT.md)
 - JSON stdout、诊断 stderr 或 exit code 行为
 - User Token 鉴权问题，但不要提供 token 值
 - Agent 发现、顶层 Run 创建和 Run 查看
+- `agent` / `plugin` 命令、Runtime transport、Provider session 与取消
+- Codex/Claude 生产镜像和 egress gateway 行为
 - 与已发布 Core API 或 `openlinker-go` revision 的兼容性
 - 自带 Skill、示例、跨平台二进制和文档
 
@@ -30,7 +32,6 @@ Token”。
 ## 不在这里处理
 
 - 安全漏洞；请看 [SECURITY.zh-CN.md](./SECURITY.zh-CN.md)
-- Agent Node、Agent Runtime WebSocket/长轮询、mTLS、Agent Token、lease 或 adapter 行为
 - Core 服务端存储、调度或 registry 实现
 - 商业计费、钱包、提现、市场或 Hosted Dashboard
 - 无法公开复现的私有部署调试
@@ -45,6 +46,5 @@ Token”。
 - 命令名和脱敏后的参数
 - 脱敏后的 HTTP status、stdout 和 stderr
 
-runtime transport 或正在执行的 Agent 子调用问题，请到
-[OpenLinker Agent Node issue tracker](https://github.com/OpenLinker-ai/openlinker-agent-node/issues)
-提交。
+Runtime 问题还应提供所选 transport、Provider CLI 版本、脱敏后的 `agent doctor` 输出，
+以及问题发生在原生插件、前台进程还是容器模式。

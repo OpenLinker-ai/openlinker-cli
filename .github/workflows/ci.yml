@@ -35,4 +35,22 @@ jobs:
           done
 
       - name: Build
-        run: GOWORK=off go build -trimpath -ldflags="-s -w" ./cmd/openlinker
+        run: |
+          GOWORK=off go build -trimpath -ldflags="-s -w" ./cmd/openlinker
+          GOWORK=off go build -trimpath -ldflags="-s -w" ./cmd/openlinker-egress-gateway ./cmd/openlinker-runtime-entrypoint
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOWORK=off go build -trimpath ./cmd/openlinker-provider-launcher
+
+      - name: Validate production image topology
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --env-file deploy/.env.providers.example \
+            -f deploy/compose.providers.yml --profile codex --profile claude config >/dev/null
+          docker compose --env-file deploy/.env.providers.example \
+            -f deploy/compose.codex.yml -f deploy/compose.codex.workspace-write.yml config >/dev/null
+          docker compose --env-file deploy/.env.providers.example \
+            -f deploy/compose.claude.yml -f deploy/compose.claude.workspace-write.yml config >/dev/null
+          if rg -n 'AGENT_NODE|agent-node|Agent Node' Dockerfile.providers deploy cmd/openlinker-*; then
+            echo "production CLI images must not contain Agent Node" >&2
+            exit 1
+          fi

@@ -4,8 +4,8 @@
 
 ## Scope
 
-- [ ] Fits the CLI's user/API caller boundary.
-- [ ] Does not add Agent Token handling, Agent Node WebSocket/long-poll sessions, mTLS, or delegated child execution.
+- [ ] Fits the caller, plugin bridge, Runtime Worker, provider adapter, or image boundary.
+- [ ] Keeps User, Agent, and provider credentials isolated and does not add delegated child execution outside SDK `RuntimeContext`.
 - [ ] Does not add Hosted billing, wallet, marketplace, or dashboard behavior.
 - [ ] Does not include secrets, private URLs, customer data, or local `.env` values.
 
