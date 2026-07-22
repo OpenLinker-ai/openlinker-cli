@@ -21,6 +21,7 @@ for item in "$@"; do
   if [ "$item" = "resume" ]; then mode="resume"; fi
 done
 printf '%s\n' "$*" >> "$TEST_LOG"
+printf '%s\n' "${ALL_PROXY-}" > "$TEST_LOG.proxy"
 cat > "$TEST_LOG.$mode.prompt"
 printf '%s\n' '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}'
 printf '%s\n' '{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"provider answer"}}'
@@ -30,8 +31,9 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item-1","type":"agent_mess
 	}
 	config := ProviderConfig{
 		Provider: "codex", Bin: script, Workspace: dir, Sandbox: "read-only", CodexApproval: "never",
-		Timeout: 5e9, SessionReuse: true, SessionStore: filepath.Join(dir, "sessions.json"),
-		Env: append(os.Environ(), "TEST_LOG="+logPath), EnvAllowlist: []string{"TEST_LOG"},
+		CodexBaseURL: "https://router.example/v1",
+		Timeout:      5e9, SessionReuse: true, SessionStore: filepath.Join(dir, "sessions.json"),
+		Env: append(os.Environ(), "TEST_LOG="+logPath, "ALL_PROXY=socks5://proxy.example:1080"), EnvAllowlist: []string{"TEST_LOG"},
 	}
 	provider := CodexProvider{Config: config}
 	run := RunContext{
@@ -69,8 +71,23 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item-1","type":"agent_mess
 	if !strings.Contains(string(args), "exec resume") || !strings.Contains(string(args), "--ignore-user-config") || !strings.Contains(string(args), "--ignore-rules") {
 		t.Fatalf("Codex args = %s", args)
 	}
+	for _, line := range strings.Split(strings.TrimSpace(string(args)), "\n") {
+		if !strings.Contains(line, "--skip-git-repo-check") {
+			t.Fatalf("Codex args do not support a non-Git workspace: %s", line)
+		}
+		if !strings.Contains(line, `openai_base_url="https://router.example/v1"`) {
+			t.Fatalf("Codex args do not include the configured Base URL: %s", line)
+		}
+	}
 	if strings.Contains(string(args), "--output-last-message") {
 		t.Fatalf("Codex args reintroduced a cross-UID output file: %s", args)
+	}
+	proxy, err := os.ReadFile(logPath + ".proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(proxy)) != "socks5://proxy.example:1080" {
+		t.Fatalf("Codex ALL_PROXY = %q", proxy)
 	}
 	newPrompt, _ := os.ReadFile(logPath + ".new.prompt")
 	resumePrompt, _ := os.ReadFile(logPath + ".resume.prompt")

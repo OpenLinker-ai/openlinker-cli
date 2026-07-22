@@ -88,6 +88,14 @@ provider-specific `OPENLINKER_CODEX_MODEL` / `OPENLINKER_CLAUDE_MODEL`, web
 search, sandbox, and permission variables. See
 [`deploy/.env.providers.example`](./deploy/.env.providers.example).
 
+When Codex uses an OpenAI-compatible router, set the non-secret
+`OPENLINKER_CODEX_BASE_URL` (for example, `https://router.example/v1`) or pass
+`--codex-base-url` to `openlinker agent configure`. The value must be an
+absolute HTTP(S) URL without credentials, a query, or a fragment. The native
+MCP `configure_agent_mode` tool exposes the same setting as `codex_base_url`.
+Codex executions allow non-Git workspaces and reuse the same configured Base
+URL for both new and resumed sessions.
+
 ## User Token grants
 
 Create and manage User Tokens outside this CLI, either in Core Web under

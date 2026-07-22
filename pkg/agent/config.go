@@ -28,6 +28,7 @@ type Config struct {
 	TimeoutSeconds   int      `json:"timeout_seconds"`
 	SessionReuse     bool     `json:"session_reuse"`
 	WebSearch        bool     `json:"web_search"`
+	CodexBaseURL     string   `json:"codex_base_url,omitempty"`
 	CodexSandbox     string   `json:"codex_sandbox,omitempty"`
 	CodexApproval    string   `json:"codex_approval,omitempty"`
 	ClaudePermission string   `json:"claude_permission,omitempty"`
@@ -227,6 +228,7 @@ func envValue(getenv func(string) string, key string) string {
 func applyRuntimeEnvironment(config *Config, getenv func(string) string) error {
 	config.Transport = firstNonEmpty(envValue(getenv, "OPENLINKER_AGENT_TRANSPORT"), config.Transport)
 	config.Model = firstNonEmpty(envValue(getenv, "OPENLINKER_"+strings.ToUpper(config.Provider)+"_MODEL"), config.Model)
+	config.CodexBaseURL = firstNonEmpty(envValue(getenv, "OPENLINKER_CODEX_BASE_URL"), config.CodexBaseURL)
 	config.CodexSandbox = firstNonEmpty(envValue(getenv, "OPENLINKER_CODEX_SANDBOX"), config.CodexSandbox)
 	config.CodexApproval = firstNonEmpty(envValue(getenv, "OPENLINKER_CODEX_APPROVAL"), config.CodexApproval)
 	config.ClaudePermission = firstNonEmpty(envValue(getenv, "OPENLINKER_CLAUDE_PERMISSION"), config.ClaudePermission)

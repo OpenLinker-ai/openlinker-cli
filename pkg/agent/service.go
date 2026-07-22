@@ -324,7 +324,7 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	}
 	handler, err := agentexec.NewHandler(agentexec.ProviderConfig{
 		Provider: config.Provider, Bin: providerBin, Workspace: workspace, Model: config.Model,
-		Sandbox: config.CodexSandbox, CodexApproval: config.CodexApproval,
+		Sandbox: config.CodexSandbox, CodexApproval: config.CodexApproval, CodexBaseURL: config.CodexBaseURL,
 		Permission: config.ClaudePermission, AllowedTools: append([]string(nil), config.AllowedTools...),
 		Timeout:      time.Duration(config.TimeoutSeconds) * time.Second,
 		SessionReuse: config.SessionReuse,

@@ -80,6 +80,13 @@ API Key；官方生产镜像要求 Provider API Key。Agent Mode 配置文件从
 和 permission 变量。完整示例见
 [`deploy/.env.providers.example`](./deploy/.env.providers.example)。
 
+Codex 使用 OpenAI-compatible 路由时，可设置非敏感变量
+`OPENLINKER_CODEX_BASE_URL`（例如 `https://router.example/v1`），或向
+`openlinker agent configure` 传入 `--codex-base-url`。该值必须是绝对 HTTP(S)
+URL，且不能包含凭据、查询参数或 fragment。原生 MCP 的
+`configure_agent_mode` 工具提供同名语义的 `codex_base_url` 参数。新建和恢复
+Codex 会话都会使用该 Base URL，并支持非 Git 工作目录。
+
 ## User Token 权限
 
 User Token 的创建和管理不属于 CLI，可在 Core Web 的 `/settings/user-tokens`，或通过

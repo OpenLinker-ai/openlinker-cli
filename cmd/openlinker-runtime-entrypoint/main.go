@@ -151,6 +151,7 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 	if provider == "codex" {
 		values["OPENLINKER_CODEX_BIN"] = "/usr/local/bin/openlinker-provider-launcher"
 		values["CODEX_HOME"] = providerHome
+		values["OPENLINKER_CODEX_BASE_URL"] = strings.TrimSpace(os.Getenv("OPENLINKER_CODEX_BASE_URL"))
 		values["OPENLINKER_CODEX_WEB_SEARCH"] = defaultString(os.Getenv("OPENLINKER_CODEX_WEB_SEARCH"), "disabled")
 		values["OPENLINKER_CODEX_APPROVAL"] = "never"
 		values["OPENLINKER_CODEX_SANDBOX"] = defaultString(os.Getenv("OPENLINKER_CODEX_SANDBOX"), "read-only")

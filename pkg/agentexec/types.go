@@ -24,6 +24,7 @@ type ProviderConfig struct {
 	SessionStore  string
 	WebSearch     bool
 	CodexApproval string
+	CodexBaseURL  string
 	Env           []string
 	EnvAllowlist  []string
 }
