@@ -2,14 +2,14 @@
 
 ARG GO_VERSION=1.26.4
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b AS go-build
-ARG TARGETOS
-ARG TARGETARCH
 WORKDIR /src
 ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOWORK=off
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
 RUN go test ./cmd/openlinker-egress-gateway ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/pluginbridge
+ARG TARGETOS
+ARG TARGETARCH
 ARG OPENLINKER_VERSION=container
 RUN test "${TARGETOS}" = linux \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo.Version=${OPENLINKER_VERSION}" -o /out/openlinker ./cmd/openlinker \
