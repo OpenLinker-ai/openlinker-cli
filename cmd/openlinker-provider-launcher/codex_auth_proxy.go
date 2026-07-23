@@ -11,6 +11,8 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -102,6 +104,7 @@ func prepareCodexAuthProxy(argv, environment []string) (*codexProxyLaunch, error
 	localBaseURL := "https://" + listenerAddress
 	rewritten := rewriteCodexProviderArguments(argv, localBaseURL, codexLocalAuthEnv)
 	providerEnvironment := setEnvironmentValue(codexProviderEnvironment(environment), "SSL_CERT_FILE", bundleFile)
+	providerEnvironment = setEnvironmentValue(providerEnvironment, "CODEX_CA_CERTIFICATE", bundleFile)
 	providerEnvironment = setEnvironmentValue(providerEnvironment, "NO_PROXY", "127.0.0.1,localhost")
 	providerEnvironment = setEnvironmentValue(providerEnvironment, "no_proxy", "127.0.0.1,localhost")
 	return &codexProxyLaunch{
@@ -194,6 +197,7 @@ func codexProviderEnvironment(environment []string) []string {
 		codexAuthProxySecretEnv,
 		codexAuthProxyCertEnv,
 		codexAuthProxyKeyEnv,
+		"CODEX_CA_CERTIFICATE",
 		codexLocalAuthEnv,
 		providerExecStageEnv,
 	)
@@ -291,6 +295,7 @@ func runCodexAuthProxyStage() error {
 		Handler:           newCodexAuthProxyHandler(upstream, secret),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       90 * time.Second,
+		ErrorLog:          log.New(io.Discard, "", 0),
 	}
 	err = server.Serve(tlsListener)
 	if errors.Is(err, http.ErrServerClosed) {
