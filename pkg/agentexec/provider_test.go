@@ -75,8 +75,20 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item-1","type":"agent_mess
 		if !strings.Contains(line, "--skip-git-repo-check") {
 			t.Fatalf("Codex args do not support a non-Git workspace: %s", line)
 		}
-		if !strings.Contains(line, `openai_base_url="https://router.example/v1"`) {
-			t.Fatalf("Codex args do not include the configured Base URL: %s", line)
+		for _, expected := range []string{
+			`model_provider="openlinker_proxy"`,
+			`model_providers.openlinker_proxy.name="OpenLinker-compatible provider"`,
+			`model_providers.openlinker_proxy.base_url="https://router.example/v1"`,
+			`model_providers.openlinker_proxy.env_key="CODEX_API_KEY"`,
+			`model_providers.openlinker_proxy.wire_api="responses"`,
+			`model_providers.openlinker_proxy.supports_websockets=false`,
+		} {
+			if !strings.Contains(line, expected) {
+				t.Fatalf("Codex args do not include %s: %s", expected, line)
+			}
+		}
+		if strings.Contains(line, "openai_base_url") {
+			t.Fatalf("Codex args incorrectly reused the WebSocket-capable built-in provider: %s", line)
 		}
 	}
 	if strings.Contains(string(args), "--output-last-message") {

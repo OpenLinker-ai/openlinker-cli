@@ -116,7 +116,18 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		args = append(args, "-c", `web_search="disabled"`)
 	}
 	if value := strings.TrimSpace(config.CodexBaseURL); value != "" {
-		args = append(args, "-c", fmt.Sprintf("openai_base_url=%q", value))
+		// OpenAI-compatible routers commonly implement the HTTP Responses API
+		// without the optional Responses WebSocket transport. Keep the built-in
+		// OpenAI provider untouched and describe the router as a native custom
+		// provider so Codex does not attempt an unsupported WebSocket upgrade.
+		args = append(args,
+			"-c", `model_provider="openlinker_proxy"`,
+			"-c", `model_providers.openlinker_proxy.name="OpenLinker-compatible provider"`,
+			"-c", fmt.Sprintf("model_providers.openlinker_proxy.base_url=%q", value),
+			"-c", `model_providers.openlinker_proxy.env_key="CODEX_API_KEY"`,
+			"-c", `model_providers.openlinker_proxy.wire_api="responses"`,
+			"-c", `model_providers.openlinker_proxy.supports_websockets=false`,
+		)
 	}
 	if sessionID != "" {
 		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json")
