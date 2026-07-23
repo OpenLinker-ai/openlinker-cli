@@ -23,6 +23,12 @@ const (
 var fixedProvider string
 
 func main() {
+	if os.Getenv(codexAuthProxyStageEnv) == "1" {
+		if err := runCodexAuthProxyStage(); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	target, err := fixedProviderBinary(fixedProvider)
 	if err != nil {
 		fatal(err)
@@ -30,12 +36,19 @@ func main() {
 	if os.Geteuid() != runtimeUID || os.Getegid() != runtimeGID {
 		fatal(errors.New("launcher must be invoked by the fixed Runtime UID/GID"))
 	}
+	argv := append([]string{target}, os.Args[1:]...)
+	environment := os.Environ()
+	if strings.EqualFold(strings.TrimSpace(fixedProvider), "codex") {
+		argv, environment, err = prepareCodexAuthProxy(argv, environment)
+		if err != nil {
+			fatal(err)
+		}
+	}
 	runtime.LockOSThread()
 	if err := dropProviderPrivileges(); err != nil {
 		fatal(err)
 	}
-	argv := append([]string{target}, os.Args[1:]...)
-	if err := syscall.Exec(target, argv, os.Environ()); err != nil {
+	if err := syscall.Exec(target, argv, environment); err != nil {
 		fatal(errors.New("start fixed Provider binary"))
 	}
 }
