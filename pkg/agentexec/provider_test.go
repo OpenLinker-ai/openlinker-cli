@@ -98,6 +98,29 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item-2","type":"agent_mess
 	}
 }
 
+func TestCodexExternalSandboxRestrictsSpawnedCommandEnvironment(t *testing.T) {
+	args := codexArguments(ProviderConfig{
+		CodexApproval: "never",
+		WebSearch:     true,
+	}, "/workspace", "danger-full-access", "", true)
+	joined := strings.Join(args, " ")
+	for _, expected := range []string{
+		"--sandbox danger-full-access",
+		`shell_environment_policy.inherit="all"`,
+		"shell_environment_policy.ignore_default_excludes=false",
+		`shell_environment_policy.include_only=["PATH","HOME","HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","NO_PROXY","no_proxy","SSL_CERT_FILE"]`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Codex external sandbox args do not include %s: %s", expected, joined)
+		}
+	}
+	for _, forbidden := range []string{"CODEX_API_KEY", "OPENLINKER_AGENT_TOKEN", "TOKEN", "SECRET"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("Codex spawned-command environment allowlist contains %s: %s", forbidden, joined)
+		}
+	}
+}
+
 func TestCodexProviderReusesTrustedConversationSession(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "codex-fake")

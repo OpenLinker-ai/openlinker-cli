@@ -139,6 +139,17 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 			"-c", `model_providers.openlinker_proxy.supports_websockets=false`,
 		)
 	}
+	if sandbox == "danger-full-access" {
+		// This mode is intended for an external isolation boundary such as the
+		// official hardened Provider container. Keep model-spawned commands from
+		// inheriting provider credentials even though the Codex process itself
+		// needs them to call the configured model endpoint.
+		args = append(args,
+			"-c", `shell_environment_policy.inherit="all"`,
+			"-c", `shell_environment_policy.ignore_default_excludes=false`,
+			"-c", `shell_environment_policy.include_only=["PATH","HOME","HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","NO_PROXY","no_proxy","SSL_CERT_FILE"]`,
+		)
+	}
 	if sessionID != "" {
 		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json")
 		if config.Model != "" {
