@@ -102,6 +102,8 @@ func prepareCodexAuthProxy(argv, environment []string) (*codexProxyLaunch, error
 	localBaseURL := "https://" + listenerAddress
 	rewritten := rewriteCodexProviderArguments(argv, localBaseURL, codexLocalAuthEnv)
 	providerEnvironment := setEnvironmentValue(codexProviderEnvironment(environment), "SSL_CERT_FILE", bundleFile)
+	providerEnvironment = setEnvironmentValue(providerEnvironment, "NO_PROXY", "127.0.0.1,localhost")
+	providerEnvironment = setEnvironmentValue(providerEnvironment, "no_proxy", "127.0.0.1,localhost")
 	return &codexProxyLaunch{
 		argv: rewritten, environment: providerEnvironment, proxy: proxyCommand, cleanup: cleanup,
 	}, nil

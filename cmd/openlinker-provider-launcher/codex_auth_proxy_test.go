@@ -52,6 +52,20 @@ func TestCodexProviderEnvironmentDoesNotExposeProviderSecret(t *testing.T) {
 	}
 }
 
+func TestSetEnvironmentValueReplacesOnlyExactKey(t *testing.T) {
+	environment := setEnvironmentValue([]string{
+		"NO_PROXY=",
+		"no_proxy=",
+		"HTTP_PROXY=http://egress:3128",
+	}, "NO_PROXY", "127.0.0.1,localhost")
+	joined := strings.Join(environment, "\n")
+	if strings.Count(joined, "NO_PROXY=") != 1 ||
+		!strings.Contains(joined, "NO_PROXY=127.0.0.1,localhost") ||
+		!strings.Contains(joined, "HTTP_PROXY=http://egress:3128") {
+		t.Fatalf("local proxy bypass environment = %s", joined)
+	}
+}
+
 func TestCodexAuthProxyPinsUpstreamAndInjectsCredential(t *testing.T) {
 	var observedPath, observedAuthorization string
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
