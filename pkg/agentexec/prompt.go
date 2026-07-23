@@ -33,3 +33,19 @@ func buildPrompt(provider string, run RunContext, includeHistory bool) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+func buildCodexPrompt(run RunContext, includeHistory, webSearch bool) string {
+	prompt := buildPrompt("Codex", run, includeHistory)
+	if !webSearch {
+		return prompt
+	}
+	return strings.Join([]string{
+		prompt,
+		"",
+		"Live public-web access is enabled for this run.",
+		"When the task depends on current or live information, use web search or a permitted public HTTP tool before answering.",
+		"Do not claim that internet access is unavailable unless an actual web tool attempt fails.",
+		"Identify the public source hosts or URLs used in the final answer.",
+		"Never use web access to reach private, loopback, link-local, metadata, or credential-bearing destinations.",
+	}, "\n")
+}

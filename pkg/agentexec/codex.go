@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -54,7 +55,16 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
 		args := codexArguments(config, workspace, sandbox, sessionID, sessionKey != "")
-		stdoutText, stderrText, err = runCodexCommand(requestCtx, cancel, bin, args, workspace, buildPrompt("Codex", run, sessionID == ""), config)
+		stdoutText, stderrText, err = runCodexCommand(
+			requestCtx,
+			cancel,
+			bin,
+			args,
+			workspace,
+			buildCodexPrompt(run, sessionID == "", config.WebSearch),
+			config,
+			run.Emit,
+		)
 		if err == nil {
 			break
 		}
@@ -148,7 +158,16 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 	return append(args, "-")
 }
 
-func runCodexCommand(ctx context.Context, cancel context.CancelFunc, bin string, args []string, workspace, prompt string, config ProviderConfig) (string, string, error) {
+func runCodexCommand(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bin string,
+	args []string,
+	workspace string,
+	prompt string,
+	config ProviderConfig,
+	emit func(string, any) error,
+) (string, string, error) {
 	command := exec.CommandContext(ctx, bin, args...) // #nosec G204 -- operator-configured official provider binary, no shell.
 	configureProviderProcess(command)
 	command.Dir = workspace
@@ -161,8 +180,10 @@ func runCodexCommand(ctx context.Context, cancel context.CancelFunc, bin string,
 	command.Stdin = strings.NewReader(prompt)
 	stdout := newLimitedOutputBuffer(cancel)
 	stderr := newLimitedOutputBuffer(cancel)
-	command.Stdout, command.Stderr = stdout, stderr
+	observer := newCodexJSONLObserver(emit)
+	command.Stdout, command.Stderr = io.MultiWriter(stdout, observer), stderr
 	err := command.Run()
+	observer.Flush()
 	if limitErr := outputLimitError("Codex", stdout, stderr); limitErr != nil {
 		return stdout.String(), stderr.String(), limitErr
 	}
