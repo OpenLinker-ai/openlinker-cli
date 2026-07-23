@@ -3,13 +3,10 @@
 package main
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 )
@@ -42,13 +39,30 @@ func TestCodexProviderEnvironmentDoesNotExposeProviderSecret(t *testing.T) {
 		"CODEX_API_KEY=provider-secret",
 		"OPENLINKER_AGENT_TOKEN=agent-secret",
 		codexAuthProxySecretEnv + "=stale-secret",
-	})
+	}, "ephemeral-local-authorization")
 	joined := strings.Join(environment, "\n")
 	if strings.Contains(joined, "provider-secret") || strings.Contains(joined, "agent-secret") || strings.Contains(joined, "stale-secret") {
 		t.Fatalf("Codex environment exposes an upstream secret: %s", joined)
 	}
-	if !strings.Contains(joined, codexLocalAuthEnv+"=local-credential-proxy") {
+	if !strings.Contains(joined, codexLocalAuthEnv+"=ephemeral-local-authorization") {
 		t.Fatalf("Codex environment is missing the non-secret local credential: %s", joined)
+	}
+}
+
+func TestNewCodexLocalAuthTokenIsRandomAndBounded(t *testing.T) {
+	first, err := newCodexLocalAuthToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newCodexLocalAuthToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 43 || len(second) != 43 {
+		t.Fatalf("unexpected local authorization lengths: %d, %d", len(first), len(second))
+	}
+	if first == second {
+		t.Fatal("local authorizations were reused")
 	}
 }
 
@@ -72,6 +86,10 @@ func TestCodexAuthProxyPinsUpstreamAndInjectsCredential(t *testing.T) {
 		observedPath = request.URL.Path
 		observedAuthorization = request.Header.Get("Authorization")
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Alt-Svc", `h3=":443"`)
+		writer.Header().Set("CF-Ray", "upstream-ray")
+		writer.Header().Set("NEL", `{"success_fraction":0}`)
+		writer.Header().Set("Report-To", `{"group":"upstream"}`)
 		_, _ = writer.Write([]byte(`{"ok":true}`))
 	}))
 	defer upstream.Close()
@@ -79,14 +97,14 @@ func TestCodexAuthProxyPinsUpstreamAndInjectsCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxy := httptest.NewServer(newCodexAuthProxyHandler(target, "provider-secret"))
+	proxy := httptest.NewServer(newCodexAuthProxyHandler(target, "provider-secret", "local-credential-proxy"))
 	defer proxy.Close()
 
 	request, err := http.NewRequest(http.MethodPost, proxy.URL+"/responses", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer caller-controlled")
+	request.Header.Set("Authorization", "Bearer local-credential-proxy")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -102,46 +120,57 @@ func TestCodexAuthProxyPinsUpstreamAndInjectsCredential(t *testing.T) {
 	if observedAuthorization != "Bearer provider-secret" {
 		t.Fatalf("upstream Authorization was not replaced")
 	}
+	for _, name := range []string{"Alt-Svc", "CF-Ray", "NEL", "Report-To"} {
+		if value := response.Header.Get(name); value != "" {
+			t.Fatalf("proxy retained upstream origin header %s=%q", name, value)
+		}
+	}
 }
 
-func TestCreateCodexProxyCertificateBuildsTrustedLoopbackBundle(t *testing.T) {
-	certFile, keyFile, bundleFile, cleanup, err := createCodexProxyCertificate()
+func TestCodexAuthProxyRejectsRequestsOutsideResponsesAPI(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		upstreamCalls++
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL + "/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
-	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		t.Fatal(err)
+	proxy := httptest.NewServer(newCodexAuthProxyHandler(target, "provider-secret", "local-credential-proxy"))
+	defer proxy.Close()
+
+	tests := []struct {
+		name          string
+		method        string
+		path          string
+		authorization string
+		status        int
+	}{
+		{name: "wrong path", method: http.MethodPost, path: "/models", authorization: "Bearer local-credential-proxy", status: http.StatusNotFound},
+		{name: "wrong method", method: http.MethodGet, path: "/responses", authorization: "Bearer local-credential-proxy", status: http.StatusNotFound},
+		{name: "wrong credential", method: http.MethodPost, path: "/responses", authorization: "Bearer caller-controlled", status: http.StatusUnauthorized},
 	}
-	certificate, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, requestErr := http.NewRequest(test.method, proxy.URL+test.path, strings.NewReader(`{}`))
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			request.Header.Set("Authorization", test.authorization)
+			response, requestErr := http.DefaultClient.Do(request)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			defer response.Body.Close()
+			_, _ = io.Copy(io.Discard, response.Body)
+			if response.StatusCode != test.status {
+				t.Fatalf("status = %d, want %d", response.StatusCode, test.status)
+			}
+		})
 	}
-	bundle, err := os.ReadFile(bundleFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(bundle) {
-		t.Fatal("CA bundle did not contain a certificate")
-	}
-	if _, err := certificate.Verify(x509.VerifyOptions{
-		DNSName:   "127.0.0.1",
-		Roots:     roots,
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}); err != nil {
-		t.Fatalf("loopback certificate did not verify: %v", err)
-	}
-	keyInfo, err := os.Stat(keyFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if keyInfo.Mode().Perm() != 0o600 {
-		t.Fatalf("TLS key mode = %o", keyInfo.Mode().Perm())
-	}
-	cleanup()
-	if _, err := os.Stat(bundleFile); !os.IsNotExist(err) {
-		t.Fatalf("TLS cleanup did not remove the bundle: %v", err)
+	if upstreamCalls != 0 {
+		t.Fatalf("rejected requests reached upstream %d times", upstreamCalls)
 	}
 }

@@ -4,39 +4,29 @@ package main
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"golang.org/x/net/http2"
 )
 
 const (
 	codexAuthProxyStageEnv    = "OPENLINKER_CODEX_AUTH_PROXY_STAGE"
 	codexAuthProxyUpstreamEnv = "OPENLINKER_CODEX_AUTH_PROXY_UPSTREAM"
 	codexAuthProxySecretEnv   = "OPENLINKER_CODEX_AUTH_PROXY_SECRET"
-	codexAuthProxyCertEnv     = "OPENLINKER_CODEX_AUTH_PROXY_CERT"
-	codexAuthProxyKeyEnv      = "OPENLINKER_CODEX_AUTH_PROXY_KEY"
+	codexAuthProxyLocalEnv    = "OPENLINKER_CODEX_AUTH_PROXY_LOCAL_AUTH"
 	codexLocalAuthEnv         = "OPENLINKER_LOCAL_CODEX_AUTH"
 	providerExecStageEnv      = "OPENLINKER_PROVIDER_EXEC_STAGE"
 )
@@ -45,7 +35,6 @@ type codexProxyLaunch struct {
 	argv        []string
 	environment []string
 	proxy       *exec.Cmd
-	cleanup     func()
 }
 
 func prepareCodexAuthProxy(argv, environment []string) (*codexProxyLaunch, error) {
@@ -61,61 +50,56 @@ func prepareCodexAuthProxy(argv, environment []string) (*codexProxyLaunch, error
 	if strings.TrimSpace(secret) == "" {
 		return nil, errors.New("CODEX_API_KEY is required for the Codex custom Provider")
 	}
-	certFile, keyFile, bundleFile, cleanup, err := createCodexProxyCertificate()
+	localAuth, err := newCodexLocalAuthToken()
 	if err != nil {
 		return nil, err
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		cleanup()
 		return nil, errors.New("start local Codex credential proxy listener")
 	}
 	tcpListener, ok := listener.(*net.TCPListener)
 	if !ok {
 		_ = listener.Close()
-		cleanup()
 		return nil, errors.New("local Codex credential proxy listener is not TCP")
 	}
 	listenerAddress := tcpListener.Addr().String()
 	listenerFile, err := tcpListener.File()
 	_ = listener.Close()
 	if err != nil {
-		cleanup()
 		return nil, errors.New("prepare local Codex credential proxy listener")
 	}
 	executable, err := os.Executable()
 	if err != nil {
 		_ = listenerFile.Close()
-		cleanup()
 		return nil, errors.New("resolve Provider launcher executable")
 	}
 	proxyCommand := exec.Command(executable)
 	proxyCommand.ExtraFiles = []*os.File{listenerFile}
-	proxyCommand.Env = codexAuthProxyEnvironment(environment, upstream, secret, certFile, keyFile)
+	proxyCommand.Env = codexAuthProxyEnvironment(environment, upstream, secret, localAuth)
 	proxyCommand.Stdin = nil
 	proxyCommand.Stdout = nil
 	proxyCommand.Stderr = os.Stderr
 	proxyCommand.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	if err := proxyCommand.Start(); err != nil {
 		_ = listenerFile.Close()
-		cleanup()
 		return nil, errors.New("start local Codex credential proxy")
 	}
 	_ = listenerFile.Close()
 
-	localBaseURL := "https://" + listenerAddress
+	// The listener is loopback-only and the credential never crosses this
+	// connection. Plain HTTP avoids relying on Provider-specific custom CA
+	// behavior while the upstream connection remains HTTPS.
+	localBaseURL := "http://" + listenerAddress
 	rewritten := rewriteCodexProviderArguments(argv, localBaseURL, codexLocalAuthEnv)
-	providerEnvironment := setEnvironmentValue(codexProviderEnvironment(environment), "SSL_CERT_FILE", bundleFile)
-	providerEnvironment = setEnvironmentValue(providerEnvironment, "CODEX_CA_CERTIFICATE", bundleFile)
-	providerEnvironment = setEnvironmentValue(providerEnvironment, "NO_PROXY", "127.0.0.1,localhost")
+	providerEnvironment := setEnvironmentValue(codexProviderEnvironment(environment, localAuth), "NO_PROXY", "127.0.0.1,localhost")
 	providerEnvironment = setEnvironmentValue(providerEnvironment, "no_proxy", "127.0.0.1,localhost")
 	return &codexProxyLaunch{
-		argv: rewritten, environment: providerEnvironment, proxy: proxyCommand, cleanup: cleanup,
+		argv: rewritten, environment: providerEnvironment, proxy: proxyCommand,
 	}, nil
 }
 
 func runCodexWithAuthProxy(launch *codexProxyLaunch) int {
-	defer launch.cleanup()
 	executable, err := os.Executable()
 	if err != nil {
 		stopProxyCommand(launch.proxy)
@@ -188,7 +172,7 @@ func rewriteCodexProviderArguments(argv []string, localBaseURL, authEnv string) 
 	return rewritten
 }
 
-func codexProviderEnvironment(environment []string) []string {
+func codexProviderEnvironment(environment []string, localAuth string) []string {
 	clean := removeEnvironment(environment,
 		"CODEX_API_KEY",
 		"CODEX_API_KEY_FILE",
@@ -197,16 +181,14 @@ func codexProviderEnvironment(environment []string) []string {
 		codexAuthProxyStageEnv,
 		codexAuthProxyUpstreamEnv,
 		codexAuthProxySecretEnv,
-		codexAuthProxyCertEnv,
-		codexAuthProxyKeyEnv,
-		"CODEX_CA_CERTIFICATE",
+		codexAuthProxyLocalEnv,
 		codexLocalAuthEnv,
 		providerExecStageEnv,
 	)
-	return append(clean, codexLocalAuthEnv+"=local-credential-proxy")
+	return append(clean, codexLocalAuthEnv+"="+localAuth)
 }
 
-func codexAuthProxyEnvironment(environment []string, upstream, secret, certFile, keyFile string) []string {
+func codexAuthProxyEnvironment(environment []string, upstream, secret, localAuth string) []string {
 	allowed := map[string]bool{
 		"PATH": true, "HOME": true, "HTTP_PROXY": true, "HTTPS_PROXY": true,
 		"http_proxy": true, "https_proxy": true, "NO_PROXY": true, "no_proxy": true,
@@ -223,9 +205,16 @@ func codexAuthProxyEnvironment(environment []string, upstream, secret, certFile,
 		codexAuthProxyStageEnv+"=1",
 		codexAuthProxyUpstreamEnv+"="+upstream,
 		codexAuthProxySecretEnv+"="+secret,
-		codexAuthProxyCertEnv+"="+certFile,
-		codexAuthProxyKeyEnv+"="+keyFile,
+		codexAuthProxyLocalEnv+"="+localAuth,
 	)
+}
+
+func newCodexLocalAuthToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", errors.New("generate local Codex credential proxy authorization")
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func setEnvironmentValue(environment []string, name, value string) []string {
@@ -265,9 +254,8 @@ func runCodexAuthProxyStage() error {
 	}
 	upstreamValue := strings.TrimSpace(os.Getenv(codexAuthProxyUpstreamEnv))
 	secret := strings.TrimSpace(os.Getenv(codexAuthProxySecretEnv))
-	certFile := strings.TrimSpace(os.Getenv(codexAuthProxyCertEnv))
-	keyFile := strings.TrimSpace(os.Getenv(codexAuthProxyKeyEnv))
-	if upstreamValue == "" || secret == "" || certFile == "" || keyFile == "" {
+	localAuth := strings.TrimSpace(os.Getenv(codexAuthProxyLocalEnv))
+	if upstreamValue == "" || secret == "" || localAuth == "" {
 		return errors.New("Codex credential proxy configuration is incomplete")
 	}
 	upstream, err := url.Parse(upstreamValue)
@@ -284,32 +272,20 @@ func runCodexAuthProxyStage() error {
 		return errors.New("open Codex credential proxy listener")
 	}
 	defer listener.Close()
-	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return errors.New("load Codex credential proxy certificate")
-	}
 	server := &http.Server{
-		Handler:           newCodexAuthProxyHandler(upstream, secret),
+		Handler:           newCodexAuthProxyHandler(upstream, secret, localAuth),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       90 * time.Second,
-		ErrorLog:          log.New(io.Discard, "", 0),
-		TLSConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{certificate},
-		},
+		ErrorLog:          log.New(os.Stderr, "openlinker Codex credential proxy: ", 0),
 	}
-	if err := http2.ConfigureServer(server, &http2.Server{}); err != nil {
-		return errors.New("configure Codex credential proxy HTTP/2")
-	}
-	tlsListener := tls.NewListener(listener, server.TLSConfig)
-	err = server.Serve(tlsListener)
+	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
 }
 
-func newCodexAuthProxyHandler(upstream *url.URL, secret string) http.Handler {
+func newCodexAuthProxyHandler(upstream *url.URL, secret, localAuth string) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	originalDirector := proxy.Director
 	proxy.Director = func(request *http.Request) {
@@ -328,10 +304,12 @@ func newCodexAuthProxyHandler(upstream *url.URL, secret string) http.Handler {
 		ExpectContinueTimeout: time.Second,
 	}
 	proxy.ModifyResponse = func(response *http.Response) error {
+		sanitizeCodexProxyResponseHeaders(response.Header)
 		response.Body = newResponseCompletionObserver(response.Body, response.StatusCode)
 		return nil
 	}
-	proxy.ErrorHandler = func(writer http.ResponseWriter, _ *http.Request, _ error) {
+	proxy.ErrorHandler = func(writer http.ResponseWriter, _ *http.Request, err error) {
+		fmt.Fprintf(os.Stderr, "openlinker Codex credential proxy: upstream request failed: %T\n", err)
 		http.Error(writer, "provider upstream unavailable", http.StatusBadGateway)
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -339,8 +317,31 @@ func newCodexAuthProxyHandler(upstream *url.URL, secret string) http.Handler {
 			http.Error(writer, "invalid provider request", http.StatusBadRequest)
 			return
 		}
+		if request.Method != http.MethodPost || request.URL.Path != "/responses" {
+			http.Error(writer, "provider request is not allowed", http.StatusNotFound)
+			return
+		}
+		if request.Header.Get("Authorization") != "Bearer "+localAuth {
+			http.Error(writer, "provider request is not authorized", http.StatusUnauthorized)
+			return
+		}
+		request.Body = http.MaxBytesReader(writer, request.Body, 32<<20)
 		proxy.ServeHTTP(writer, request)
 	})
+}
+
+func sanitizeCodexProxyResponseHeaders(header http.Header) {
+	// These headers describe the upstream origin rather than this loopback
+	// credential proxy. In particular, forwarding Alt-Svc can make a capable
+	// client reconnect to the upstream's advertised port on 127.0.0.1.
+	for _, name := range []string{"Alt-Svc", "NEL", "Report-To"} {
+		header.Del(name)
+	}
+	for name := range header {
+		if strings.HasPrefix(strings.ToLower(name), "cf-") {
+			header.Del(name)
+		}
+	}
 }
 
 type responseCompletionObserver struct {
@@ -397,73 +398,4 @@ func (observer *responseCompletionObserver) finish(err error) {
 		"openlinker Codex credential proxy: incomplete upstream stream status=%d bytes=%d completed=%t error=%s\n",
 		observer.statusCode, observer.bytesRead, observer.completed, errLabel,
 	)
-}
-
-func createCodexProxyCertificate() (string, string, string, func(), error) {
-	directory, err := os.MkdirTemp("/tmp", "openlinker-codex-proxy-*")
-	if err != nil {
-		return "", "", "", nil, errors.New("create Codex credential proxy TLS directory")
-	}
-	cleanup := func() { _ = os.RemoveAll(directory) }
-	if err := os.Chmod(directory, 0o755); err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("protect Codex credential proxy TLS directory")
-	}
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("generate Codex credential proxy TLS key")
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("generate Codex credential proxy TLS serial")
-	}
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "OpenLinker local Codex credential proxy"},
-		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(24 * time.Hour),
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
-	certificateDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
-	if err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("create Codex credential proxy TLS certificate")
-	}
-	privateDER, err := x509.MarshalECPrivateKey(privateKey)
-	if err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("encode Codex credential proxy TLS key")
-	}
-	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER})
-	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateDER})
-	certFile := filepath.Join(directory, "server.crt")
-	keyFile := filepath.Join(directory, "server.key")
-	bundleFile := filepath.Join(directory, "ca-bundle.crt")
-	systemBundle, err := os.ReadFile("/etc/ssl/certs/ca-certificates.crt")
-	if err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("read system CA bundle")
-	}
-	if err := os.WriteFile(certFile, certificatePEM, 0o644); err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("write Codex credential proxy TLS certificate")
-	}
-	if err := os.WriteFile(keyFile, privatePEM, 0o600); err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("write Codex credential proxy TLS key")
-	}
-	bundle := append(append([]byte(nil), systemBundle...), '\n')
-	bundle = append(bundle, certificatePEM...)
-	if err := os.WriteFile(bundleFile, bundle, 0o644); err != nil {
-		cleanup()
-		return "", "", "", nil, errors.New("write Codex credential proxy CA bundle")
-	}
-	return certFile, keyFile, bundleFile, cleanup, nil
 }
