@@ -102,13 +102,21 @@ func TestCodexExternalSandboxRestrictsSpawnedCommandEnvironment(t *testing.T) {
 	args := codexArguments(ProviderConfig{
 		CodexApproval: "never",
 		WebSearch:     true,
+		Env: []string{
+			"PATH=/usr/bin",
+			"HOME=/provider",
+			"HTTPS_PROXY=http://egress:3128",
+			"CODEX_API_KEY=must-not-be-forwarded",
+			"OPENLINKER_AGENT_TOKEN=must-not-be-forwarded",
+		},
 	}, "/workspace", "danger-full-access", "", true)
 	joined := strings.Join(args, " ")
 	for _, expected := range []string{
 		"--sandbox danger-full-access",
-		`shell_environment_policy.inherit="all"`,
-		"shell_environment_policy.ignore_default_excludes=false",
-		`shell_environment_policy.include_only=["PATH","HOME","HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","NO_PROXY","no_proxy","SSL_CERT_FILE"]`,
+		"--disable code_mode",
+		"--disable code_mode_host",
+		`shell_environment_policy.inherit="none"`,
+		`shell_environment_policy.set={PATH="/usr/bin",HOME="/provider",HTTPS_PROXY="http://egress:3128"}`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("Codex external sandbox args do not include %s: %s", expected, joined)

@@ -145,9 +145,10 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		// inheriting provider credentials even though the Codex process itself
 		// needs them to call the configured model endpoint.
 		args = append(args,
-			"-c", `shell_environment_policy.inherit="all"`,
-			"-c", `shell_environment_policy.ignore_default_excludes=false`,
-			"-c", `shell_environment_policy.include_only=["PATH","HOME","HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","NO_PROXY","no_proxy","SSL_CERT_FILE"]`,
+			"--disable", "code_mode",
+			"--disable", "code_mode_host",
+			"-c", `shell_environment_policy.inherit="none"`,
+			"-c", "shell_environment_policy.set="+codexCommandEnvironment(config.Env),
 		)
 	}
 	if sessionID != "" {
@@ -167,6 +168,37 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		args = append(args, "--model", config.Model)
 	}
 	return append(args, "-")
+}
+
+func codexCommandEnvironment(environment []string) string {
+	if environment == nil {
+		environment = os.Environ()
+	}
+	values := make(map[string]string, len(environment))
+	for _, item := range environment {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	safeKeys := []string{
+		"PATH", "Path", "PATHEXT",
+		"HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+		"SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC",
+		"TMPDIR", "TEMP", "TMP", "LANG",
+		"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+		"NO_PROXY", "no_proxy", "SSL_CERT_FILE",
+	}
+	pairs := make([]string, 0, len(safeKeys))
+	for _, key := range safeKeys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		encoded, _ := json.Marshal(value)
+		pairs = append(pairs, key+"="+string(encoded))
+	}
+	return "{" + strings.Join(pairs, ",") + "}"
 }
 
 func runCodexCommand(
