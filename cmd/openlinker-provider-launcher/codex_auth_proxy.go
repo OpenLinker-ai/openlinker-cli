@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -27,7 +28,7 @@ import (
 	"syscall"
 	"time"
 
-	"encoding/pem"
+	"golang.org/x/net/http2"
 )
 
 const (
@@ -287,17 +288,20 @@ func runCodexAuthProxyStage() error {
 	if err != nil {
 		return errors.New("load Codex credential proxy certificate")
 	}
-	tlsListener := tls.NewListener(listener, &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{certificate},
-	})
-
 	server := &http.Server{
 		Handler:           newCodexAuthProxyHandler(upstream, secret),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       90 * time.Second,
 		ErrorLog:          log.New(io.Discard, "", 0),
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{certificate},
+		},
 	}
+	if err := http2.ConfigureServer(server, &http2.Server{}); err != nil {
+		return errors.New("configure Codex credential proxy HTTP/2")
+	}
+	tlsListener := tls.NewListener(listener, server.TLSConfig)
 	err = server.Serve(tlsListener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
