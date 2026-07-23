@@ -29,6 +29,10 @@ func main() {
 		}
 		return
 	}
+	if os.Getenv(providerExecStageEnv) == "1" {
+		runProviderExecStage()
+		return
+	}
 	target, err := fixedProviderBinary(fixedProvider)
 	if err != nil {
 		fatal(err)
@@ -39,15 +43,38 @@ func main() {
 	argv := append([]string{target}, os.Args[1:]...)
 	environment := os.Environ()
 	if strings.EqualFold(strings.TrimSpace(fixedProvider), "codex") {
-		argv, environment, err = prepareCodexAuthProxy(argv, environment)
+		var launch *codexProxyLaunch
+		launch, err = prepareCodexAuthProxy(argv, environment)
 		if err != nil {
 			fatal(err)
+		}
+		if launch != nil {
+			os.Exit(runCodexWithAuthProxy(launch))
 		}
 	}
 	runtime.LockOSThread()
 	if err := dropProviderPrivileges(); err != nil {
 		fatal(err)
 	}
+	if err := syscall.Exec(target, argv, environment); err != nil {
+		fatal(errors.New("start fixed Provider binary"))
+	}
+}
+
+func runProviderExecStage() {
+	target, err := fixedProviderBinary(fixedProvider)
+	if err != nil {
+		fatal(err)
+	}
+	if os.Geteuid() != runtimeUID || os.Getegid() != runtimeGID {
+		fatal(errors.New("Provider exec stage must start as the fixed Runtime UID/GID"))
+	}
+	environment := removeEnvironment(os.Environ(), providerExecStageEnv)
+	runtime.LockOSThread()
+	if err := dropProviderPrivileges(); err != nil {
+		fatal(err)
+	}
+	argv := append([]string{target}, os.Args[1:]...)
 	if err := syscall.Exec(target, argv, environment); err != nil {
 		fatal(errors.New("start fixed Provider binary"))
 	}

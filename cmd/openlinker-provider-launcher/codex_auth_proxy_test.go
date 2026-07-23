@@ -3,10 +3,13 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 )
@@ -84,5 +87,47 @@ func TestCodexAuthProxyPinsUpstreamAndInjectsCredential(t *testing.T) {
 	}
 	if observedAuthorization != "Bearer provider-secret" {
 		t.Fatalf("upstream Authorization was not replaced")
+	}
+}
+
+func TestCreateCodexProxyCertificateBuildsTrustedLoopbackBundle(t *testing.T) {
+	certFile, keyFile, bundleFile, cleanup, err := createCodexProxyCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := os.ReadFile(bundleFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(bundle) {
+		t.Fatal("CA bundle did not contain a certificate")
+	}
+	if _, err := certificate.Verify(x509.VerifyOptions{
+		DNSName:   "127.0.0.1",
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		t.Fatalf("loopback certificate did not verify: %v", err)
+	}
+	keyInfo, err := os.Stat(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("TLS key mode = %o", keyInfo.Mode().Perm())
+	}
+	cleanup()
+	if _, err := os.Stat(bundleFile); !os.IsNotExist(err) {
+		t.Fatalf("TLS cleanup did not remove the bundle: %v", err)
 	}
 }
