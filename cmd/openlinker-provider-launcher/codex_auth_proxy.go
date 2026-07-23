@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -322,6 +323,10 @@ func newCodexAuthProxyHandler(upstream *url.URL, secret string) http.Handler {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
+	proxy.ModifyResponse = func(response *http.Response) error {
+		response.Body = newResponseCompletionObserver(response.Body, response.StatusCode)
+		return nil
+	}
 	proxy.ErrorHandler = func(writer http.ResponseWriter, _ *http.Request, _ error) {
 		http.Error(writer, "provider upstream unavailable", http.StatusBadGateway)
 	}
@@ -332,6 +337,62 @@ func newCodexAuthProxyHandler(upstream *url.URL, secret string) http.Handler {
 		}
 		proxy.ServeHTTP(writer, request)
 	})
+}
+
+type responseCompletionObserver struct {
+	body       io.ReadCloser
+	statusCode int
+	bytesRead  int64
+	tail       []byte
+	completed  bool
+	finished   bool
+}
+
+var responseCompletedMarker = []byte(`"type":"response.completed"`)
+
+func newResponseCompletionObserver(body io.ReadCloser, statusCode int) io.ReadCloser {
+	return &responseCompletionObserver{body: body, statusCode: statusCode}
+}
+
+func (observer *responseCompletionObserver) Read(buffer []byte) (int, error) {
+	count, err := observer.body.Read(buffer)
+	observer.bytesRead += int64(count)
+	if count > 0 && !observer.completed {
+		window := append(append([]byte(nil), observer.tail...), buffer[:count]...)
+		observer.completed = bytes.Contains(window, responseCompletedMarker)
+		keep := len(responseCompletedMarker) - 1
+		if len(window) > keep {
+			window = window[len(window)-keep:]
+		}
+		observer.tail = window
+	}
+	if err != nil {
+		observer.finish(err)
+	}
+	return count, err
+}
+
+func (observer *responseCompletionObserver) Close() error {
+	observer.finish(errors.New("body closed"))
+	return observer.body.Close()
+}
+
+func (observer *responseCompletionObserver) finish(err error) {
+	if observer.finished {
+		return
+	}
+	observer.finished = true
+	if observer.completed {
+		return
+	}
+	errLabel := "none"
+	if err != nil {
+		errLabel = strings.ReplaceAll(err.Error(), "\n", " ")
+	}
+	fmt.Fprintf(os.Stderr,
+		"openlinker Codex credential proxy: incomplete upstream stream status=%d bytes=%d completed=%t error=%s\n",
+		observer.statusCode, observer.bytesRead, observer.completed, errLabel,
+	)
 }
 
 func createCodexProxyCertificate() (string, string, string, func(), error) {
