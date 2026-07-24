@@ -85,14 +85,24 @@ func TestServerAcceptsCodexToolCallMetaAndRejectsOtherOuterFields(t *testing.T) 
 	}
 }
 
-func TestConfigureAgentModeSchemaIncludesCodexBaseURL(t *testing.T) {
+func TestConfigureAgentModeSchemaIncludesProviderAndBrowserProfiles(t *testing.T) {
 	for _, definition := range toolDefinitions() {
 		if definition.Name != "configure_agent_mode" {
 			continue
 		}
 		properties := definition.InputSchema["properties"].(map[string]any)
-		if _, exists := properties["codex_base_url"]; !exists {
-			t.Fatal("configure_agent_mode schema is missing codex_base_url")
+		for _, field := range []string{
+			"codex_base_url",
+			"execution_profile",
+			"browser_plugin_bin",
+			"browser_socket",
+			"browser_credential_file",
+			"browser_lease_root",
+			"browser_broker_root",
+		} {
+			if _, exists := properties[field]; !exists {
+				t.Fatalf("configure_agent_mode schema is missing %s", field)
+			}
 		}
 		return
 	}

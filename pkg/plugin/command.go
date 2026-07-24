@@ -18,6 +18,40 @@ func New(ioStreams shared.IO, options *shared.GlobalOptions, agentService *agent
 	command := &cobra.Command{Use: "plugin", Short: "Run OpenLinker native plugin services"}
 	command.AddCommand(newServeCommand(ioStreams, options, agentService))
 	command.AddCommand(newBrowserServeCommand(ioStreams))
+	command.AddCommand(newBrowserProxyCommand(ioStreams))
+	return command
+}
+
+func newBrowserProxyCommand(ioStreams shared.IO) *cobra.Command {
+	var host string
+	command := &cobra.Command{
+		Use:    "browser-proxy",
+		Short:  "Proxy stdio to the trusted Browser tool broker",
+		Hidden: true,
+		RunE: func(command *cobra.Command, args []string) error {
+			host = strings.ToLower(strings.TrimSpace(host))
+			if host != "codex" && host != "claude" {
+				return errors.New("plugin browser-proxy requires --host codex or --host claude")
+			}
+			getenv := browserToolGetenv(ioStreams.Getenv)
+			for _, name := range []string{
+				"CODEX_API_KEY",
+				"ANTHROPIC_API_KEY",
+				"OPENLINKER_AGENT_TOKEN",
+				"OPENLINKER_USER_TOKEN",
+			} {
+				_ = os.Unsetenv(name)
+			}
+			ctx, stop := signal.NotifyContext(
+				command.Context(),
+				os.Interrupt,
+				syscall.SIGTERM,
+			)
+			defer stop()
+			return runBrowserProxy(ctx, ioStreams.Stdin, ioStreams.Stdout, getenv)
+		},
+	}
+	command.Flags().StringVar(&host, "host", "", "native host: codex or claude")
 	return command
 }
 
@@ -51,6 +85,15 @@ func newBrowserServeCommand(ioStreams shared.IO) *cobra.Command {
 			if host != "codex" && host != "claude" {
 				return errors.New("plugin browser-serve requires --host codex or --host claude")
 			}
+			ioStreams.Getenv = browserToolGetenv(ioStreams.Getenv)
+			for _, name := range []string{
+				"CODEX_API_KEY",
+				"ANTHROPIC_API_KEY",
+				"OPENLINKER_AGENT_TOKEN",
+				"OPENLINKER_USER_TOKEN",
+			} {
+				_ = os.Unsetenv(name)
+			}
 			ctx, stop := signal.NotifyContext(
 				command.Context(),
 				os.Interrupt,
@@ -63,4 +106,21 @@ func newBrowserServeCommand(ioStreams shared.IO) *cobra.Command {
 	}
 	command.Flags().StringVar(&host, "host", "", "native host: codex or claude")
 	return command
+}
+
+func browserToolGetenv(getenv func(string) string) func(string) string {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	return func(name string) string {
+		switch name {
+		case "CODEX_API_KEY",
+			"ANTHROPIC_API_KEY",
+			"OPENLINKER_AGENT_TOKEN",
+			"OPENLINKER_USER_TOKEN":
+			return ""
+		default:
+			return getenv(name)
+		}
+	}
 }

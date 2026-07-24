@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStoreCreateLoadCheckpointAndAtomicRecovery(t *testing.T) {
@@ -118,6 +119,48 @@ func TestStoreMissingRootFailsClosedWithoutQuarantine(t *testing.T) {
 	if len(quarantineEntries) != 0 {
 		t.Fatalf("quarantine entries = %d, want 0", len(quarantineEntries))
 	}
+}
+
+func TestStorePrunesOnlyInactiveValidProfiles(t *testing.T) {
+	t.Parallel()
+	store := testStore(t)
+	oldIdentity := testIdentity()
+	currentIdentity := oldIdentity
+	currentIdentity.ProfileSlot = "current"
+	root := testRootKey(t, 1, 0x11)
+	defer root.Close()
+	if err := store.Create(oldIdentity, root, strings.NewReader("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(currentIdentity, root, strings.NewReader("current")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	oldCurrent := filepath.Join(store.profileDir(oldIdentity), currentFileName)
+	if err := os.Chtimes(oldCurrent, now.Add(-31*24*time.Hour), now.Add(-31*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	currentPointer := filepath.Join(store.profileDir(currentIdentity), currentFileName)
+	if err := os.Chtimes(currentPointer, now, now); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.PruneInactive(now.Add(-30 * 24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed Profiles = %d, want 1", removed)
+	}
+	if _, err := os.Stat(store.profileDir(oldIdentity)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("inactive Browser Profile remains: %v", err)
+	}
+	assertStoredPayload(
+		t,
+		store,
+		currentIdentity,
+		map[uint64]*RootKey{root.Generation(): root},
+		"current",
+	)
 }
 
 func TestStoreCorruptionMovesProfileToReadOnlyQuarantine(t *testing.T) {

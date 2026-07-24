@@ -6,23 +6,29 @@ import (
 )
 
 type ConfigureOptions struct {
-	Provider         string
-	AgentID          string
-	Workspace        string
-	OpenLinkerURL    string
-	StateDir         string
-	ProviderBin      string
-	Model            string
-	Transport        string
-	Capacity         int64
-	TimeoutSeconds   int
-	SessionReuse     *bool
-	WebSearch        *bool
-	CodexBaseURL     string
-	CodexSandbox     string
-	CodexApproval    string
-	ClaudePermission string
-	AllowedTools     []string
+	Provider              string
+	AgentID               string
+	Workspace             string
+	OpenLinkerURL         string
+	StateDir              string
+	ProviderBin           string
+	Model                 string
+	Transport             string
+	Capacity              int64
+	TimeoutSeconds        int
+	SessionReuse          *bool
+	WebSearch             *bool
+	CodexBaseURL          string
+	CodexSandbox          string
+	CodexApproval         string
+	ClaudePermission      string
+	AllowedTools          []string
+	ExecutionProfile      string
+	BrowserPluginBin      string
+	BrowserSocket         string
+	BrowserCredentialFile string
+	BrowserLeaseRoot      string
+	BrowserBrokerRoot     string
 }
 
 func ConfigureNonSecret(getenv func(string) string, options ConfigureOptions) (Config, string, error) {
@@ -86,6 +92,36 @@ func ConfigureNonSecret(getenv func(string) string, options ConfigureOptions) (C
 	}
 	if options.AllowedTools != nil {
 		config.AllowedTools = append([]string(nil), options.AllowedTools...)
+	}
+	if value := strings.TrimSpace(options.ExecutionProfile); value != "" {
+		config.ExecutionProfile = strings.ToLower(value)
+	}
+	if value := strings.TrimSpace(options.BrowserPluginBin); value != "" {
+		config.BrowserPluginBin = value
+	}
+	if value := strings.TrimSpace(options.BrowserSocket); value != "" {
+		config.BrowserSocket, err = filepath.Abs(value)
+		if err != nil {
+			return Config{}, path, err
+		}
+	}
+	if value := strings.TrimSpace(options.BrowserCredentialFile); value != "" {
+		config.BrowserCredentialFile, err = filepath.Abs(value)
+		if err != nil {
+			return Config{}, path, err
+		}
+	}
+	if value := strings.TrimSpace(options.BrowserLeaseRoot); value != "" {
+		config.BrowserLeaseRoot, err = filepath.Abs(value)
+		if err != nil {
+			return Config{}, path, err
+		}
+	}
+	if value := strings.TrimSpace(options.BrowserBrokerRoot); value != "" {
+		config.BrowserBrokerRoot, err = filepath.Abs(value)
+		if err != nil {
+			return Config{}, path, err
+		}
 	}
 	if err := validateNonSecretConfig(config); err != nil {
 		return Config{}, path, err

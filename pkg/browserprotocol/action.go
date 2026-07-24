@@ -62,7 +62,7 @@ func (action Action) Validate() *Failure {
 			return NewFailure(ErrorProtocolInvalid, "wait duration must be between 1 and 5000 milliseconds", false)
 		}
 		return nil
-	case ActionBack, ActionForward, ActionScreenshot:
+	case ActionBack, ActionForward, ActionScreenshot, ActionCheckpoint, ActionClose:
 		return action.requireOnly()
 	default:
 		return NewFailure(ErrorProtocolInvalid, "browser action is not allowed", false)

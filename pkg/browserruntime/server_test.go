@@ -13,8 +13,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclient"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 )
+
+func TestFileLeaseLoadsCurrentOwnerOnlyAttachment(t *testing.T) {
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "active-lease.json")
+	identity := validRuntimeRequest().Identity
+	raw, err := json.Marshal(browserclient.Lease{
+		ContractID: browserclient.LeaseContractID,
+		ExpiresAt:  now.Add(time.Minute),
+		Identity:   identity,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validator := FileLease{Path: path, Now: func() time.Time { return now }}
+	if failure := validator.Validate(identity); failure != nil {
+		t.Fatalf("valid active lease failed: %v", failure)
+	}
+	stale := identity
+	stale.ControlEpoch--
+	if failure := validator.Validate(stale); failure == nil ||
+		failure.Code != browserprotocol.ErrorStaleControlEpoch {
+		t.Fatalf("stale epoch failure = %#v", failure)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if failure := validator.Validate(identity); failure == nil ||
+		failure.Code != browserprotocol.ErrorRuntimeUnavailable {
+		t.Fatalf("insecure lease failure = %#v", failure)
+	}
+}
 
 type fakeEngine struct {
 	calls atomic.Int64
@@ -443,13 +478,13 @@ func validRuntimeRequest() browserprotocol.Request {
 		RequestID:         "77777777-7777-4777-8777-777777777777",
 		Deadline:          time.Now().UTC().Add(5 * time.Second),
 		Identity: browserprotocol.Identity{
-			RunID:             "11111111-1111-4111-8111-111111111111",
-			AgentID:           "22222222-2222-4222-8222-222222222222",
-			PrincipalScopeID:  "scope_333333333333",
-			ConversationID:    "44444444-4444-4444-8444-444444444444",
-			BrowserGeneration: 1,
-			AttachmentID:      "55555555-5555-4555-8555-555555555555",
-			ControlEpoch:      1,
+			RunID:            "11111111-1111-4111-8111-111111111111",
+			AgentID:          "22222222-2222-4222-8222-222222222222",
+			PrincipalScopeID: "scope_333333333333",
+			BrowserSessionID: "44444444-4444-4444-8444-444444444444",
+			SessionEpoch:     1,
+			AttachmentID:     "55555555-5555-4555-8555-555555555555",
+			ControlEpoch:     1,
 		},
 		Action: browserprotocol.Action{Kind: browserprotocol.ActionScreenshot},
 	}

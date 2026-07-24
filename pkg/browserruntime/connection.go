@@ -76,7 +76,7 @@ func (server *Server) reserveRequestID(
 	server.seenMu.Lock()
 	defer server.seenMu.Unlock()
 	scope := identity.RunID + "|" + identity.AttachmentID + "|" +
-		fmt.Sprintf("%d|%d", identity.BrowserGeneration, identity.ControlEpoch)
+		fmt.Sprintf("%d|%d", identity.SessionEpoch, identity.ControlEpoch)
 	if scope != server.seenScope {
 		clear(server.seen)
 		server.seenScope = scope

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 )
@@ -189,7 +190,7 @@ func (engine *ProcessEngine) Close() error {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 	engine.closed = true
-	return engine.resetProcess()
+	return engine.closeProcess(true)
 }
 
 func (engine *ProcessEngine) ensureProcess() (*engineProcess, error) {
@@ -222,16 +223,36 @@ func (engine *ProcessEngine) ensureProcess() (*engineProcess, error) {
 }
 
 func (engine *ProcessEngine) resetProcess() error {
+	return engine.closeProcess(false)
+}
+
+func (engine *ProcessEngine) closeProcess(graceful bool) error {
 	process := engine.process
 	engine.process = nil
 	if process == nil {
 		return nil
 	}
 	_ = process.stdin.Close()
-	if process.command.Process != nil {
+	if !graceful && process.command.Process != nil {
 		_ = process.command.Process.Kill()
 	}
-	waitErr := process.command.Wait()
+	waited := make(chan error, 1)
+	go func() {
+		waited <- process.command.Wait()
+	}()
+	var waitErr error
+	if graceful {
+		select {
+		case waitErr = <-waited:
+		case <-time.After(10 * time.Second):
+			if process.command.Process != nil {
+				_ = process.command.Process.Kill()
+			}
+			waitErr = <-waited
+		}
+	} else {
+		waitErr = <-waited
+	}
 	var exitError *exec.ExitError
 	if errors.As(waitErr, &exitError) {
 		return nil

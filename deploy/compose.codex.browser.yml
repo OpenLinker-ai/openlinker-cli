@@ -1,0 +1,57 @@
+services:
+  openlinker-agent-codex:
+    depends_on:
+      openlinker-egress-gateway:
+        condition: service_started
+      openlinker-browser-runtime:
+        condition: service_healthy
+    environment:
+      OPENLINKER_AGENT_EXECUTION_PROFILE: browser
+      OPENLINKER_AGENT_CAPACITY: "1"
+    volumes:
+      - codex-browser-control:/browser-control
+    tmpfs:
+      - /browser-tool:rw,noexec,nosuid,nodev,size=4m,uid=10001,gid=10002,mode=2710
+
+  openlinker-browser-runtime:
+    build:
+      context: ..
+      dockerfile: Dockerfile.browser
+    image: openlinker-browser-runtime:dev
+    depends_on:
+      - openlinker-egress-gateway
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /browser-tmp:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+    shm_size: 1gb
+    networks:
+      - agent-internal
+    environment:
+      OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE: /browser-control/channel-credential
+      OPENLINKER_BROWSER_EGRESS_PROXY: http://openlinker-egress-gateway:3128
+      OPENLINKER_BROWSER_ACTIVE_LEASE_FILE: /browser-control/leases/active-lease.json
+      OPENLINKER_BROWSER_SOCKET: /browser-control/openlinker.browser.sock
+      OPENLINKER_BROWSER_PROFILE_DIR: /browser-tmp/profiles/active
+      OPENLINKER_BROWSER_PROFILE_STORE: /browser-state/encrypted-profiles
+      OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles
+      OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-state/profile-root-key
+    volumes:
+      - codex-browser-control:/browser-control
+      - codex-browser-profile:/browser-state
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /browser-control/openlinker.browser.sock && test -s /browser-control/channel-credential"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+    pids_limit: 512
+    mem_limit: 3g
+    cpus: 2.0
+
+volumes:
+  codex-browser-control: {}
+  codex-browser-profile: {}

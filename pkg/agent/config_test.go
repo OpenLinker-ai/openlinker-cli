@@ -82,15 +82,20 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 	config := defaultConfig()
 	config.Provider = "codex"
 	environment := map[string]string{
-		"OPENLINKER_AGENT_TRANSPORT":       "pull",
-		"OPENLINKER_AGENT_CAPACITY":        "3",
-		"OPENLINKER_AGENT_TIMEOUT_SECONDS": "90",
-		"OPENLINKER_AGENT_SESSION_REUSE":   "false",
-		"OPENLINKER_CODEX_MODEL":           "gpt-test",
-		"OPENLINKER_CODEX_BASE_URL":        "https://router.example/v1",
-		"OPENLINKER_CODEX_WEB_SEARCH":      "enabled",
-		"OPENLINKER_CODEX_SANDBOX":         "workspace-write",
-		"OPENLINKER_CODEX_APPROVAL":        "never",
+		"OPENLINKER_AGENT_TRANSPORT":                 "pull",
+		"OPENLINKER_AGENT_CAPACITY":                  "3",
+		"OPENLINKER_AGENT_TIMEOUT_SECONDS":           "90",
+		"OPENLINKER_AGENT_SESSION_REUSE":             "false",
+		"OPENLINKER_CODEX_MODEL":                     "gpt-test",
+		"OPENLINKER_CODEX_BASE_URL":                  "https://router.example/v1",
+		"OPENLINKER_CODEX_WEB_SEARCH":                "enabled",
+		"OPENLINKER_CODEX_SANDBOX":                   "workspace-write",
+		"OPENLINKER_CODEX_APPROVAL":                  "never",
+		"OPENLINKER_AGENT_EXECUTION_PROFILE":         "browser",
+		"OPENLINKER_BROWSER_SOCKET":                  "/browser/control.sock",
+		"OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE": "/browser/channel",
+		"OPENLINKER_BROWSER_LEASE_ROOT":              "/browser/leases",
+		"OPENLINKER_BROWSER_BROKER_ROOT":             "/browser/broker",
 	}
 	if err := applyRuntimeEnvironment(&config, func(key string) string { return environment[key] }); err != nil {
 		t.Fatal(err)
@@ -98,6 +103,39 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 	if config.Transport != "pull" || config.Capacity != 3 || config.TimeoutSeconds != 90 || config.SessionReuse ||
 		config.Model != "gpt-test" || config.CodexBaseURL != "https://router.example/v1" || !config.WebSearch || config.CodexSandbox != "workspace-write" {
 		t.Fatalf("environment overrides = %#v", config)
+	}
+	if config.ExecutionProfile != "browser" || config.BrowserSocket != "/browser/control.sock" ||
+		config.BrowserCredentialFile != "/browser/channel" || config.BrowserLeaseRoot != "/browser/leases" ||
+		config.BrowserBrokerRoot != "/browser/broker" {
+		t.Fatalf("Browser environment overrides = %#v", config)
+	}
+}
+
+func TestBrowserExecutionProfileIsExplicitAndSingleCapacity(t *testing.T) {
+	config := defaultConfig()
+	config.Provider = "codex"
+	config.AgentID = "11111111-1111-4111-8111-111111111111"
+	config.Workspace = t.TempDir()
+	config.ExecutionProfile = "browser"
+	config.BrowserSocket = "/browser/control.sock"
+	config.BrowserCredentialFile = "/browser/channel"
+	config.BrowserLeaseRoot = "/browser/leases"
+	config.BrowserBrokerRoot = "/browser/broker"
+	if err := validateNonSecretConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	config.Capacity = 2
+	if err := validateNonSecretConfig(config); err == nil ||
+		!strings.Contains(err.Error(), "capacity 1") {
+		t.Fatalf("multi-capacity Browser profile error = %v", err)
+	}
+	config = defaultConfig()
+	config.Provider = "codex"
+	config.AgentID = "11111111-1111-4111-8111-111111111111"
+	config.Workspace = t.TempDir()
+	config.BrowserSocket = "/browser/control.sock"
+	if err := validateNonSecretConfig(config); err != nil {
+		t.Fatalf("ordinary Agent rejected unused Browser config: %v", err)
 	}
 }
 

@@ -23,6 +23,8 @@ func TestRequestValidateAcceptsOnlyBoundedPhaseOneActions(t *testing.T) {
 		{Kind: ActionBack},
 		{Kind: ActionForward},
 		{Kind: ActionScreenshot},
+		{Kind: ActionCheckpoint},
+		{Kind: ActionClose},
 	}
 	for _, action := range actions {
 		action := action
@@ -138,13 +140,13 @@ func validRequest(now time.Time) Request {
 		RequestID:         "77777777-7777-4777-8777-777777777777",
 		Deadline:          now.Add(30 * time.Second),
 		Identity: Identity{
-			RunID:             "11111111-1111-4111-8111-111111111111",
-			AgentID:           "22222222-2222-4222-8222-222222222222",
-			PrincipalScopeID:  "scope_333333333333",
-			ConversationID:    "44444444-4444-4444-8444-444444444444",
-			BrowserGeneration: 1,
-			AttachmentID:      "55555555-5555-4555-8555-555555555555",
-			ControlEpoch:      1,
+			RunID:            "11111111-1111-4111-8111-111111111111",
+			AgentID:          "22222222-2222-4222-8222-222222222222",
+			PrincipalScopeID: "scope_333333333333",
+			BrowserSessionID: "44444444-4444-4444-8444-444444444444",
+			SessionEpoch:     1,
+			AttachmentID:     "55555555-5555-4555-8555-555555555555",
+			ControlEpoch:     1,
 		},
 		Action: Action{Kind: ActionScreenshot},
 	}

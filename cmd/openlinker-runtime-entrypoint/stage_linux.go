@@ -13,6 +13,9 @@ func runAgentStage(binary string) error {
 	if os.Geteuid() != 0 || os.Getegid() != 0 {
 		return errors.New("official Provider image launcher must start as root before dropping to the Runtime UID")
 	}
+	if err := prepareBrowserMounts(); err != nil {
+		return err
+	}
 	environment, err := agentStageEnvironment(fixedProvider)
 	if err != nil {
 		return err

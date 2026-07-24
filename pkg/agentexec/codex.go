@@ -22,6 +22,7 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 		_ = run.Emit("run.message.delta", map[string]any{"text": "Codex is processing the task."})
 	}
 	config := provider.Config
+	config = providerConfigForBrowserRun(config, run.Browser)
 	bin := strings.TrimSpace(config.Bin)
 	if bin == "" {
 		bin = "codex"
@@ -75,6 +76,11 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 			if deleteErr := deleteSessionID(sessionPath, "codex", workspace, sessionKey); deleteErr != nil {
 				return openlinker.RuntimeResult{}, fmt.Errorf("Codex session recovery failed: %w", deleteErr)
 			}
+			if run.Browser != nil && run.Browser.Rotate != nil {
+				if rotateErr := run.Browser.Rotate(); rotateErr != nil {
+					return openlinker.RuntimeResult{}, fmt.Errorf("rotate Browser attachment after Codex session recovery: %w", rotateErr)
+				}
+			}
 			sessionID = ""
 			recovered = true
 			continue
@@ -117,6 +123,7 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 
 func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string, persistent bool) []string {
 	args := []string{}
+	args = append(args, codexBrowserMCPArguments(config)...)
 	if value := strings.TrimSpace(config.CodexApproval); value != "" {
 		args = append(args, "--ask-for-approval", value)
 	}

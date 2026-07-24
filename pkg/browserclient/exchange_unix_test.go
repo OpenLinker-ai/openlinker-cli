@@ -150,6 +150,8 @@ func TestExecuteCancellationInterruptsIdleRuntime(t *testing.T) {
 	}
 	defer listener.Close()
 	accepted := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
 	go func() {
 		connection, acceptErr := listener.Accept()
 		if acceptErr != nil {
@@ -159,7 +161,7 @@ func TestExecuteCancellationInterruptsIdleRuntime(t *testing.T) {
 		var request browserprotocol.Request
 		_ = json.NewDecoder(connection).Decode(&request)
 		close(accepted)
-		_, _ = connection.Read(make([]byte, 1))
+		<-release
 	}()
 	client, err := New(config)
 	if err != nil {

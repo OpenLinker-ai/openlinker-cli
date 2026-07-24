@@ -39,6 +39,11 @@ func exchange(
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		return browserprotocol.Response{}, contextFailure(ctx, "send Browser Runtime request")
 	}
+	if unixConnection, ok := connection.(*net.UnixConn); ok {
+		if err := unixConnection.CloseWrite(); err != nil {
+			return browserprotocol.Response{}, contextFailure(ctx, "finish Browser Runtime request")
+		}
+	}
 	limited := &io.LimitedReader{
 		R: connection,
 		N: int64(browserprotocol.MaxResponseBytes) + 1,

@@ -189,6 +189,9 @@ func TestServerCloseRejectsLaterActions(t *testing.T) {
 	if closeResult["structuredContent"].(map[string]any)["status"] != "closed" {
 		t.Fatalf("close result = %#v", closeResult)
 	}
+	if len(executor.actions) != 1 || executor.actions[0].Kind != browserprotocol.ActionClose {
+		t.Fatalf("close actions = %#v", executor.actions)
+	}
 	var observeOutput bytes.Buffer
 	if err := server.Serve(
 		context.Background(),

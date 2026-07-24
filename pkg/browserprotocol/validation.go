@@ -28,10 +28,10 @@ func (request Request) Validate(now time.Time) *Failure {
 
 func (identity Identity) Validate() *Failure {
 	for label, value := range map[string]string{
-		"run_id":          identity.RunID,
-		"agent_id":        identity.AgentID,
-		"conversation_id": identity.ConversationID,
-		"attachment_id":   identity.AttachmentID,
+		"run_id":             identity.RunID,
+		"agent_id":           identity.AgentID,
+		"browser_session_id": identity.BrowserSessionID,
+		"attachment_id":      identity.AttachmentID,
 	} {
 		if !validUUID(value) {
 			return NewFailure(ErrorProtocolInvalid, label+" must be a UUID", false)
@@ -40,8 +40,8 @@ func (identity Identity) Validate() *Failure {
 	if !validOpaqueID(identity.PrincipalScopeID, 256) {
 		return NewFailure(ErrorProtocolInvalid, "principal_scope_id is invalid", false)
 	}
-	if identity.BrowserGeneration == 0 {
-		return NewFailure(ErrorProtocolInvalid, "browser_generation must be positive", false)
+	if identity.SessionEpoch == 0 {
+		return NewFailure(ErrorProtocolInvalid, "session_epoch must be positive", false)
 	}
 	if identity.ControlEpoch == 0 {
 		return NewFailure(ErrorProtocolInvalid, "control_epoch must be positive", false)

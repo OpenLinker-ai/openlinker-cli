@@ -24,8 +24,13 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 	browserSource := string(browserDockerfile)
 	required := []string{
 		"mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294a",
-		"USER pwuser",
+		"useradd --uid 10001 --gid 10001",
+		"USER 10001:10001",
 		"NO_PROXY=",
+		"OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE=/browser-control/channel-credential",
+		"OPENLINKER_BROWSER_PROFILE_DIR=/browser-tmp/profiles/active",
+		"OPENLINKER_BROWSER_PROFILE_STORE=/browser-state/encrypted-profiles",
+		"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-state/profile-root-key",
 		`ENTRYPOINT ["/usr/local/bin/openlinker-browser-runtime"]`,
 	}
 	for _, value := range required {
@@ -42,6 +47,7 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		"docker.sock",
 		"/Users/",
 		"/home/pwuser/.config",
+		"OPENLINKER_BROWSER_PROFILE_DIR=/browser-state/",
 	}
 	for _, value := range forbidden {
 		if strings.Contains(browserSource, value) {
@@ -61,6 +67,41 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 	} {
 		if strings.Contains(providerSource, value) {
 			t.Errorf("Dockerfile.providers unexpectedly contains Browser engine dependency %q", value)
+		}
+	}
+
+	for _, name := range []string{
+		"deploy/compose.codex.browser.yml",
+		"deploy/compose.claude.browser.yml",
+	} {
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := string(raw)
+		for _, required := range []string{
+			"openlinker-browser-runtime:",
+			"condition: service_healthy",
+			"OPENLINKER_BROWSER_PROFILE_STORE: /browser-state/encrypted-profiles",
+			"OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles",
+			"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-state/profile-root-key",
+			"- agent-internal",
+		} {
+			if !strings.Contains(source, required) {
+				t.Errorf("%s is missing %q", name, required)
+			}
+		}
+		for _, forbidden := range []string{
+			"CODEX_API_KEY",
+			"ANTHROPIC_API_KEY",
+			"OPENLINKER_AGENT_TOKEN",
+			"egress-public",
+			"ports:",
+			"docker.sock",
+		} {
+			if strings.Contains(source, forbidden) {
+				t.Errorf("%s contains forbidden Browser boundary %q", name, forbidden)
+			}
 		}
 	}
 }

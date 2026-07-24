@@ -30,6 +30,8 @@ const (
 	ActionBack          ActionKind = "back"
 	ActionForward       ActionKind = "forward"
 	ActionScreenshot    ActionKind = "screenshot"
+	ActionCheckpoint    ActionKind = "checkpoint"
+	ActionClose         ActionKind = "close"
 )
 
 type ErrorCode string
@@ -60,13 +62,13 @@ const (
 )
 
 type Identity struct {
-	RunID             string `json:"run_id"`
-	AgentID           string `json:"agent_id"`
-	PrincipalScopeID  string `json:"principal_scope_id"`
-	ConversationID    string `json:"conversation_id"`
-	BrowserGeneration uint64 `json:"browser_generation"`
-	AttachmentID      string `json:"attachment_id"`
-	ControlEpoch      uint64 `json:"control_epoch"`
+	RunID            string `json:"run_id"`
+	AgentID          string `json:"agent_id"`
+	PrincipalScopeID string `json:"principal_scope_id"`
+	BrowserSessionID string `json:"browser_session_id"`
+	SessionEpoch     uint64 `json:"session_epoch"`
+	AttachmentID     string `json:"attachment_id"`
+	ControlEpoch     uint64 `json:"control_epoch"`
 }
 
 type Request struct {

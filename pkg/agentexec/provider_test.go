@@ -289,6 +289,9 @@ func TestHandlerTrustsOnlyCoreConversation(t *testing.T) {
 	handler := Handler{Provider: provider}
 	assignment := openlinker.RuntimeContext{
 		RunID: "run-1", AgentID: "agent-1", Input: map[string]any{"text": "hello"},
+		Authority: &openlinker.RuntimeAuthorityContext{
+			PrincipalScopeID: "principal-1",
+		},
 		Metadata: openlinker.RuntimeJSONMap{"conversation": map[string]any{
 			"id": "spoofed", "session_key": "spoofed", "current_run_id": "run-1", "source": "caller",
 		}},
@@ -298,6 +301,9 @@ func TestHandlerTrustsOnlyCoreConversation(t *testing.T) {
 	}
 	if provider.run.Conversation != nil {
 		t.Fatalf("caller conversation was trusted: %#v", provider.run.Conversation)
+	}
+	if provider.run.Authority != assignment.Authority {
+		t.Fatalf("Runtime authority was not propagated: %#v", provider.run.Authority)
 	}
 	if _, exists := provider.run.Metadata["conversation"]; exists {
 		t.Fatalf("conversation control metadata leaked into provider task metadata: %#v", provider.run.Metadata)

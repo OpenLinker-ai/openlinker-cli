@@ -12,9 +12,9 @@ arbitrary JavaScript, CDP, shell, path, upload, download, clipboard, extension,
 or credential-input requests.
 
 The Browser image contains this package and pinned Playwright/Chromium
-versions. The current production entrypoint remains hard not-ready until lease
-assignment, encrypted Profile restore/checkpoint, Egress no-bypass tests, and
-Provider-native adapters are connected.
+versions. A trusted Runtime Agent assigns the authoritative lease and exposes
+the Browser MCP tool to the ordinary Codex or Claude Code client. Browser
+execution never uses a Provider-native computer-use API.
 
 Local contract checks:
 
@@ -31,5 +31,5 @@ npm test
 JSON 行协议监管该进程，并使用显式环境白名单启动；Provider、Agent、User、通道
 凭据和 Profile 加密密钥都不会继承给 Chromium 进程。
 
-在 lease、加密 Profile 恢复/检查点、真实 Chromium 出口防绕过矩阵和双 Provider
-原生适配器全部接通并通过前，生产入口会继续明确返回 not-ready。
+可信 Runtime Agent 分配权威 lease，并把 Browser MCP 工具暴露给普通 Codex 或
+Claude Code 客户端；浏览器执行不使用 Provider 原生 computer-use API。

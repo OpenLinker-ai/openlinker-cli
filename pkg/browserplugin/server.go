@@ -281,6 +281,15 @@ func (server *Server) callBrowser(
 		return toolResult{}, errors.New("Browser attachment is closed")
 	}
 	if arguments.Operation == "close" {
+		client, err := server.browserClient()
+		if err != nil {
+			return toolResult{}, err
+		}
+		if _, failure := client.Execute(ctx, browserprotocol.Action{
+			Kind: browserprotocol.ActionClose,
+		}); failure != nil {
+			return toolResult{}, failure
+		}
 		server.stateMu.Lock()
 		server.closed = true
 		server.stateMu.Unlock()
@@ -300,10 +309,13 @@ func (server *Server) callBrowser(
 		return toolResult{}, err
 	}
 	actions := arguments.Actions
-	if arguments.Operation == "observe" ||
-		arguments.Operation == "checkpoint" {
+	if arguments.Operation == "observe" {
 		actions = []browserprotocol.Action{{
 			Kind: browserprotocol.ActionScreenshot,
+		}}
+	} else if arguments.Operation == "checkpoint" {
+		actions = []browserprotocol.Action{{
+			Kind: browserprotocol.ActionCheckpoint,
 		}}
 	}
 	var observation browserprotocol.Observation

@@ -21,8 +21,8 @@ export interface Identity {
   run_id: string;
   agent_id: string;
   principal_scope_id: string;
-  conversation_id: string;
-  browser_generation: number;
+  browser_session_id: string;
+  session_epoch: number;
   attachment_id: string;
   control_epoch: number;
 }
@@ -106,8 +106,8 @@ const IDENTITY_FIELDS = new Set([
   "run_id",
   "agent_id",
   "principal_scope_id",
-  "conversation_id",
-  "browser_generation",
+  "browser_session_id",
+  "session_epoch",
   "attachment_id",
   "control_epoch",
 ]);
@@ -163,8 +163,8 @@ function parseIdentity(value: unknown): Identity {
     run_id: requireUUID(identity.run_id, "run_id"),
     agent_id: requireUUID(identity.agent_id, "agent_id"),
     principal_scope_id: requireOpaque(identity.principal_scope_id, "principal_scope_id", 256),
-    conversation_id: requireUUID(identity.conversation_id, "conversation_id"),
-    browser_generation: requirePositiveInteger(identity.browser_generation, "browser_generation"),
+    browser_session_id: requireUUID(identity.browser_session_id, "browser_session_id"),
+    session_epoch: requirePositiveInteger(identity.session_epoch, "session_epoch"),
     attachment_id: requireUUID(identity.attachment_id, "attachment_id"),
     control_epoch: requirePositiveInteger(identity.control_epoch, "control_epoch"),
   };

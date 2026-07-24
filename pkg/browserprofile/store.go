@@ -251,6 +251,49 @@ func (store *Store) Rewrap(
 	return nil
 }
 
+// PruneInactive removes committed Profile snapshots whose current pointer
+// has not been updated since before. Missing or malformed state is retained so
+// that a later Load can quarantine it instead of silently discarding evidence.
+func (store *Store) PruneInactive(before time.Time) (int, error) {
+	if store == nil || before.IsZero() {
+		return 0, ErrInvalidConfiguration
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.lockFile == nil {
+		return 0, ErrProfileStoreClosed
+	}
+	profilesDir := filepath.Join(store.root, "profiles")
+	entries, err := os.ReadDir(profilesDir)
+	if err != nil {
+		return 0, fmt.Errorf("list Browser Profiles for expiry: %w", err)
+	}
+	removed := 0
+	for _, entry := range entries {
+		if !entry.IsDir() || !validProfileDigest(entry.Name()) {
+			continue
+		}
+		profileDir := filepath.Join(profilesDir, entry.Name())
+		currentPath := filepath.Join(profileDir, currentFileName)
+		info, err := os.Lstat(currentPath)
+		if err != nil || !info.Mode().IsRegular() ||
+			info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 ||
+			!info.ModTime().Before(before) {
+			continue
+		}
+		if err := os.RemoveAll(profileDir); err != nil {
+			return removed, fmt.Errorf("expire inactive Browser Profile: %w", err)
+		}
+		removed++
+	}
+	if removed > 0 {
+		if err := syncDirectory(profilesDir); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
 type openProfileSnapshot struct {
 	dir           string
 	metadata      Metadata
@@ -564,6 +607,14 @@ func parseCurrent(raw []byte) (currentRecord, error) {
 
 func validCheckpointID(value string) bool {
 	if len(value) != checkpointIDBytes*2 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validProfileDigest(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
 		return false
 	}
 	_, err := hex.DecodeString(value)

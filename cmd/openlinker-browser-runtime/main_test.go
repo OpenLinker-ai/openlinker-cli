@@ -25,6 +25,33 @@ func TestReadCredentialFileAcceptsOwnerOnlyAbsoluteFile(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreateCredentialFileCreatesPrivateInternalCredential(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "channel-token")
+	value, err := loadOrCreateCredentialFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value) != 64 || strings.Trim(value, "0123456789abcdef") != "" {
+		t.Fatalf("generated credential shape = %q", value)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("generated credential mode = %o", info.Mode().Perm())
+	}
+	reloaded, err := loadOrCreateCredentialFile(path)
+	if err != nil || reloaded != value {
+		t.Fatalf("reloaded credential = %q, %v", reloaded, err)
+	}
+}
+
 func TestReadCredentialFileRejectsUnsafeSources(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

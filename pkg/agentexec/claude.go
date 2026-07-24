@@ -28,6 +28,7 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 		_ = run.Emit("run.message.delta", map[string]any{"text": "Claude Code is processing the task."})
 	}
 	config := provider.Config
+	config = providerConfigForBrowserRun(config, run.Browser)
 	bin := strings.TrimSpace(config.Bin)
 	if bin == "" {
 		bin = "claude"
@@ -85,6 +86,11 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 				if deleteErr := deleteSessionID(sessionPath, "claude", workspace, sessionKey); deleteErr != nil {
 					return openlinker.RuntimeResult{}, fmt.Errorf("Claude session recovery failed: %w", deleteErr)
 				}
+				if run.Browser != nil && run.Browser.Rotate != nil {
+					if rotateErr := run.Browser.Rotate(); rotateErr != nil {
+						return openlinker.RuntimeResult{}, fmt.Errorf("rotate Browser attachment after Claude session recovery: %w", rotateErr)
+					}
+				}
 				sessionID = ""
 				recovered = true
 				continue
@@ -125,12 +131,20 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 }
 
 func claudeArguments(config ProviderConfig, permission, sessionID string) []string {
-	args := []string{"--safe-mode", "--no-chrome", "--disable-slash-commands", "-p", "--output-format", "json", "--permission-mode", permission}
+	args := []string{"--safe-mode", "--no-chrome", "--disable-slash-commands"}
+	if browserProfileEnabled(config) {
+		args = []string{"--bare", "--no-chrome", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", claudeBrowserMCPConfig(config)}
+	}
+	args = append(args, "-p", "--output-format", "json", "--permission-mode", permission)
 	if config.Model != "" {
 		args = append(args, "--model", config.Model)
 	}
-	if len(config.AllowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(config.AllowedTools, ","))
+	allowed := append([]string(nil), config.AllowedTools...)
+	if browserProfileEnabled(config) {
+		allowed = appendUniqueString(allowed, "mcp__openlinker_browser__browser_session")
+	}
+	if len(allowed) > 0 {
+		args = append(args, "--allowedTools", strings.Join(allowed, ","))
 	}
 	if !config.WebSearch {
 		args = append(args, "--disallowedTools", "WebSearch,WebFetch")
