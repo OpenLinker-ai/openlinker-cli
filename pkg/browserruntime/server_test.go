@@ -282,6 +282,18 @@ func TestServerReplacesOnlyStaleUnixSockets(t *testing.T) {
 	if err := stale.Close(); err != nil {
 		t.Fatal(err)
 	}
+	staleDeadline := time.Now().Add(time.Second)
+	for {
+		connection, dialErr := net.DialTimeout("unix", stalePath, 10*time.Millisecond)
+		if dialErr != nil {
+			break
+		}
+		_ = connection.Close()
+		if time.Now().After(staleDeadline) {
+			t.Fatal("closed Unix listener continued accepting connections")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	staleServer, err := NewServer(ServerOptions{
 		SocketPath:        stalePath,
 		ChannelCredential: strings.Repeat("a", 64),
