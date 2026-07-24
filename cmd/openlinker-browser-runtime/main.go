@@ -26,7 +26,7 @@ const (
 	defaultEngineScript     = "/opt/openlinker/browser-engine/dist/main.js"
 	defaultProfileStore     = "/browser-state/encrypted-profiles"
 	defaultProfileWorkRoot  = "/browser-tmp/profiles"
-	defaultProfileRootKey   = "/browser-state/profile-root-key"
+	defaultProfileRootKey   = "/browser-key/profile-root-key"
 	defaultProfileDirectory = "/browser-tmp/profiles/active"
 	maxCredentialBytes      = 4096
 )

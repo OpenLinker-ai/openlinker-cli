@@ -28,7 +28,7 @@ FROM mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4b
 USER root
 RUN groupadd --gid 10001 openlinker-browser \
  && useradd --uid 10001 --gid 10001 --home-dir /browser-home --no-create-home --shell /usr/sbin/nologin openlinker-browser \
- && install -d -o 10001 -g 10001 -m 0700 /browser-home /browser-state /browser-state/encrypted-profiles /browser-tmp /browser-tmp/profiles \
+ && install -d -o 10001 -g 10001 -m 0700 /browser-home /browser-key /browser-state /browser-state/encrypted-profiles /browser-tmp /browser-tmp/profiles \
  && install -d -o 10001 -g 10001 -m 0700 /browser-control /browser-control/leases \
  && install -d -o root -g root -m 0555 /opt/openlinker/browser-engine
 COPY --from=go-build --chown=root:root --chmod=0555 /out/openlinker-browser-runtime /usr/local/bin/openlinker-browser-runtime
@@ -45,7 +45,7 @@ ENV HOME=/browser-home \
     OPENLINKER_BROWSER_PROFILE_DIR=/browser-tmp/profiles/active \
     OPENLINKER_BROWSER_PROFILE_STORE=/browser-state/encrypted-profiles \
     OPENLINKER_BROWSER_PROFILE_WORK_ROOT=/browser-tmp/profiles \
-    OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-state/profile-root-key
+    OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-key/profile-root-key
 WORKDIR /browser-state
 USER 10001:10001
 STOPSIGNAL SIGTERM

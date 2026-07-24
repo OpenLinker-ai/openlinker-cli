@@ -38,9 +38,10 @@ services:
       OPENLINKER_BROWSER_PROFILE_DIR: /browser-tmp/profiles/active
       OPENLINKER_BROWSER_PROFILE_STORE: /browser-state/encrypted-profiles
       OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles
-      OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-state/profile-root-key
+      OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-key/profile-root-key
     volumes:
       - claude-browser-control:/browser-control
+      - claude-browser-profile-key:/browser-key
       - claude-browser-profile:/browser-state
     restart: unless-stopped
     healthcheck:
@@ -54,4 +55,5 @@ services:
 
 volumes:
   claude-browser-control: {}
+  claude-browser-profile-key: {}
   claude-browser-profile: {}

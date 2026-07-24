@@ -30,7 +30,7 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		"OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE=/browser-control/channel-credential",
 		"OPENLINKER_BROWSER_PROFILE_DIR=/browser-tmp/profiles/active",
 		"OPENLINKER_BROWSER_PROFILE_STORE=/browser-state/encrypted-profiles",
-		"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-state/profile-root-key",
+		"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-key/profile-root-key",
 		`ENTRYPOINT ["/usr/local/bin/openlinker-browser-runtime"]`,
 	}
 	for _, value := range required {
@@ -84,7 +84,8 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			"condition: service_healthy",
 			"OPENLINKER_BROWSER_PROFILE_STORE: /browser-state/encrypted-profiles",
 			"OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles",
-			"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-state/profile-root-key",
+			"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-key/profile-root-key",
+			"-profile-key:/browser-key",
 			"- agent-internal",
 		} {
 			if !strings.Contains(source, required) {
@@ -98,6 +99,7 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			"egress-public",
 			"ports:",
 			"docker.sock",
+			"/browser-state/profile-root-key",
 		} {
 			if strings.Contains(source, forbidden) {
 				t.Errorf("%s contains forbidden Browser boundary %q", name, forbidden)
