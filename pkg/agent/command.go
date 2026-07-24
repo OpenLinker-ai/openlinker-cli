@@ -127,7 +127,7 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().BoolVar(&sessionReuse, "session-reuse", true, "reuse provider sessions by Core conversation")
 	command.Flags().BoolVar(&webSearch, "web-search", false, "allow provider web search")
 	command.Flags().StringVar(&codexBaseURL, "codex-base-url", "", "Codex OpenAI-compatible API Base URL")
-	command.Flags().StringVar(&sandbox, "codex-sandbox", "read-only", "Codex sandbox mode")
+	command.Flags().StringVar(&sandbox, "codex-sandbox", "read-only", "Codex sandbox mode: read-only, workspace-write, or danger-full-access for externally isolated runtimes")
 	command.Flags().StringVar(&approval, "codex-approval", "never", "Codex approval mode")
 	command.Flags().StringVar(&permission, "claude-permission", "dontAsk", "Claude permission mode")
 	command.Flags().Var(&allowedTools, "allowed-tool", "Claude allowed tool; repeatable")
@@ -289,9 +289,9 @@ func validateProviderPolicy(config Config) error {
 		return err
 	}
 	switch config.CodexSandbox {
-	case "", "read-only", "workspace-write":
+	case "", "read-only", "workspace-write", "danger-full-access":
 	default:
-		return errors.New("Codex sandbox must be read-only or workspace-write")
+		return errors.New("Codex sandbox must be read-only, workspace-write, or danger-full-access")
 	}
 	switch config.CodexApproval {
 	case "", "never", "untrusted", "on-request":

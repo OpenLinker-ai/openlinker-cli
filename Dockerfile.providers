@@ -49,6 +49,10 @@ STOPSIGNAL SIGTERM
 FROM provider-base AS codex
 ARG CODEX_CLI_VERSION=0.145.0-alpha.27
 ARG CODEX_CLI_INTEGRITY=sha512-CqQmtU0avLks+u0xrh5AaLTXy90XAW+g9jWZ2W3NPMgBxjUbcsRiqANR/Ai0FHa7JIKD8qZwkfRWWrUAxIGt2w==
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl --version
 RUN test "$(npm view "@openai/codex@${CODEX_CLI_VERSION}" dist.integrity)" = "${CODEX_CLI_INTEGRITY}" \
  && npm install --global --ignore-scripts=false "@openai/codex@${CODEX_CLI_VERSION}" \
  && codex --version \

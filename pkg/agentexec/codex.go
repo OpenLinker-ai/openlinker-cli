@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -54,7 +55,16 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
 		args := codexArguments(config, workspace, sandbox, sessionID, sessionKey != "")
-		stdoutText, stderrText, err = runCodexCommand(requestCtx, cancel, bin, args, workspace, buildPrompt("Codex", run, sessionID == ""), config)
+		stdoutText, stderrText, err = runCodexCommand(
+			requestCtx,
+			cancel,
+			bin,
+			args,
+			workspace,
+			buildCodexPrompt(run, sessionID == "", config.WebSearch),
+			config,
+			run.Emit,
+		)
 		if err == nil {
 			break
 		}
@@ -116,7 +126,30 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		args = append(args, "-c", `web_search="disabled"`)
 	}
 	if value := strings.TrimSpace(config.CodexBaseURL); value != "" {
-		args = append(args, "-c", fmt.Sprintf("openai_base_url=%q", value))
+		// OpenAI-compatible routers commonly implement the HTTP Responses API
+		// without the optional Responses WebSocket transport. Keep the built-in
+		// OpenAI provider untouched and describe the router as a native custom
+		// provider so Codex does not attempt an unsupported WebSocket upgrade.
+		args = append(args,
+			"-c", `model_provider="openlinker_proxy"`,
+			"-c", `model_providers.openlinker_proxy.name="OpenLinker-compatible provider"`,
+			"-c", fmt.Sprintf("model_providers.openlinker_proxy.base_url=%q", value),
+			"-c", `model_providers.openlinker_proxy.env_key="CODEX_API_KEY"`,
+			"-c", `model_providers.openlinker_proxy.wire_api="responses"`,
+			"-c", `model_providers.openlinker_proxy.supports_websockets=false`,
+		)
+	}
+	if sandbox == "danger-full-access" {
+		// This mode is intended for an external isolation boundary such as the
+		// official hardened Provider container. Keep model-spawned commands from
+		// inheriting provider credentials even though the Codex process itself
+		// needs them to call the configured model endpoint.
+		args = append(args,
+			"--disable", "code_mode",
+			"--disable", "code_mode_host",
+			"-c", `shell_environment_policy.inherit="none"`,
+			"-c", "shell_environment_policy.set="+codexCommandEnvironment(config.Env),
+		)
 	}
 	if sessionID != "" {
 		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json")
@@ -137,7 +170,47 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 	return append(args, "-")
 }
 
-func runCodexCommand(ctx context.Context, cancel context.CancelFunc, bin string, args []string, workspace, prompt string, config ProviderConfig) (string, string, error) {
+func codexCommandEnvironment(environment []string) string {
+	if environment == nil {
+		environment = os.Environ()
+	}
+	values := make(map[string]string, len(environment))
+	for _, item := range environment {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	safeKeys := []string{
+		"PATH", "Path", "PATHEXT",
+		"HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+		"SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC",
+		"TMPDIR", "TEMP", "TMP", "LANG",
+		"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+		"NO_PROXY", "no_proxy", "SSL_CERT_FILE",
+	}
+	pairs := make([]string, 0, len(safeKeys))
+	for _, key := range safeKeys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		encoded, _ := json.Marshal(value)
+		pairs = append(pairs, key+"="+string(encoded))
+	}
+	return "{" + strings.Join(pairs, ",") + "}"
+}
+
+func runCodexCommand(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bin string,
+	args []string,
+	workspace string,
+	prompt string,
+	config ProviderConfig,
+	emit func(string, any) error,
+) (string, string, error) {
 	command := exec.CommandContext(ctx, bin, args...) // #nosec G204 -- operator-configured official provider binary, no shell.
 	configureProviderProcess(command)
 	command.Dir = workspace
@@ -150,8 +223,10 @@ func runCodexCommand(ctx context.Context, cancel context.CancelFunc, bin string,
 	command.Stdin = strings.NewReader(prompt)
 	stdout := newLimitedOutputBuffer(cancel)
 	stderr := newLimitedOutputBuffer(cancel)
-	command.Stdout, command.Stderr = stdout, stderr
+	observer := newCodexJSONLObserver(emit)
+	command.Stdout, command.Stderr = io.MultiWriter(stdout, observer), stderr
 	err := command.Run()
+	observer.Flush()
 	if limitErr := outputLimitError("Codex", stdout, stderr); limitErr != nil {
 		return stdout.String(), stderr.String(), limitErr
 	}

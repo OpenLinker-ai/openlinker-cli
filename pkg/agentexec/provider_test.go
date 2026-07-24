@@ -2,13 +2,132 @@ package agentexec
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	openlinker "github.com/OpenLinker-ai/openlinker-go"
 )
+
+func TestCodexProviderStreamsSafeProgressBeforeExit(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "codex-fake")
+	logPath := filepath.Join(dir, "provider")
+	scriptBody := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" > "$TEST_LOG.args"
+cat > "$TEST_LOG.prompt"
+printf '%s\n' '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}'
+printf '%s\n' '{"type":"item.started","item":{"id":"item-1","type":"web_search","query":"private query must not be emitted","status":"in_progress"}}'
+sleep 1
+printf '%s\n' '{"type":"item.completed","item":{"id":"item-1","type":"web_search","query":"private query must not be emitted","status":"completed"}}'
+printf '%s\n' '{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"provider answer"}}'
+`
+	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	provider := CodexProvider{Config: ProviderConfig{
+		Provider: "codex", Bin: script, Workspace: dir, Sandbox: "read-only",
+		WebSearch: true, SessionReuse: true, SessionStore: filepath.Join(dir, "sessions.json"),
+		Timeout: 5 * time.Second, Env: append(os.Environ(), "TEST_LOG="+logPath), EnvAllowlist: []string{"TEST_LOG"},
+	}}
+	progress := make(chan map[string]any, 8)
+	run := RunContext{
+		RunID: "run-1", Input: map[string]any{"text": "latest news"},
+		Conversation: &ConversationContext{
+			ID: "conversation-1", SessionKey: "conversation-1", CurrentRunID: "run-1", Source: "core",
+		},
+		Emit: func(eventType string, payload any) error {
+			if eventType == "run.status.changed" {
+				progress <- payload.(map[string]any)
+			}
+			return nil
+		},
+	}
+	type providerResult struct {
+		result openlinker.RuntimeResult
+		err    error
+	}
+	completed := make(chan providerResult, 1)
+	go func() {
+		result, err := provider.Run(context.Background(), run)
+		completed <- providerResult{result: result, err: err}
+	}()
+
+	select {
+	case event := <-progress:
+		if event["phase"] != "started" || event["tool_kind"] != "web_search" {
+			t.Fatalf("first progress = %#v", event)
+		}
+	case result := <-completed:
+		t.Fatalf("provider completed before streaming progress: result=%#v err=%v", result.result, result.err)
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("provider did not stream progress before exit")
+	}
+
+	result := <-completed
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.result.Output.(map[string]any)["summary"] != "provider answer" {
+		t.Fatalf("result = %#v", result.result)
+	}
+	finished := <-progress
+	if finished["phase"] != "completed" || finished["tool_kind"] != "web_search" {
+		t.Fatalf("completed progress = %#v", finished)
+	}
+	args, _ := os.ReadFile(logPath + ".args")
+	if !strings.Contains(string(args), "--search") {
+		t.Fatalf("Codex args did not enable web search: %s", args)
+	}
+	prompt, _ := os.ReadFile(logPath + ".prompt")
+	if !strings.Contains(string(prompt), "Live public-web access is enabled") {
+		t.Fatalf("Codex prompt did not describe web capability: %s", prompt)
+	}
+	encoded, _ := json.Marshal([]map[string]any{
+		{"started": "captured above"},
+		finished,
+	})
+	for _, forbidden := range []string{"private query", "11111111-1111-4111-8111-111111111111"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("progress leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestCodexExternalSandboxRestrictsSpawnedCommandEnvironment(t *testing.T) {
+	args := codexArguments(ProviderConfig{
+		CodexApproval: "never",
+		WebSearch:     true,
+		Env: []string{
+			"PATH=/usr/bin",
+			"HOME=/provider",
+			"HTTPS_PROXY=http://egress:3128",
+			"CODEX_API_KEY=must-not-be-forwarded",
+			"OPENLINKER_AGENT_TOKEN=must-not-be-forwarded",
+		},
+	}, "/workspace", "danger-full-access", "", true)
+	joined := strings.Join(args, " ")
+	for _, expected := range []string{
+		"--sandbox danger-full-access",
+		"--disable code_mode",
+		"--disable code_mode_host",
+		`shell_environment_policy.inherit="none"`,
+		`shell_environment_policy.set={PATH="/usr/bin",HOME="/provider",HTTPS_PROXY="http://egress:3128"}`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Codex external sandbox args do not include %s: %s", expected, joined)
+		}
+	}
+	for _, forbidden := range []string{"CODEX_API_KEY", "OPENLINKER_AGENT_TOKEN", "TOKEN", "SECRET"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("Codex spawned-command environment allowlist contains %s: %s", forbidden, joined)
+		}
+	}
+}
 
 func TestCodexProviderReusesTrustedConversationSession(t *testing.T) {
 	dir := t.TempDir()
@@ -75,8 +194,20 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item-1","type":"agent_mess
 		if !strings.Contains(line, "--skip-git-repo-check") {
 			t.Fatalf("Codex args do not support a non-Git workspace: %s", line)
 		}
-		if !strings.Contains(line, `openai_base_url="https://router.example/v1"`) {
-			t.Fatalf("Codex args do not include the configured Base URL: %s", line)
+		for _, expected := range []string{
+			`model_provider="openlinker_proxy"`,
+			`model_providers.openlinker_proxy.name="OpenLinker-compatible provider"`,
+			`model_providers.openlinker_proxy.base_url="https://router.example/v1"`,
+			`model_providers.openlinker_proxy.env_key="CODEX_API_KEY"`,
+			`model_providers.openlinker_proxy.wire_api="responses"`,
+			`model_providers.openlinker_proxy.supports_websockets=false`,
+		} {
+			if !strings.Contains(line, expected) {
+				t.Fatalf("Codex args do not include %s: %s", expected, line)
+			}
+		}
+		if strings.Contains(line, "openai_base_url") {
+			t.Fatalf("Codex args incorrectly reused the WebSocket-capable built-in provider: %s", line)
 		}
 	}
 	if strings.Contains(string(args), "--output-last-message") {
