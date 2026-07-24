@@ -12,6 +12,7 @@ on:
       - "pkg/agent/**"
       - "pkg/agentexec/**"
       - "pkg/browserprotocol/**"
+      - "pkg/browserprofile/**"
       - "pkg/browserruntime/**"
       - "go.mod"
       - "go.sum"

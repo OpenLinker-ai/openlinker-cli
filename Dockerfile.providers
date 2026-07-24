@@ -7,7 +7,7 @@ ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOWORK=off
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
-RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-egress-gateway ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserprotocol ./pkg/browserruntime ./pkg/pluginbridge
+RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-egress-gateway ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/pluginbridge
 ARG TARGETOS
 ARG TARGETARCH
 ARG OPENLINKER_VERSION=container
