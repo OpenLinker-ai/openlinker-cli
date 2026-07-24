@@ -43,6 +43,7 @@ const (
 	ErrorStaleControlEpoch       ErrorCode = "BROWSER_STALE_CONTROL_EPOCH"
 	ErrorRequestReplayed         ErrorCode = "BROWSER_REQUEST_REPLAYED"
 	ErrorDeadlineExceeded        ErrorCode = "BROWSER_DEADLINE_EXCEEDED"
+	ErrorProviderCapability      ErrorCode = "BROWSER_PROVIDER_CAPABILITY_UNSUPPORTED"
 	ErrorRuntimeUnavailable      ErrorCode = "BROWSER_RUNTIME_UNAVAILABLE"
 	ErrorEgressUnavailable       ErrorCode = "BROWSER_EGRESS_UNAVAILABLE"
 	ErrorTargetBlocked           ErrorCode = "BROWSER_TARGET_BLOCKED"
@@ -54,6 +55,7 @@ const (
 	ErrorViewerUnavailable       ErrorCode = "BROWSER_VIEWER_UNAVAILABLE"
 	ErrorActionLimitExceeded     ErrorCode = "BROWSER_ACTION_LIMIT_EXCEEDED"
 	ErrorCanceled                ErrorCode = "BROWSER_CANCELED"
+	ErrorActionRejected          ErrorCode = "BROWSER_ACTION_REJECTED"
 	ErrorOutputInvalid           ErrorCode = "BROWSER_OUTPUT_INVALID"
 	ErrorInternal                ErrorCode = "BROWSER_INTERNAL"
 )
