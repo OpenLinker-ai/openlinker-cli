@@ -2,6 +2,7 @@ package browserprotocol
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,44 @@ func (observation Observation) Validate() *Failure {
 	}
 	if len(observation.Origin) > 512 || len(observation.Title) > 2048 {
 		return NewFailure(ErrorOutputTooLarge, "page metadata exceeds the output limit", false)
+	}
+	return nil
+}
+
+func ValidateFailure(failure *Failure) *Failure {
+	if failure == nil {
+		return NewFailure(ErrorOutputInvalid, "browser failure is missing", false)
+	}
+	switch failure.Code {
+	case ErrorProtocolInvalid,
+		ErrorRequestTooLarge,
+		ErrorOutputTooLarge,
+		ErrorUnauthorized,
+		ErrorIdentityMismatch,
+		ErrorStaleControlEpoch,
+		ErrorRequestReplayed,
+		ErrorDeadlineExceeded,
+		ErrorRuntimeUnavailable,
+		ErrorEgressUnavailable,
+		ErrorTargetBlocked,
+		ErrorProfileLocked,
+		ErrorProfileCorrupt,
+		ErrorConversationRecovery,
+		ErrorUserActionRequired,
+		ErrorHighImpactActionBlocked,
+		ErrorViewerUnavailable,
+		ErrorActionLimitExceeded,
+		ErrorCanceled,
+		ErrorActionRejected,
+		ErrorOutputInvalid,
+		ErrorInternal:
+	default:
+		return NewFailure(ErrorOutputInvalid, "browser failure code is invalid", false)
+	}
+	if failure.Message == "" ||
+		strings.TrimSpace(failure.Message) != failure.Message ||
+		len(failure.Message) > 500 {
+		return NewFailure(ErrorOutputInvalid, "browser failure message is invalid", false)
 	}
 	return nil
 }
