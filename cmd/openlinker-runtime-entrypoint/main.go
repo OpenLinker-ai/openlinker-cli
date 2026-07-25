@@ -41,6 +41,9 @@ func main() {
 	if provider != "codex" && provider != "claude" {
 		fatal("image provider is not fixed to codex or claude")
 	}
+	if err := prepareBrowserMounts(); err != nil {
+		fatal(err.Error())
+	}
 	if err := configure(provider, "/runtime", "/workspace", true); err != nil {
 		fatal(err.Error())
 	}

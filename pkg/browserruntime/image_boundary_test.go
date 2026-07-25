@@ -98,11 +98,33 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			"OPENLINKER_AGENT_TOKEN",
 			"egress-public",
 			"ports:",
+			"cap_add:",
 			"docker.sock",
 			"/browser-state/profile-root-key",
 		} {
 			if strings.Contains(source, forbidden) {
 				t.Errorf("%s contains forbidden Browser boundary %q", name, forbidden)
+			}
+		}
+	}
+
+	for _, name := range []string{
+		"deploy/compose.codex.yml",
+		"deploy/compose.claude.yml",
+	} {
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := string(raw)
+		for _, browserOnly := range []string{
+			"OPENLINKER_AGENT_EXECUTION_PROFILE",
+			"/browser-control",
+			"/browser-tool",
+			"openlinker-browser-runtime",
+		} {
+			if strings.Contains(source, browserOnly) {
+				t.Errorf("%s unexpectedly enables Browser-only surface %q", name, browserOnly)
 			}
 		}
 	}

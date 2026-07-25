@@ -18,6 +18,11 @@ const (
 	officialBrowserBrokerRoot  = "/browser-tool"
 )
 
+var (
+	browserChown = os.Chown
+	browserChmod = os.Chmod
+)
+
 func prepareBrowserMounts() error {
 	profile := strings.ToLower(strings.TrimSpace(os.Getenv("OPENLINKER_AGENT_EXECUTION_PROFILE")))
 	if profile == "" || profile == "standard" {
@@ -26,8 +31,8 @@ func prepareBrowserMounts() error {
 	if profile != "browser" {
 		return errors.New("OPENLINKER_AGENT_EXECUTION_PROFILE must be standard or browser")
 	}
-	if os.Geteuid() != 0 || os.Getegid() != 0 {
-		return errors.New("Browser mount initialization requires the official root stage")
+	if os.Geteuid() != runtimeUID || os.Getegid() != runtimeGID {
+		return errors.New("Browser mount initialization requires the fixed Runtime UID/GID")
 	}
 	for _, path := range []string{
 		officialBrowserControlRoot,
@@ -60,11 +65,20 @@ func prepareBrowserDirectory(path string, uid, gid int, mode os.FileMode) error 
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("Browser path %s must be a real directory", path)
 	}
-	if err := os.Chown(path, uid, gid); err != nil {
-		return fmt.Errorf("set Browser directory ownership: %w", err)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("inspect Browser directory ownership: %s", path)
 	}
-	if err := os.Chmod(path, mode); err != nil {
-		return fmt.Errorf("protect Browser directory: %w", err)
+	if int(stat.Uid) != uid || int(stat.Gid) != gid {
+		if err := browserChown(path, uid, gid); err != nil {
+			return fmt.Errorf("set Browser directory ownership: %w", err)
+		}
+	}
+	modeMask := os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if info.Mode()&modeMask != mode&modeMask {
+		if err := browserChmod(path, mode); err != nil {
+			return fmt.Errorf("protect Browser directory: %w", err)
+		}
 	}
 	return nil
 }
@@ -111,8 +125,10 @@ func ensureBrowserChannelCredential(path string) error {
 	if err := file.Close(); err != nil {
 		return errors.New("close Browser channel credential")
 	}
-	if err := os.Chown(path, runtimeUID, runtimeGID); err != nil {
-		return errors.New("set Browser channel credential ownership")
+	if os.Geteuid() != runtimeUID || os.Getegid() != runtimeGID {
+		if err := os.Chown(path, runtimeUID, runtimeGID); err != nil {
+			return errors.New("set Browser channel credential ownership")
+		}
 	}
 	return nil
 }
