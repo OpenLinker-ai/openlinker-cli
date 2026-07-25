@@ -14,31 +14,37 @@ import (
 const configVersion = 1
 
 type Config struct {
-	Version          int      `json:"version"`
-	Enabled          bool     `json:"enabled"`
-	Provider         string   `json:"provider"`
-	OpenLinkerURL    string   `json:"openlinker_url,omitempty"`
-	AgentID          string   `json:"agent_id"`
-	Workspace        string   `json:"workspace"`
-	StateDir         string   `json:"state_dir,omitempty"`
-	ProviderBin      string   `json:"provider_bin,omitempty"`
-	Model            string   `json:"model,omitempty"`
-	Transport        string   `json:"transport,omitempty"`
-	Capacity         int64    `json:"capacity"`
-	TimeoutSeconds   int      `json:"timeout_seconds"`
-	SessionReuse     bool     `json:"session_reuse"`
-	WebSearch        bool     `json:"web_search"`
-	CodexBaseURL     string   `json:"codex_base_url,omitempty"`
-	CodexSandbox     string   `json:"codex_sandbox,omitempty"`
-	CodexApproval    string   `json:"codex_approval,omitempty"`
-	ClaudePermission string   `json:"claude_permission,omitempty"`
-	AllowedTools     []string `json:"allowed_tools,omitempty"`
+	Version               int      `json:"version"`
+	Enabled               bool     `json:"enabled"`
+	Provider              string   `json:"provider"`
+	OpenLinkerURL         string   `json:"openlinker_url,omitempty"`
+	AgentID               string   `json:"agent_id"`
+	Workspace             string   `json:"workspace"`
+	StateDir              string   `json:"state_dir,omitempty"`
+	ProviderBin           string   `json:"provider_bin,omitempty"`
+	Model                 string   `json:"model,omitempty"`
+	Transport             string   `json:"transport,omitempty"`
+	Capacity              int64    `json:"capacity"`
+	TimeoutSeconds        int      `json:"timeout_seconds"`
+	SessionReuse          bool     `json:"session_reuse"`
+	WebSearch             bool     `json:"web_search"`
+	CodexBaseURL          string   `json:"codex_base_url,omitempty"`
+	CodexSandbox          string   `json:"codex_sandbox,omitempty"`
+	CodexApproval         string   `json:"codex_approval,omitempty"`
+	ClaudePermission      string   `json:"claude_permission,omitempty"`
+	AllowedTools          []string `json:"allowed_tools,omitempty"`
+	ExecutionProfile      string   `json:"execution_profile,omitempty"`
+	BrowserPluginBin      string   `json:"browser_plugin_bin,omitempty"`
+	BrowserSocket         string   `json:"browser_socket,omitempty"`
+	BrowserCredentialFile string   `json:"browser_credential_file,omitempty"`
+	BrowserLeaseRoot      string   `json:"browser_lease_root,omitempty"`
+	BrowserBrokerRoot     string   `json:"browser_broker_root,omitempty"`
 }
 
 func defaultConfig() Config {
 	return Config{
 		Version: configVersion, Capacity: 1, TimeoutSeconds: 1800, SessionReuse: true,
-		Transport: "auto", CodexSandbox: "read-only", CodexApproval: "never", ClaudePermission: "dontAsk",
+		Transport: "auto", ExecutionProfile: "standard", CodexSandbox: "read-only", CodexApproval: "never", ClaudePermission: "dontAsk",
 	}
 }
 
@@ -232,6 +238,12 @@ func applyRuntimeEnvironment(config *Config, getenv func(string) string) error {
 	config.CodexSandbox = firstNonEmpty(envValue(getenv, "OPENLINKER_CODEX_SANDBOX"), config.CodexSandbox)
 	config.CodexApproval = firstNonEmpty(envValue(getenv, "OPENLINKER_CODEX_APPROVAL"), config.CodexApproval)
 	config.ClaudePermission = firstNonEmpty(envValue(getenv, "OPENLINKER_CLAUDE_PERMISSION"), config.ClaudePermission)
+	config.ExecutionProfile = firstNonEmpty(envValue(getenv, "OPENLINKER_AGENT_EXECUTION_PROFILE"), config.ExecutionProfile)
+	config.BrowserPluginBin = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_PLUGIN_BIN"), config.BrowserPluginBin)
+	config.BrowserSocket = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_SOCKET"), config.BrowserSocket)
+	config.BrowserCredentialFile = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE"), config.BrowserCredentialFile)
+	config.BrowserLeaseRoot = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_LEASE_ROOT"), config.BrowserLeaseRoot)
+	config.BrowserBrokerRoot = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_BROKER_ROOT"), config.BrowserBrokerRoot)
 	if value := strings.TrimSpace(envValue(getenv, "OPENLINKER_CLAUDE_ALLOWED_TOOLS")); value != "" {
 		config.AllowedTools = splitNonEmpty(value)
 	}

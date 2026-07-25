@@ -31,6 +31,7 @@ type Status struct {
 	ProviderAuthSource string `json:"provider_auth_source,omitempty"`
 	ConfigPath         string `json:"config_path,omitempty"`
 	StateDir           string `json:"state_dir,omitempty"`
+	ExecutionProfile   string `json:"execution_profile,omitempty"`
 	Message            string `json:"message,omitempty"`
 	UpdatedAt          string `json:"updated_at"`
 }
@@ -128,6 +129,7 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 				Transport: resolved.config.Transport, AgentTokenSource: resolved.agentTokenSource,
 				ProviderAuthSource: resolved.providerAuthSource, ConfigPath: resolved.configPath,
 				StateDir: resolved.stateDir, UpdatedAt: nowText(),
+				ExecutionProfile: resolved.config.ExecutionProfile,
 			})
 			readyOnce.Do(func() { close(ready) })
 		},
@@ -145,6 +147,7 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 		NodeID: resolved.nodeID, Workspace: resolved.config.Workspace, Transport: resolved.config.Transport,
 		AgentTokenSource: resolved.agentTokenSource, ProviderAuthSource: resolved.providerAuthSource,
 		ConfigPath: resolved.configPath, StateDir: resolved.stateDir, UpdatedAt: nowText(),
+		ExecutionProfile: resolved.config.ExecutionProfile,
 	}
 	service.persistStatusLocked()
 	service.mu.Unlock()
@@ -257,8 +260,14 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	if config.Transport == "" {
 		config.Transport = "auto"
 	}
+	if config.ExecutionProfile == "" {
+		config.ExecutionProfile = "standard"
+	}
 	if config.Capacity > 1024 {
 		return resolvedRuntime{}, errors.New("OPENLINKER_AGENT_CAPACITY must not exceed 1024")
+	}
+	if err := validateExecutionProfile(config); err != nil {
+		return resolvedRuntime{}, err
 	}
 	if err := validateProviderPolicy(config); err != nil {
 		return resolvedRuntime{}, err
@@ -316,6 +325,16 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	if _, err := exec.LookPath(providerBin); err != nil {
 		return resolvedRuntime{}, fmt.Errorf("%s provider CLI was not found: %w", config.Provider, err)
 	}
+	browserPluginBin := ""
+	if config.ExecutionProfile == "browser" {
+		if _, err := readPrivateSecret(config.BrowserCredentialFile); err != nil {
+			return resolvedRuntime{}, fmt.Errorf("Browser channel credential: %w", err)
+		}
+		browserPluginBin = firstNonEmpty(config.BrowserPluginBin, currentExecutable())
+		if _, err := exec.LookPath(browserPluginBin); err != nil {
+			return resolvedRuntime{}, fmt.Errorf("Browser plugin CLI was not found: %w", err)
+		}
+	}
 	environment := removeEnvironmentKeys(os.Environ(),
 		"OPENLINKER_AGENT_TOKEN", "OPENLINKER_AGENT_TOKEN_FILE", "OPENLINKER_USER_TOKEN",
 		"CODEX_API_KEY", "CODEX_API_KEY_FILE", "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_FILE")
@@ -330,6 +349,12 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 		SessionReuse: config.SessionReuse,
 		SessionStore: filepath.Join(dir, "session-map", config.Provider+".json"),
 		WebSearch:    config.WebSearch, Env: environment,
+		ExecutionProfile:      config.ExecutionProfile,
+		BrowserPluginBin:      browserPluginBin,
+		BrowserSocket:         config.BrowserSocket,
+		BrowserCredentialFile: config.BrowserCredentialFile,
+		BrowserLeaseRoot:      config.BrowserLeaseRoot,
+		BrowserBrokerRoot:     config.BrowserBrokerRoot,
 	})
 	if err != nil {
 		return resolvedRuntime{}, err

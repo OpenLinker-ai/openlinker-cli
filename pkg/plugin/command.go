@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserplugin"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/pluginbridge"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 	"github.com/spf13/cobra"
@@ -16,6 +17,41 @@ import (
 func New(ioStreams shared.IO, options *shared.GlobalOptions, agentService *agent.Service) *cobra.Command {
 	command := &cobra.Command{Use: "plugin", Short: "Run OpenLinker native plugin services"}
 	command.AddCommand(newServeCommand(ioStreams, options, agentService))
+	command.AddCommand(newBrowserServeCommand(ioStreams))
+	command.AddCommand(newBrowserProxyCommand(ioStreams))
+	return command
+}
+
+func newBrowserProxyCommand(ioStreams shared.IO) *cobra.Command {
+	var host string
+	command := &cobra.Command{
+		Use:    "browser-proxy",
+		Short:  "Proxy stdio to the trusted Browser tool broker",
+		Hidden: true,
+		RunE: func(command *cobra.Command, args []string) error {
+			host = strings.ToLower(strings.TrimSpace(host))
+			if host != "codex" && host != "claude" {
+				return errors.New("plugin browser-proxy requires --host codex or --host claude")
+			}
+			getenv := browserToolGetenv(ioStreams.Getenv)
+			for _, name := range []string{
+				"CODEX_API_KEY",
+				"ANTHROPIC_API_KEY",
+				"OPENLINKER_AGENT_TOKEN",
+				"OPENLINKER_USER_TOKEN",
+			} {
+				_ = os.Unsetenv(name)
+			}
+			ctx, stop := signal.NotifyContext(
+				command.Context(),
+				os.Interrupt,
+				syscall.SIGTERM,
+			)
+			defer stop()
+			return runBrowserProxy(ctx, ioStreams.Stdin, ioStreams.Stdout, getenv)
+		},
+	}
+	command.Flags().StringVar(&host, "host", "", "native host: codex or claude")
 	return command
 }
 
@@ -37,4 +73,54 @@ func newServeCommand(ioStreams shared.IO, options *shared.GlobalOptions, agentSe
 	}
 	command.Flags().StringVar(&host, "host", "", "native host: codex or claude")
 	return command
+}
+
+func newBrowserServeCommand(ioStreams shared.IO) *cobra.Command {
+	var host string
+	command := &cobra.Command{
+		Use:   "browser-serve",
+		Short: "Serve the client-owned Browser tool over stdio",
+		RunE: func(command *cobra.Command, args []string) error {
+			host = strings.ToLower(strings.TrimSpace(host))
+			if host != "codex" && host != "claude" {
+				return errors.New("plugin browser-serve requires --host codex or --host claude")
+			}
+			ioStreams.Getenv = browserToolGetenv(ioStreams.Getenv)
+			for _, name := range []string{
+				"CODEX_API_KEY",
+				"ANTHROPIC_API_KEY",
+				"OPENLINKER_AGENT_TOKEN",
+				"OPENLINKER_USER_TOKEN",
+			} {
+				_ = os.Unsetenv(name)
+			}
+			ctx, stop := signal.NotifyContext(
+				command.Context(),
+				os.Interrupt,
+				syscall.SIGTERM,
+			)
+			defer stop()
+			server := &browserplugin.Server{Host: host, IO: ioStreams}
+			return server.Serve(ctx, ioStreams.Stdin, ioStreams.Stdout)
+		},
+	}
+	command.Flags().StringVar(&host, "host", "", "native host: codex or claude")
+	return command
+}
+
+func browserToolGetenv(getenv func(string) string) func(string) string {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	return func(name string) string {
+		switch name {
+		case "CODEX_API_KEY",
+			"ANTHROPIC_API_KEY",
+			"OPENLINKER_AGENT_TOKEN",
+			"OPENLINKER_USER_TOKEN":
+			return ""
+		default:
+			return getenv(name)
+		}
+	}
 }

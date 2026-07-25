@@ -29,6 +29,7 @@ func New(ioStreams shared.IO, service *Service) *cobra.Command {
 
 func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	var provider, agentID, workspace, platformURL, state, bin, model, transport, codexBaseURL, sandbox, approval, permission string
+	var executionProfile, browserPluginBin, browserSocket, browserCredentialFile, browserLeaseRoot, browserBrokerRoot string
 	var capacity int64
 	var timeout int
 	var webSearch, sessionReuse, enabled bool
@@ -98,6 +99,36 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 			if command.Flags().Changed("allowed-tool") {
 				config.AllowedTools = append([]string(nil), allowedTools...)
 			}
+			if command.Flags().Changed("execution-profile") {
+				config.ExecutionProfile = strings.ToLower(strings.TrimSpace(executionProfile))
+			}
+			if command.Flags().Changed("browser-plugin-bin") {
+				config.BrowserPluginBin = strings.TrimSpace(browserPluginBin)
+			}
+			if command.Flags().Changed("browser-socket") {
+				config.BrowserSocket, err = filepath.Abs(strings.TrimSpace(browserSocket))
+				if err != nil {
+					return err
+				}
+			}
+			if command.Flags().Changed("browser-credential-file") {
+				config.BrowserCredentialFile, err = filepath.Abs(strings.TrimSpace(browserCredentialFile))
+				if err != nil {
+					return err
+				}
+			}
+			if command.Flags().Changed("browser-lease-root") {
+				config.BrowserLeaseRoot, err = filepath.Abs(strings.TrimSpace(browserLeaseRoot))
+				if err != nil {
+					return err
+				}
+			}
+			if command.Flags().Changed("browser-broker-root") {
+				config.BrowserBrokerRoot, err = filepath.Abs(strings.TrimSpace(browserBrokerRoot))
+				if err != nil {
+					return err
+				}
+			}
 			if command.Flags().Changed("enabled") {
 				config.Enabled = enabled
 			}
@@ -131,6 +162,12 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().StringVar(&approval, "codex-approval", "never", "Codex approval mode")
 	command.Flags().StringVar(&permission, "claude-permission", "dontAsk", "Claude permission mode")
 	command.Flags().Var(&allowedTools, "allowed-tool", "Claude allowed tool; repeatable")
+	command.Flags().StringVar(&executionProfile, "execution-profile", "standard", "Agent execution profile: standard or browser")
+	command.Flags().StringVar(&browserPluginBin, "browser-plugin-bin", "", "OpenLinker CLI binary used for the Browser-only tool server")
+	command.Flags().StringVar(&browserSocket, "browser-socket", "", "private Browser Runtime Unix socket")
+	command.Flags().StringVar(&browserCredentialFile, "browser-credential-file", "", "owner-only Browser channel credential file")
+	command.Flags().StringVar(&browserLeaseRoot, "browser-lease-root", "", "private shared Browser lease directory")
+	command.Flags().StringVar(&browserBrokerRoot, "browser-broker-root", "", "private local Browser tool broker directory")
 	command.Flags().BoolVar(&enabled, "enabled", false, "persist Agent mode enable state")
 	return command
 }
@@ -219,6 +256,7 @@ func Diagnose(getenv func(string) string, providerOverride string) Diagnostic {
 	check("agent_id", validUUID(config.AgentID), "valid", "missing_or_invalid")
 	check("openlinker_url", config.OpenLinkerURL != "", "present", "missing")
 	check("runtime_options", runtimeOptionsErr == nil, "valid", "invalid")
+	check("execution_profile", config.ExecutionProfile == "standard" || config.ExecutionProfile == "browser", config.ExecutionProfile, "invalid")
 	workspaceInfo, workspaceErr := os.Stat(config.Workspace)
 	check("workspace", workspaceErr == nil && workspaceInfo.IsDir(), "directory", "missing_or_invalid")
 	_, tokenSource, tokenErr := resolveSecret(getenv, "OPENLINKER_AGENT_TOKEN", "OPENLINKER_AGENT_TOKEN_FILE", true)
@@ -237,6 +275,12 @@ func Diagnose(getenv func(string) string, providerOverride string) Diagnostic {
 	}
 	state, stateErr := stateDir(config, getenv)
 	check("state_dir", stateErr == nil && state != "", "available", "invalid")
+	if config.ExecutionProfile == "browser" {
+		_, credentialErr := readPrivateSecret(config.BrowserCredentialFile)
+		check("browser_credential", credentialErr == nil, "owner_only_file", "missing_or_invalid")
+		_, pluginErr := exec.LookPath(firstNonEmpty(config.BrowserPluginBin, currentExecutable()))
+		check("browser_plugin", pluginErr == nil, "present", "missing")
+	}
 	result.Checks["runtime_security"] = "token_only"
 	return result
 }
@@ -263,7 +307,45 @@ func validateNonSecretConfig(config Config) error {
 	default:
 		return errors.New("--transport must be auto, websocket/ws, or pull/http")
 	}
+	if err := validateExecutionProfile(config); err != nil {
+		return err
+	}
 	return validateProviderPolicy(config)
+}
+
+func validateExecutionProfile(config Config) error {
+	switch config.ExecutionProfile {
+	case "", "standard":
+		return nil
+	case "browser":
+	default:
+		return errors.New("--execution-profile must be standard or browser")
+	}
+	if config.Capacity != 1 {
+		return errors.New("Browser execution profile requires --capacity 1")
+	}
+	if !config.SessionReuse {
+		return errors.New("Browser execution profile requires --session-reuse")
+	}
+	for label, value := range map[string]string{
+		"--browser-socket":          config.BrowserSocket,
+		"--browser-credential-file": config.BrowserCredentialFile,
+		"--browser-lease-root":      config.BrowserLeaseRoot,
+		"--browser-broker-root":     config.BrowserBrokerRoot,
+	} {
+		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) {
+			return errors.New(label + " must be an absolute path for the Browser execution profile")
+		}
+	}
+	return nil
+}
+
+func currentExecutable() string {
+	value, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return value
 }
 
 func validateCodexBaseURL(value string) error {

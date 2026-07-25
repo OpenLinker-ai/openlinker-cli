@@ -10,6 +10,7 @@ var capabilities = []string{
 	"agent.doctor",
 	"agent.serve",
 	"agent.status",
+	"plugin.browser.serve",
 	"plugin.serve",
 	"agents.card",
 	"agents.get",

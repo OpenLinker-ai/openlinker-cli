@@ -12,21 +12,27 @@ import (
 )
 
 type ProviderConfig struct {
-	Provider      string
-	Bin           string
-	Workspace     string
-	Model         string
-	Sandbox       string
-	Permission    string
-	AllowedTools  []string
-	Timeout       time.Duration
-	SessionReuse  bool
-	SessionStore  string
-	WebSearch     bool
-	CodexApproval string
-	CodexBaseURL  string
-	Env           []string
-	EnvAllowlist  []string
+	Provider              string
+	Bin                   string
+	Workspace             string
+	Model                 string
+	Sandbox               string
+	Permission            string
+	AllowedTools          []string
+	Timeout               time.Duration
+	SessionReuse          bool
+	SessionStore          string
+	WebSearch             bool
+	CodexApproval         string
+	CodexBaseURL          string
+	Env                   []string
+	EnvAllowlist          []string
+	ExecutionProfile      string
+	BrowserPluginBin      string
+	BrowserSocket         string
+	BrowserCredentialFile string
+	BrowserLeaseRoot      string
+	BrowserBrokerRoot     string
 }
 
 type ConversationContext struct {
@@ -51,14 +57,24 @@ type ConversationMessage struct {
 }
 
 type RunContext struct {
-	RunID        string
-	AgentID      string
-	Input        any
-	Metadata     map[string]any
-	A2A          map[string]any
-	Conversation *ConversationContext
-	Emit         func(string, any) error
-	CallAgent    func(context.Context, string, any, openlinker.RuntimeCallOptions) (any, error)
+	RunID             string
+	AgentID           string
+	AttemptDeadlineAt time.Time
+	RunDeadlineAt     time.Time
+	Authority         *openlinker.RuntimeAuthorityContext
+	Input             any
+	Metadata          map[string]any
+	A2A               map[string]any
+	Conversation      *ConversationContext
+	Browser           *BrowserRunContext
+	Emit              func(string, any) error
+	CallAgent         func(context.Context, string, any, openlinker.RuntimeCallOptions) (any, error)
+}
+
+type BrowserRunContext struct {
+	PluginBin  string
+	ToolSocket string
+	Rotate     func() error
 }
 
 type Provider interface {
@@ -76,13 +92,22 @@ func NewHandler(config ProviderConfig) (Handler, error) {
 }
 
 func NewProvider(config ProviderConfig) (Provider, error) {
+	var provider Provider
 	switch strings.ToLower(strings.TrimSpace(config.Provider)) {
 	case "codex":
-		return CodexProvider{Config: config}, nil
+		provider = CodexProvider{Config: config}
 	case "claude":
-		return ClaudeProvider{Config: config}, nil
+		provider = ClaudeProvider{Config: config}
 	default:
 		return nil, fmt.Errorf("provider must be codex or claude")
+	}
+	switch strings.ToLower(strings.TrimSpace(config.ExecutionProfile)) {
+	case "", "standard":
+		return provider, nil
+	case "browser":
+		return newBrowserExecutionProvider(provider, config)
+	default:
+		return nil, fmt.Errorf("execution profile must be standard or browser")
 	}
 }
 
@@ -104,12 +129,15 @@ func (handler Handler) Handle(ctx context.Context, assignment openlinker.Runtime
 		}
 	}
 	run := RunContext{
-		RunID:    assignment.RunID,
-		AgentID:  assignment.AgentID,
-		Input:    assignment.Input,
-		Metadata: metadata,
-		A2A:      mapValue(assignmentMetadata["a2a"]),
-		Emit:     assignment.Emit,
+		RunID:             assignment.RunID,
+		AgentID:           assignment.AgentID,
+		AttemptDeadlineAt: assignment.AttemptDeadlineAt,
+		RunDeadlineAt:     assignment.RunDeadlineAt,
+		Authority:         assignment.Authority,
+		Input:             assignment.Input,
+		Metadata:          metadata,
+		A2A:               mapValue(assignmentMetadata["a2a"]),
+		Emit:              assignment.Emit,
 		CallAgent: func(callCtx context.Context, target string, input any, options openlinker.RuntimeCallOptions) (any, error) {
 			return assignment.CallAgent(callCtx, target, input, options)
 		},

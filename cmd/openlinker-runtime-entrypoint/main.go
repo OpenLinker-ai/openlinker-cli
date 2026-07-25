@@ -41,6 +41,9 @@ func main() {
 	if provider != "codex" && provider != "claude" {
 		fatal("image provider is not fixed to codex or claude")
 	}
+	if err := prepareBrowserMounts(); err != nil {
+		fatal(err.Error())
+	}
 	if err := configure(provider, "/runtime", "/workspace", true); err != nil {
 		fatal(err.Error())
 	}
@@ -147,6 +150,14 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 		"NO_PROXY":                         "",
 		"no_proxy":                         "",
 		providerSecret:                     providerKey,
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OPENLINKER_AGENT_EXECUTION_PROFILE")), "browser") {
+		values["OPENLINKER_AGENT_EXECUTION_PROFILE"] = "browser"
+		values["OPENLINKER_BROWSER_PLUGIN_BIN"] = "/usr/local/bin/openlinker"
+		values["OPENLINKER_BROWSER_SOCKET"] = filepath.Join(officialBrowserControlRoot, "openlinker.browser.sock")
+		values["OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE"] = filepath.Join(officialBrowserControlRoot, "channel-credential")
+		values["OPENLINKER_BROWSER_LEASE_ROOT"] = filepath.Join(officialBrowserControlRoot, "leases")
+		values["OPENLINKER_BROWSER_BROKER_ROOT"] = officialBrowserBrokerRoot
 	}
 	if provider == "codex" {
 		values["OPENLINKER_CODEX_BIN"] = "/usr/local/bin/openlinker-provider-launcher"

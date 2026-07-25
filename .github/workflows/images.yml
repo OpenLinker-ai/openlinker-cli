@@ -4,12 +4,18 @@ on:
   pull_request:
     paths:
       - "Dockerfile.providers"
+      - "Dockerfile.browser"
+      - "browser-engine/**"
       - "deploy/**"
       - "cmd/openlinker-egress-gateway/**"
+      - "cmd/openlinker-browser-runtime/**"
       - "cmd/openlinker-provider-launcher/**"
       - "cmd/openlinker-runtime-entrypoint/**"
       - "pkg/agent/**"
       - "pkg/agentexec/**"
+      - "pkg/browserprotocol/**"
+      - "pkg/browserprofile/**"
+      - "pkg/browserruntime/**"
       - "go.mod"
       - "go.sum"
       - ".github/workflows/images.yml"
@@ -33,10 +39,16 @@ jobs:
         include:
           - target: codex
             image: openlinker-agent-codex
+            dockerfile: Dockerfile.providers
           - target: claude
             image: openlinker-agent-claude
+            dockerfile: Dockerfile.providers
           - target: egress
             image: openlinker-egress-gateway
+            dockerfile: Dockerfile.providers
+          - target: browser
+            image: openlinker-browser-runtime
+            dockerfile: Dockerfile.browser
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v3
@@ -60,7 +72,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.providers
+          file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.ref_type == 'tag' }}

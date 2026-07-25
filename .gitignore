@@ -8,6 +8,8 @@ bin/
 /openlinker
 coverage.out
 *.cover.out
+browser-engine/dist/
+browser-engine/node_modules/
 example/agent-skill/skills/openlinker-cli/scripts/openlinker
 
 # Editor / OS

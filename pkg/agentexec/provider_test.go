@@ -22,7 +22,9 @@ printf '%s\n' "$*" > "$TEST_LOG.args"
 cat > "$TEST_LOG.prompt"
 printf '%s\n' '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}'
 printf '%s\n' '{"type":"item.started","item":{"id":"item-1","type":"web_search","query":"private query must not be emitted","status":"in_progress"}}'
-sleep 1
+while [ ! -f "$TEST_LOG.release" ]; do
+  sleep 0.05
+done
 printf '%s\n' '{"type":"item.completed","item":{"id":"item-1","type":"web_search","query":"private query must not be emitted","status":"completed"}}'
 printf '%s\n' '{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"provider answer"}}'
 `
@@ -32,7 +34,7 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item-2","type":"agent_mess
 	provider := CodexProvider{Config: ProviderConfig{
 		Provider: "codex", Bin: script, Workspace: dir, Sandbox: "read-only",
 		WebSearch: true, SessionReuse: true, SessionStore: filepath.Join(dir, "sessions.json"),
-		Timeout: 5 * time.Second, Env: append(os.Environ(), "TEST_LOG="+logPath), EnvAllowlist: []string{"TEST_LOG"},
+		Timeout: 15 * time.Second, Env: append(os.Environ(), "TEST_LOG="+logPath), EnvAllowlist: []string{"TEST_LOG"},
 	}}
 	progress := make(chan map[string]any, 8)
 	run := RunContext{
@@ -64,8 +66,11 @@ printf '%s\n' '{"type":"item.completed","item":{"id":"item-2","type":"agent_mess
 		}
 	case result := <-completed:
 		t.Fatalf("provider completed before streaming progress: result=%#v err=%v", result.result, result.err)
-	case <-time.After(750 * time.Millisecond):
+	case <-time.After(10 * time.Second):
 		t.Fatal("provider did not stream progress before exit")
+	}
+	if err := os.WriteFile(logPath+".release", []byte("continue"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	result := <-completed
@@ -284,6 +289,9 @@ func TestHandlerTrustsOnlyCoreConversation(t *testing.T) {
 	handler := Handler{Provider: provider}
 	assignment := openlinker.RuntimeContext{
 		RunID: "run-1", AgentID: "agent-1", Input: map[string]any{"text": "hello"},
+		Authority: &openlinker.RuntimeAuthorityContext{
+			PrincipalScopeID: "principal-1",
+		},
 		Metadata: openlinker.RuntimeJSONMap{"conversation": map[string]any{
 			"id": "spoofed", "session_key": "spoofed", "current_run_id": "run-1", "source": "caller",
 		}},
@@ -293,6 +301,9 @@ func TestHandlerTrustsOnlyCoreConversation(t *testing.T) {
 	}
 	if provider.run.Conversation != nil {
 		t.Fatalf("caller conversation was trusted: %#v", provider.run.Conversation)
+	}
+	if provider.run.Authority != assignment.Authority {
+		t.Fatalf("Runtime authority was not propagated: %#v", provider.run.Authority)
 	}
 	if _, exists := provider.run.Metadata["conversation"]; exists {
 		t.Fatalf("conversation control metadata leaked into provider task metadata: %#v", provider.run.Metadata)
