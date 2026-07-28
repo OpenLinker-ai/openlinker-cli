@@ -1,6 +1,11 @@
 package browserprotocol
 
+import "github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol/internal/browsercontract"
+
 func (action Action) Validate() *Failure {
+	if failure := action.Observation.Validate(); failure != nil {
+		return failure
+	}
 	switch action.Kind {
 	case ActionNavigate:
 		if failure := action.requireOnly("url"); failure != nil {
@@ -44,16 +49,11 @@ func (action Action) Validate() *Failure {
 		}
 		return nil
 	case ActionSelect:
-		if failure := action.requireOnly("x", "y", "value"); failure != nil {
-			return failure
-		}
-		if failure := validateCoordinates(action.X, action.Y); failure != nil {
-			return failure
-		}
-		if action.Value == "" || len(action.Value) > 2048 {
-			return NewFailure(ErrorProtocolInvalid, "select value is empty or too large", false)
-		}
-		return nil
+		return NewFailure(
+			ErrorActionRejected,
+			"Phase 1 does not allow select controls",
+			false,
+		)
 	case ActionWait:
 		if failure := action.requireOnly("duration_ms"); failure != nil {
 			return failure
@@ -62,8 +62,30 @@ func (action Action) Validate() *Failure {
 			return NewFailure(ErrorProtocolInvalid, "wait duration must be between 1 and 5000 milliseconds", false)
 		}
 		return nil
-	case ActionBack, ActionForward, ActionScreenshot, ActionCheckpoint, ActionClose:
+	case ActionBack, ActionForward, ActionScreenshot, ActionCheckpoint, ActionClose,
+		ActionPreflight:
 		return action.requireOnly()
+	case ActionBatch:
+		if failure := action.requireOnly("actions"); failure != nil {
+			return failure
+		}
+		if len(action.Actions) < 2 || len(action.Actions) > 8 {
+			return NewFailure(ErrorProtocolInvalid, "browser batch requires two to eight actions", false)
+		}
+		for _, nested := range action.Actions {
+			if nested.Observation != ObservationDefault {
+				return NewFailure(ErrorProtocolInvalid, "browser batch controls the final observation", false)
+			}
+			switch nested.Kind {
+			case ActionScroll, ActionWait, ActionScreenshot:
+			default:
+				return NewFailure(ErrorProtocolInvalid, "browser batch contains a disallowed action", false)
+			}
+			if failure := nested.Validate(); failure != nil {
+				return failure
+			}
+		}
+		return nil
 	default:
 		return NewFailure(ErrorProtocolInvalid, "browser action is not allowed", false)
 	}
@@ -106,6 +128,7 @@ func (action Action) presentFields() map[string]bool {
 		"key":         action.Key != "",
 		"value":       action.Value != "",
 		"duration_ms": action.DurationMS != nil,
+		"actions":     len(action.Actions) != 0,
 	}
 }
 
@@ -113,7 +136,9 @@ func validateCoordinates(x, y *int) *Failure {
 	if x == nil || y == nil {
 		return NewFailure(ErrorProtocolInvalid, "browser action requires coordinates", false)
 	}
-	if *x < 0 || *y < 0 || *x > 32768 || *y > 32768 {
+	if *x < 0 || *y < 0 ||
+		*x >= browsercontract.ViewportWidth ||
+		*y >= browsercontract.ViewportHeight {
 		return NewFailure(ErrorProtocolInvalid, "browser action coordinates are out of range", false)
 	}
 	return nil
@@ -122,7 +147,7 @@ func validateCoordinates(x, y *int) *Failure {
 func allowedKey(value string) bool {
 	switch value {
 	case "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-		"PageUp", "PageDown", "Home", "End", "Backspace", "Delete", "Space":
+		"PageUp", "PageDown", "Home", "End", "Backspace", "Delete":
 		return true
 	default:
 		return false

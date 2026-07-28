@@ -207,7 +207,14 @@ func (client *Client) Execute(
 				false,
 			)
 		}
-		if failure := response.Observation.Validate(); failure != nil {
+		var failure *browserprotocol.Failure
+		if action.Kind == browserprotocol.ActionClose &&
+			strings.HasPrefix(response.Observation.PageStateID, "closed-") {
+			failure = response.Observation.ValidateClosed()
+		} else {
+			failure = response.Observation.ValidateEngine()
+		}
+		if failure != nil {
 			return browserprotocol.Observation{}, failure
 		}
 		return *response.Observation, nil
@@ -227,6 +234,100 @@ func (client *Client) Execute(
 		return browserprotocol.Observation{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorOutputInvalid,
 			"browser response status is invalid",
+			false,
+		)
+	}
+}
+
+func (client *Client) ExecuteViewer(
+	ctx context.Context,
+	operation browserprotocol.ViewerOperation,
+	input *browserprotocol.ViewerInput,
+) (*browserprotocol.ViewerFrame, *browserprotocol.Failure) {
+	if client == nil {
+		return nil, browserprotocol.NewFailure(
+			browserprotocol.ErrorRuntimeUnavailable,
+			"browser Viewer client is not configured",
+			false,
+		)
+	}
+	now := client.now().UTC()
+	if failure := client.lease.Validate(now); failure != nil {
+		return nil, failure
+	}
+	deadline := now.Add(client.timeout)
+	if client.lease.ExpiresAt.Before(deadline) {
+		deadline = client.lease.ExpiresAt.UTC()
+	}
+	if contextDeadline, ok := ctx.Deadline(); ok &&
+		contextDeadline.Before(deadline) {
+		deadline = contextDeadline.UTC()
+	}
+	requestID, err := newRequestID()
+	if err != nil {
+		return nil, browserprotocol.NewFailure(
+			browserprotocol.ErrorInternal,
+			"generate browser Viewer request identifier",
+			true,
+		)
+	}
+	request := browserprotocol.ViewerRequest{
+		ContractID:        browserprotocol.ViewerContractID,
+		ChannelCredential: client.channelCredential,
+		RequestID:         requestID,
+		Deadline:          deadline,
+		Identity:          client.lease.Identity,
+		Operation:         operation,
+		Input:             input,
+	}
+	if failure := request.Validate(now); failure != nil {
+		return nil, failure
+	}
+	response, failure := exchangeViewer(ctx, client.socketPath, request, deadline)
+	if failure != nil {
+		return nil, failure
+	}
+	if response.ContractID != browserprotocol.ViewerContractID ||
+		response.RequestID != requestID {
+		return nil, browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"browser Viewer response identity is invalid",
+			false,
+		)
+	}
+	switch response.Status {
+	case "ok":
+		if response.Error != nil ||
+			(operation == browserprotocol.ViewerOperationFrame) !=
+				(response.Frame != nil) {
+			return nil, browserprotocol.NewFailure(
+				browserprotocol.ErrorOutputInvalid,
+				"browser Viewer success response is invalid",
+				false,
+			)
+		}
+		if response.Frame != nil {
+			if validationFailure := response.Frame.Validate(); validationFailure != nil {
+				return nil, validationFailure
+			}
+		}
+		return response.Frame, nil
+	case "error":
+		if response.Error == nil || response.Frame != nil {
+			return nil, browserprotocol.NewFailure(
+				browserprotocol.ErrorOutputInvalid,
+				"browser Viewer error response is invalid",
+				false,
+			)
+		}
+		if validationFailure := browserprotocol.ValidateFailure(response.Error); validationFailure != nil {
+			return nil, validationFailure
+		}
+		return nil, response.Error
+	default:
+		return nil, browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"browser Viewer response status is invalid",
 			false,
 		)
 	}

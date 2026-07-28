@@ -9,15 +9,26 @@ import (
 const (
 	ContractID = "openlinker.browser.v1"
 
-	MaxRequestBytes    = 256 << 10
-	MaxResponseBytes   = 8 << 20
-	MaxScreenshotBytes = 4 << 20
-	MaxAXTreeBytes     = 1 << 20
-	MaxDOMDiffBytes    = 1 << 20
-	MaxActionDeadline  = 60 * time.Second
+	MaxRequestBytes     = 256 << 10
+	MaxResponseBytes    = 8 << 20
+	MaxScreenshotBytes  = 4 << 20
+	MaxAXTreeBytes      = 1 << 20
+	MaxDOMDiffBytes     = 1 << 20
+	MaxViewerFrameBytes = 1 << 20
+	MaxActionDeadline   = 60 * time.Second
 )
 
 type ActionKind string
+
+type ObservationMode string
+
+type Controller string
+
+const (
+	ControllerAgent Controller = "agent"
+	ControllerNone  Controller = "none"
+	ControllerHuman Controller = "human"
+)
 
 const (
 	ActionNavigate      ActionKind = "navigate"
@@ -32,43 +43,82 @@ const (
 	ActionScreenshot    ActionKind = "screenshot"
 	ActionCheckpoint    ActionKind = "checkpoint"
 	ActionClose         ActionKind = "close"
+	ActionPreflight     ActionKind = "preflight"
+	ActionBatch         ActionKind = "batch"
+
+	ObservationDefault    ObservationMode = ""
+	ObservationSemantic   ObservationMode = "semantic"
+	ObservationScreenshot ObservationMode = "screenshot"
+	ObservationBoth       ObservationMode = "both"
+	ObservationNone       ObservationMode = "none"
 )
 
 type ErrorCode string
 
 const (
-	ErrorProtocolInvalid         ErrorCode = "BROWSER_PROTOCOL_INVALID"
-	ErrorRequestTooLarge         ErrorCode = "BROWSER_REQUEST_TOO_LARGE"
-	ErrorOutputTooLarge          ErrorCode = "BROWSER_OUTPUT_TOO_LARGE"
-	ErrorUnauthorized            ErrorCode = "BROWSER_UNAUTHORIZED"
-	ErrorIdentityMismatch        ErrorCode = "BROWSER_IDENTITY_MISMATCH"
-	ErrorStaleControlEpoch       ErrorCode = "BROWSER_STALE_CONTROL_EPOCH"
-	ErrorRequestReplayed         ErrorCode = "BROWSER_REQUEST_REPLAYED"
-	ErrorDeadlineExceeded        ErrorCode = "BROWSER_DEADLINE_EXCEEDED"
-	ErrorRuntimeUnavailable      ErrorCode = "BROWSER_RUNTIME_UNAVAILABLE"
-	ErrorEgressUnavailable       ErrorCode = "BROWSER_EGRESS_UNAVAILABLE"
-	ErrorTargetBlocked           ErrorCode = "BROWSER_TARGET_BLOCKED"
-	ErrorProfileLocked           ErrorCode = "BROWSER_PROFILE_LOCKED"
-	ErrorProfileCorrupt          ErrorCode = "BROWSER_PROFILE_CORRUPT"
-	ErrorConversationRecovery    ErrorCode = "BROWSER_CONVERSATION_RECOVERY_FAILED"
-	ErrorUserActionRequired      ErrorCode = "BROWSER_USER_ACTION_REQUIRED"
-	ErrorHighImpactActionBlocked ErrorCode = "BROWSER_HIGH_IMPACT_ACTION_BLOCKED"
-	ErrorViewerUnavailable       ErrorCode = "BROWSER_VIEWER_UNAVAILABLE"
-	ErrorActionLimitExceeded     ErrorCode = "BROWSER_ACTION_LIMIT_EXCEEDED"
-	ErrorCanceled                ErrorCode = "BROWSER_CANCELED"
-	ErrorActionRejected          ErrorCode = "BROWSER_ACTION_REJECTED"
-	ErrorOutputInvalid           ErrorCode = "BROWSER_OUTPUT_INVALID"
-	ErrorInternal                ErrorCode = "BROWSER_INTERNAL"
+	ErrorProtocolInvalid            ErrorCode = "BROWSER_PROTOCOL_INVALID"
+	ErrorRequestTooLarge            ErrorCode = "BROWSER_REQUEST_TOO_LARGE"
+	ErrorOutputTooLarge             ErrorCode = "BROWSER_OUTPUT_TOO_LARGE"
+	ErrorUnauthorized               ErrorCode = "BROWSER_UNAUTHORIZED"
+	ErrorIdentityMismatch           ErrorCode = "BROWSER_IDENTITY_MISMATCH"
+	ErrorStaleControlEpoch          ErrorCode = "BROWSER_STALE_CONTROL_EPOCH"
+	ErrorRequestReplayed            ErrorCode = "BROWSER_REQUEST_REPLAYED"
+	ErrorDeadlineExceeded           ErrorCode = "BROWSER_DEADLINE_EXCEEDED"
+	ErrorRuntimeUnavailable         ErrorCode = "BROWSER_RUNTIME_UNAVAILABLE"
+	ErrorEngineUnavailable          ErrorCode = "BROWSER_ENGINE_UNAVAILABLE"
+	ErrorEgressUnavailable          ErrorCode = "BROWSER_EGRESS_UNAVAILABLE"
+	ErrorTargetBlocked              ErrorCode = "BROWSER_TARGET_BLOCKED"
+	ErrorProfileLocked              ErrorCode = "BROWSER_PROFILE_LOCKED"
+	ErrorProfileCorrupt             ErrorCode = "BROWSER_PROFILE_CORRUPT"
+	ErrorProfileEnvironmentMismatch ErrorCode = "BROWSER_PROFILE_ENVIRONMENT_MISMATCH"
+	ErrorProfileEngineDowngrade     ErrorCode = "BROWSER_PROFILE_ENGINE_DOWNGRADE_UNSUPPORTED"
+	ErrorProfileEngineUpgrade       ErrorCode = "BROWSER_PROFILE_ENGINE_UPGRADE_FAILED"
+	ErrorUserActionRequired         ErrorCode = "BROWSER_USER_ACTION_REQUIRED"
+	ErrorHighImpactActionBlocked    ErrorCode = "BROWSER_HIGH_IMPACT_ACTION_BLOCKED"
+	ErrorAccessDenied               ErrorCode = "BROWSER_ACCESS_DENIED"
+	ErrorRateLimited                ErrorCode = "BROWSER_RATE_LIMITED"
+	ErrorChallengeSuspected         ErrorCode = "BROWSER_CHALLENGE_SUSPECTED"
+	ErrorChallengeRequired          ErrorCode = "BROWSER_CHALLENGE_REQUIRED"
+	ErrorOriginRateLimited          ErrorCode = "BROWSER_ORIGIN_RATE_LIMITED"
+	ErrorViewerUnavailable          ErrorCode = "BROWSER_VIEWER_UNAVAILABLE"
+	ErrorActionLimitExceeded        ErrorCode = "BROWSER_ACTION_LIMIT_EXCEEDED"
+	ErrorClickRetryExhausted        ErrorCode = "BROWSER_CLICK_RETRY_EXHAUSTED"
+	ErrorCloseRetryExhausted        ErrorCode = "BROWSER_CLOSE_RETRY_EXHAUSTED"
+	ErrorCanceled                   ErrorCode = "BROWSER_CANCELED"
+	ErrorActionRejected             ErrorCode = "BROWSER_ACTION_REJECTED"
+	ErrorOutputInvalid              ErrorCode = "BROWSER_OUTPUT_INVALID"
+	ErrorInternal                   ErrorCode = "BROWSER_INTERNAL"
+)
+
+const ChallengeClassifierRulesVersion = "openlinker.browser.challenge-rules.v1"
+
+type ClickEffect string
+
+const (
+	ClickEffectActivated ClickEffect = "activated"
+	ClickEffectFocused   ClickEffect = "focused"
+)
+
+type TargetCategory string
+
+const (
+	TargetCategoryLink      TargetCategory = "link"
+	TargetCategoryTextInput TargetCategory = "text_input"
+	TargetCategoryButton    TargetCategory = "button"
+	TargetCategoryCustom    TargetCategory = "custom"
+	TargetCategoryNone      TargetCategory = "none"
+	TargetCategoryOther     TargetCategory = "other"
 )
 
 type Identity struct {
-	RunID            string `json:"run_id"`
-	AgentID          string `json:"agent_id"`
-	PrincipalScopeID string `json:"principal_scope_id"`
-	BrowserSessionID string `json:"browser_session_id"`
-	SessionEpoch     uint64 `json:"session_epoch"`
-	AttachmentID     string `json:"attachment_id"`
-	ControlEpoch     uint64 `json:"control_epoch"`
+	RunID            string     `json:"run_id"`
+	AgentID          string     `json:"agent_id"`
+	PrincipalScopeID string     `json:"principal_scope_id"`
+	BrowserSessionID string     `json:"browser_session_id"`
+	SessionEpoch     uint64     `json:"session_epoch"`
+	AttachmentID     string     `json:"attachment_id"`
+	ControlEpoch     uint64     `json:"control_epoch"`
+	Controller       Controller `json:"controller"`
 }
 
 type Request struct {
@@ -81,36 +131,88 @@ type Request struct {
 }
 
 type Action struct {
-	Kind       ActionKind `json:"kind"`
-	URL        string     `json:"url,omitempty"`
-	X          *int       `json:"x,omitempty"`
-	Y          *int       `json:"y,omitempty"`
-	DeltaX     *int       `json:"delta_x,omitempty"`
-	DeltaY     *int       `json:"delta_y,omitempty"`
-	Text       string     `json:"text,omitempty"`
-	Key        string     `json:"key,omitempty"`
-	Value      string     `json:"value,omitempty"`
-	DurationMS *int       `json:"duration_ms,omitempty"`
+	Kind        ActionKind      `json:"kind"`
+	Observation ObservationMode `json:"observation,omitempty"`
+	URL         string          `json:"url,omitempty"`
+	X           *int            `json:"x,omitempty"`
+	Y           *int            `json:"y,omitempty"`
+	DeltaX      *int            `json:"delta_x,omitempty"`
+	DeltaY      *int            `json:"delta_y,omitempty"`
+	Text        string          `json:"text,omitempty"`
+	Key         string          `json:"key,omitempty"`
+	Value       string          `json:"value,omitempty"`
+	DurationMS  *int            `json:"duration_ms,omitempty"`
+	Actions     []Action        `json:"actions,omitempty"`
 }
 
 type Screenshot struct {
 	MIMEType string `json:"mime_type"`
 	Data     []byte `json:"data"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+type Viewport struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+type EnvironmentEvidence struct {
+	BrowserEngine       string `json:"browser_engine"`
+	BrowserDistribution string `json:"browser_distribution"`
+	BrowserVersion      string `json:"browser_version"`
+	BrowserMajorVersion int    `json:"browser_major_version"`
+	BrowserLocale       string `json:"browser_locale"`
+	BrowserTimezone     string `json:"browser_timezone"`
+	FontContractVersion string `json:"font_contract_version"`
+	FontManifestSHA256  string `json:"font_manifest_sha256"`
 }
 
 type Observation struct {
-	PageStateID string          `json:"page_state_id"`
-	Screenshot  *Screenshot     `json:"screenshot,omitempty"`
-	AXTree      json.RawMessage `json:"ax_tree,omitempty"`
-	DOMDiff     json.RawMessage `json:"dom_diff,omitempty"`
-	Origin      string          `json:"origin,omitempty"`
-	Title       string          `json:"title,omitempty"`
+	PageStateID                 string               `json:"page_state_id"`
+	Viewport                    *Viewport            `json:"viewport,omitempty"`
+	NavigationGeneration        uint64               `json:"navigation_generation,omitempty"`
+	Screenshot                  *Screenshot          `json:"screenshot,omitempty"`
+	AXTree                      json.RawMessage      `json:"ax_tree,omitempty"`
+	DOMDiff                     json.RawMessage      `json:"dom_diff,omitempty"`
+	AXTreeTimedOut              bool                 `json:"ax_tree_timed_out,omitempty"`
+	DOMDiffTimedOut             bool                 `json:"dom_diff_timed_out,omitempty"`
+	Origin                      string               `json:"origin,omitempty"`
+	Title                       string               `json:"title,omitempty"`
+	ClickEffect                 ClickEffect          `json:"click_effect,omitempty"`
+	TargetCategory              TargetCategory       `json:"target_category,omitempty"`
+	Environment                 *EnvironmentEvidence `json:"environment,omitempty"`
+	SiteOutcome                 ErrorCode            `json:"site_outcome,omitempty"`
+	ClassifierRulesVersion      string               `json:"classifier_rules_version,omitempty"`
+	ChallengeReleaseUnavailable bool                 `json:"challenge_release_unavailable,omitempty"`
+
+	// EngineInstanceID is Runtime-owned process metadata. It never crosses the
+	// Browser wire contract and cannot be supplied by Chromium or page content.
+	EngineInstanceID uint64 `json:"-"`
 }
 
 type Failure struct {
-	Code        ErrorCode `json:"code"`
-	Message     string    `json:"message"`
-	Recoverable bool      `json:"recoverable"`
+	Code                                    ErrorCode      `json:"code"`
+	Message                                 string         `json:"message"`
+	Recoverable                             bool           `json:"recoverable"`
+	ActionIndex                             *int           `json:"action_index,omitempty"`
+	TargetCategory                          TargetCategory `json:"target_category,omitempty"`
+	PageStateID                             string         `json:"page_state_id,omitempty"`
+	NavigationGeneration                    uint64         `json:"navigation_generation,omitempty"`
+	BlockedClickNavigationAttemptsRemaining *int           `json:"blocked_click_navigation_attempts_remaining,omitempty"`
+	BlockedClickRunAttemptsRemaining        *int           `json:"blocked_click_run_attempts_remaining,omitempty"`
+	SiteOutcome                             ErrorCode      `json:"site_outcome,omitempty"`
+	RetryAfterMS                            *int           `json:"retry_after_ms,omitempty"`
+	ClassifierRulesVersion                  string         `json:"classifier_rules_version,omitempty"`
+	ConsecutiveAccessDenials                *int           `json:"consecutive_access_denials,omitempty"`
+	OriginBlockedForAttachment              bool           `json:"origin_blocked_for_attachment,omitempty"`
+	ChallengeReleaseUnavailable             bool           `json:"challenge_release_unavailable,omitempty"`
+	HumanControlAvailable                   bool           `json:"human_control_available,omitempty"`
+
+	// EngineInstanceID is populated by the trusted Go ProcessEngine after it
+	// decodes an Engine response. It is deliberately excluded from JSON.
+	EngineInstanceID   uint64 `json:"-"`
+	EngineProcessReset bool   `json:"-"`
 }
 
 func (failure *Failure) Error() string {

@@ -106,6 +106,7 @@ func writeClientConfig(
 		SessionEpoch:     7,
 		AttachmentID:     "44444444-4444-4444-8444-444444444444",
 		ControlEpoch:     9,
+		Controller:       browserprotocol.ControllerAgent,
 	}
 	lease := Lease{
 		ContractID: LeaseContractID,

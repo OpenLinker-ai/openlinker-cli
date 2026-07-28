@@ -28,15 +28,26 @@ type Executor interface {
 }
 
 type Server struct {
-	Host          string
-	IO            shared.IO
-	ClientFactory func() (Executor, error)
+	Host             string
+	IO               shared.IO
+	ClientFactory    func() (Executor, error)
+	EvidenceSupplier func() (EvidenceSnapshot, error)
 
-	clientMu sync.Mutex
-	client   Executor
-	actionMu sync.Mutex
-	stateMu  sync.RWMutex
-	closed   bool
+	clientMu        sync.Mutex
+	client          Executor
+	actionMu        sync.Mutex
+	stateMu         sync.RWMutex
+	closed          bool
+	evidenceMu      sync.Mutex
+	evidenceKey     string
+	evidenceEmitted bool
+}
+
+type EvidenceSnapshot struct {
+	Environment      browserprotocol.EnvironmentEvidence
+	BrowserSessionID string
+	SessionEpoch     uint64
+	ControlEpoch     uint64
 }
 
 type rpcRequest struct {
@@ -86,8 +97,9 @@ type toolDefinition struct {
 }
 
 type toolArguments struct {
-	Operation string                   `json:"operation"`
-	Actions   []browserprotocol.Action `json:"actions,omitempty"`
+	Operation   string                          `json:"operation"`
+	Observation browserprotocol.ObservationMode `json:"observation,omitempty"`
+	Actions     []browserprotocol.Action        `json:"actions,omitempty"`
 }
 
 type scanResult struct {
@@ -250,14 +262,72 @@ func (server *Server) handle(
 		}
 		result, err := server.callBrowser(ctx, params.Arguments)
 		if err != nil {
-			response.Result = browserErrorResult(err)
-		} else {
-			response.Result = result
+			result = browserErrorResult(err)
 		}
+		if evidence, ok := server.takeAttachmentEvidence(); ok {
+			addAttachmentEvidence(&result, evidence)
+		}
+		response.Result = result
 	default:
 		response.Error = &rpcError{Code: -32601, Message: "Method not found"}
 	}
 	return response
+}
+
+func (server *Server) takeAttachmentEvidence() (
+	browserprotocol.EnvironmentEvidence,
+	bool,
+) {
+	if server.EvidenceSupplier == nil {
+		return browserprotocol.EnvironmentEvidence{}, false
+	}
+	snapshot, err := server.EvidenceSupplier()
+	if err != nil ||
+		snapshot.Environment.Validate() != nil ||
+		snapshot.BrowserSessionID == "" ||
+		snapshot.SessionEpoch == 0 ||
+		snapshot.ControlEpoch == 0 {
+		return browserprotocol.EnvironmentEvidence{}, false
+	}
+	key := fmt.Sprintf(
+		"%s:%d:%d",
+		snapshot.BrowserSessionID,
+		snapshot.SessionEpoch,
+		snapshot.ControlEpoch,
+	)
+	server.evidenceMu.Lock()
+	defer server.evidenceMu.Unlock()
+	if server.evidenceKey != key {
+		server.evidenceKey = key
+		server.evidenceEmitted = false
+	}
+	if server.evidenceEmitted {
+		return browserprotocol.EnvironmentEvidence{}, false
+	}
+	server.evidenceEmitted = true
+	return snapshot.Environment, true
+}
+
+func addAttachmentEvidence(
+	result *toolResult,
+	evidence browserprotocol.EnvironmentEvidence,
+) {
+	if result == nil {
+		return
+	}
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		return
+	}
+	structured["attachment_evidence"] = map[string]any{
+		"browser_engine":        evidence.BrowserEngine,
+		"browser_distribution":  evidence.BrowserDistribution,
+		"browser_major_version": evidence.BrowserMajorVersion,
+		"browser_locale":        evidence.BrowserLocale,
+		"browser_timezone":      evidence.BrowserTimezone,
+		"font_contract_version": evidence.FontContractVersion,
+		"font_manifest_sha256":  evidence.FontManifestSHA256,
+	}
 }
 
 func (server *Server) callBrowser(
@@ -311,12 +381,27 @@ func (server *Server) callBrowser(
 	actions := arguments.Actions
 	if arguments.Operation == "observe" {
 		actions = []browserprotocol.Action{{
-			Kind: browserprotocol.ActionScreenshot,
+			Kind:        browserprotocol.ActionScreenshot,
+			Observation: effectiveToolObservation(arguments.Observation),
 		}}
 	} else if arguments.Operation == "checkpoint" {
 		actions = []browserprotocol.Action{{
-			Kind: browserprotocol.ActionCheckpoint,
+			Kind:        browserprotocol.ActionCheckpoint,
+			Observation: browserprotocol.ObservationNone,
 		}}
+	} else {
+		actions = append([]browserprotocol.Action(nil), actions...)
+		if len(actions) > 1 {
+			actions = []browserprotocol.Action{{
+				Kind:        browserprotocol.ActionBatch,
+				Observation: effectiveToolObservation(arguments.Observation),
+				Actions:     actions,
+			}}
+		} else {
+			actions[0].Observation = effectiveToolObservation(
+				arguments.Observation,
+			)
+		}
 	}
 	var observation browserprotocol.Observation
 	for _, action := range actions {
@@ -327,6 +412,12 @@ func (server *Server) callBrowser(
 		}
 	}
 	return observationResult(arguments.Operation, observation), nil
+}
+
+func effectiveToolObservation(
+	mode browserprotocol.ObservationMode,
+) browserprotocol.ObservationMode {
+	return mode.Effective()
 }
 
 func (server *Server) browserClient() (Executor, error) {
@@ -358,6 +449,15 @@ func observationResult(
 		"status":        "ok",
 		"page_state_id": observation.PageStateID,
 	}
+	if observation.Viewport != nil {
+		structured["viewport"] = map[string]any{
+			"width":  observation.Viewport.Width,
+			"height": observation.Viewport.Height,
+		}
+	}
+	if observation.NavigationGeneration > 0 {
+		structured["navigation_generation"] = observation.NavigationGeneration
+	}
 	if observation.Origin != "" {
 		structured["origin"] = observation.Origin
 	}
@@ -376,11 +476,38 @@ func observationResult(
 			structured["dom_diff"] = value
 		}
 	}
+	if observation.AXTreeTimedOut {
+		structured["ax_tree_timed_out"] = true
+	}
+	if observation.DOMDiffTimedOut {
+		structured["dom_diff_timed_out"] = true
+	}
+	if observation.ClickEffect != "" {
+		structured["click_effect"] = observation.ClickEffect
+	}
+	if observation.TargetCategory != "" {
+		structured["target_category"] = observation.TargetCategory
+	}
+	if observation.SiteOutcome != "" {
+		structured["site_outcome"] = observation.SiteOutcome
+	}
+	if observation.ClassifierRulesVersion != "" {
+		structured["classifier_rules_version"] =
+			observation.ClassifierRulesVersion
+	}
+	if observation.ChallengeReleaseUnavailable {
+		structured["challenge_release_unavailable"] = true
+	}
 	content := []contentBlock{{
 		Type: "text",
 		Text: "Browser observation returned in structured content.",
 	}}
 	if observation.Screenshot != nil {
+		structured["screenshot"] = map[string]any{
+			"mime_type": observation.Screenshot.MIMEType,
+			"width":     observation.Screenshot.Width,
+			"height":    observation.Screenshot.Height,
+		}
 		content = append(content, contentBlock{
 			Type:     "image",
 			Data:     base64.StdEncoding.EncodeToString(observation.Screenshot.Data),
@@ -398,17 +525,58 @@ func browserErrorResult(err error) toolResult {
 		code = failure.Code
 		message = failure.Message
 	}
+	structured := map[string]any{
+		"status":  "error",
+		"code":    code,
+		"message": message,
+	}
+	if failure != nil && failure.ActionIndex != nil {
+		structured["failed_action_index"] = *failure.ActionIndex
+		structured["completed_actions"] = *failure.ActionIndex
+	}
+	if failure != nil && failure.TargetCategory != "" {
+		structured["target_category"] = failure.TargetCategory
+		structured["page_state_id"] = failure.PageStateID
+		structured["navigation_generation"] = failure.NavigationGeneration
+	}
+	if failure != nil && failure.BlockedClickNavigationAttemptsRemaining != nil {
+		structured["blocked_click_navigation_attempts_remaining"] =
+			*failure.BlockedClickNavigationAttemptsRemaining
+	}
+	if failure != nil && failure.BlockedClickRunAttemptsRemaining != nil {
+		structured["blocked_click_run_attempts_remaining"] =
+			*failure.BlockedClickRunAttemptsRemaining
+	}
+	if failure != nil && failure.SiteOutcome != "" {
+		structured["site_outcome"] = failure.SiteOutcome
+	}
+	if failure != nil && failure.RetryAfterMS != nil {
+		structured["retry_after_ms"] = *failure.RetryAfterMS
+	}
+	if failure != nil && failure.ClassifierRulesVersion != "" {
+		structured["classifier_rules_version"] =
+			failure.ClassifierRulesVersion
+	}
+	if failure != nil && failure.ConsecutiveAccessDenials != nil {
+		structured["consecutive_access_denials"] =
+			*failure.ConsecutiveAccessDenials
+	}
+	if failure != nil && failure.OriginBlockedForAttachment {
+		structured["origin_blocked_for_attachment"] = true
+	}
+	if failure != nil && failure.ChallengeReleaseUnavailable {
+		structured["challenge_release_unavailable"] = true
+	}
+	if failure != nil && failure.HumanControlAvailable {
+		structured["human_control_available"] = true
+	}
 	return toolResult{
 		Content: []contentBlock{{
 			Type: "text",
 			Text: fmt.Sprintf("%s: %s", code, message),
 		}},
-		StructuredContent: map[string]any{
-			"status":  "error",
-			"code":    code,
-			"message": message,
-		},
-		IsError: true,
+		StructuredContent: structured,
+		IsError:           true,
 	}
 }
 

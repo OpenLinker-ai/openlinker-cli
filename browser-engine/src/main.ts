@@ -2,9 +2,13 @@ import { once } from "node:events";
 
 import { BrowserEngine } from "./engine.js";
 import {
+  ENGINE_VIEWER_CONTRACT_ID,
   failure,
   parseRequest,
+  parseViewerRequest,
   type EngineResponse,
+  type EngineViewerResponse,
+  viewerFailure,
 } from "./protocol.js";
 
 const MAX_INPUT_BYTES = 256 * 1024;
@@ -23,17 +27,28 @@ async function main(): Promise<void> {
   });
 
   for await (const line of boundedLines(process.stdin, MAX_INPUT_BYTES)) {
-    let response: EngineResponse;
+    let response: EngineResponse | EngineViewerResponse;
     try {
-      const request = parseRequest(line);
-      response = await engine.execute(request);
+      if (extractContractID(line) === ENGINE_VIEWER_CONTRACT_ID) {
+        response = await engine.executeViewer(parseViewerRequest(line));
+      } else {
+        response = await engine.execute(parseRequest(line));
+      }
     } catch (error) {
-      response = failure(
-        extractActionID(line),
-        "BROWSER_OUTPUT_INVALID",
-        "browser engine request is invalid",
-        false,
-      );
+      response =
+        extractContractID(line) === ENGINE_VIEWER_CONTRACT_ID
+          ? viewerFailure(
+              extractActionID(line),
+              "BROWSER_OUTPUT_INVALID",
+              "browser engine viewer request is invalid",
+              false,
+            )
+          : failure(
+              extractActionID(line),
+              "BROWSER_OUTPUT_INVALID",
+              "browser engine request is invalid",
+              false,
+            );
     }
     await writeResponse(response);
   }
@@ -91,7 +106,27 @@ function extractActionID(line: string): string {
   return "0";
 }
 
-async function writeResponse(response: EngineResponse): Promise<void> {
+function extractContractID(line: string): string {
+  try {
+    const value: unknown = JSON.parse(line);
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "contract_id" in value &&
+      typeof value.contract_id === "string"
+    ) {
+      return value.contract_id;
+    }
+  } catch {
+    // Invalid JSON is handled by the closed engine parser.
+  }
+  return "";
+}
+
+async function writeResponse(
+  response: EngineResponse | EngineViewerResponse,
+): Promise<void> {
   const raw = `${JSON.stringify(response)}\n`;
   if (!process.stdout.write(raw)) {
     await once(process.stdout, "drain");

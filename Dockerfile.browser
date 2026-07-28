@@ -18,6 +18,8 @@ WORKDIR /src/browser-engine
 COPY browser-engine/package.json browser-engine/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY browser-engine/tsconfig.json ./
+COPY browser-engine/contract-fixtures.json ./
+COPY browser-engine/browser-version.txt ./
 COPY browser-engine/src ./src
 RUN npm run lint \
  && npm test \

@@ -378,7 +378,6 @@ func allowedEngineErrorCode(code browserprotocol.ErrorCode) bool {
 		browserprotocol.ErrorTargetBlocked,
 		browserprotocol.ErrorProfileLocked,
 		browserprotocol.ErrorProfileCorrupt,
-		browserprotocol.ErrorConversationRecovery,
 		browserprotocol.ErrorUserActionRequired,
 		browserprotocol.ErrorHighImpactActionBlocked,
 		browserprotocol.ErrorActionLimitExceeded,

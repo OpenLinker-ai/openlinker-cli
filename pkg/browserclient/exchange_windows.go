@@ -21,3 +21,16 @@ func exchange(
 		false,
 	)
 }
+
+func exchangeViewer(
+	ctx context.Context,
+	socketPath string,
+	request browserprotocol.ViewerRequest,
+	deadline time.Time,
+) (browserprotocol.ViewerResponse, *browserprotocol.Failure) {
+	return browserprotocol.ViewerResponse{}, browserprotocol.NewFailure(
+		browserprotocol.ErrorViewerUnavailable,
+		"Browser Runtime Viewer is unavailable on Windows",
+		false,
+	)
+}

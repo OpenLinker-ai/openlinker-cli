@@ -72,6 +72,14 @@ func TestServerListsOnlyClientOwnedBrowserTool(t *testing.T) {
 		t.Fatalf("tool = %#v", tool)
 	}
 	schemaRaw, _ := json.Marshal(tool["inputSchema"])
+	if !strings.Contains(string(schemaRaw), `"observation"`) ||
+		strings.Contains(string(schemaRaw), `"none"`) {
+		t.Fatalf("schema observation modes = %s", schemaRaw)
+	}
+	annotations := tool["annotations"].(map[string]any)
+	if annotations["destructiveHint"] != true {
+		t.Fatalf("Browser tool must require destructive approval: %#v", annotations)
+	}
 	for _, forbidden := range []string{
 		"run_id",
 		"agent_id",
@@ -87,19 +95,101 @@ func TestServerListsOnlyClientOwnedBrowserTool(t *testing.T) {
 	}
 }
 
+func TestAttachmentEvidenceEmitsOncePerValidatedEpochWithoutFullVersion(
+	t *testing.T,
+) {
+	t.Parallel()
+	controlEpoch := uint64(1)
+	server := &Server{
+		EvidenceSupplier: func() (EvidenceSnapshot, error) {
+			return EvidenceSnapshot{
+				Environment: browserprotocol.EnvironmentEvidence{
+					BrowserEngine:       "chromium",
+					BrowserDistribution: "playwright_chromium",
+					BrowserVersion:      "149.0.7827.55",
+					BrowserMajorVersion: 149,
+					BrowserLocale:       "en-US",
+					BrowserTimezone:     "UTC",
+					FontContractVersion: "openlinker.browser.fonts.v1",
+					FontManifestSHA256:  strings.Repeat("a", 64),
+				},
+				BrowserSessionID: "11111111-1111-4111-8111-111111111111",
+				SessionEpoch:     1,
+				ControlEpoch:     controlEpoch,
+			}, nil
+		},
+	}
+	first := toolResult{StructuredContent: map[string]any{"status": "ok"}}
+	if evidence, ok := server.takeAttachmentEvidence(); ok {
+		addAttachmentEvidence(&first, evidence)
+	} else {
+		t.Fatal("first MCP result did not receive attachment evidence")
+	}
+	structured := first.StructuredContent.(map[string]any)
+	evidence := structured["attachment_evidence"].(map[string]any)
+	if evidence["browser_major_version"] != 149 ||
+		evidence["browser_version"] != nil {
+		t.Fatalf("attachment evidence = %#v", evidence)
+	}
+	if _, ok := server.takeAttachmentEvidence(); ok {
+		t.Fatal("same MCP epoch emitted attachment evidence twice")
+	}
+	controlEpoch++
+	if _, ok := server.takeAttachmentEvidence(); !ok {
+		t.Fatal("new control epoch did not emit attachment evidence")
+	}
+}
+
+func TestBrowserResultsExposeOnlyBoundedActionEvidence(t *testing.T) {
+	t.Parallel()
+	retryAfter := 30_000
+	failure := browserprotocol.NewFailure(
+		browserprotocol.ErrorRateLimited,
+		"Website rate limit was reached",
+		true,
+	)
+	failure.SiteOutcome = browserprotocol.ErrorRateLimited
+	failure.RetryAfterMS = &retryAfter
+	result := browserErrorResult(failure)
+	structured := result.StructuredContent.(map[string]any)
+	if structured["site_outcome"] != browserprotocol.ErrorRateLimited ||
+		structured["retry_after_ms"] != retryAfter {
+		t.Fatalf("rate-limit evidence = %#v", structured)
+	}
+	observation := observationResult("observe", browserprotocol.Observation{
+		PageStateID:                 "state-1",
+		SiteOutcome:                 browserprotocol.ErrorChallengeSuspected,
+		ClassifierRulesVersion:      browserprotocol.ChallengeClassifierRulesVersion,
+		ChallengeReleaseUnavailable: true,
+	})
+	structured = observation.StructuredContent.(map[string]any)
+	if structured["site_outcome"] != browserprotocol.ErrorChallengeSuspected ||
+		structured["challenge_release_unavailable"] != true {
+		t.Fatalf("sticky challenge evidence = %#v", structured)
+	}
+}
+
 func TestServerReturnsStructuredObservationAndImage(t *testing.T) {
 	executor := &fakeExecutor{observation: browserprotocol.Observation{
-		PageStateID: "state-1",
-		Origin:      "https://example.com",
-		Title:       "Example",
-		AXTree:      json.RawMessage(`{"role":"document"}`),
+		PageStateID:          "state-1",
+		Origin:               "https://example.com",
+		Title:                "Example",
+		AXTree:               json.RawMessage(`{"role":"document"}`),
+		AXTreeTimedOut:       true,
+		DOMDiffTimedOut:      true,
+		Viewport:             &browserprotocol.Viewport{Width: 1280, Height: 720},
+		NavigationGeneration: 3,
+		ClickEffect:          browserprotocol.ClickEffectFocused,
+		TargetCategory:       browserprotocol.TargetCategoryTextInput,
 		Screenshot: &browserprotocol.Screenshot{
 			MIMEType: "image/png",
 			Data:     []byte("png-fixture"),
+			Width:    1280,
+			Height:   720,
 		},
 	}}
 	input := strings.NewReader(
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"observe"},"_meta":{"threadId":"thread-1"}}}` + "\n",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"observe","observation":"both"},"_meta":{"threadId":"thread-1"}}}` + "\n",
 	)
 	var output bytes.Buffer
 	server := &Server{
@@ -119,8 +209,19 @@ func TestServerReturnsStructuredObservationAndImage(t *testing.T) {
 	structured := result["structuredContent"].(map[string]any)
 	if structured["page_state_id"] != "state-1" ||
 		structured["origin"] != "https://example.com" ||
-		structured["title"] != "Example" {
+		structured["title"] != "Example" ||
+		structured["ax_tree_timed_out"] != true ||
+		structured["dom_diff_timed_out"] != true ||
+		structured["navigation_generation"] != float64(3) ||
+		structured["click_effect"] != string(browserprotocol.ClickEffectFocused) ||
+		structured["target_category"] != string(browserprotocol.TargetCategoryTextInput) {
 		t.Fatalf("structuredContent = %#v", structured)
+	}
+	viewport := structured["viewport"].(map[string]any)
+	screenshot := structured["screenshot"].(map[string]any)
+	if viewport["width"] != float64(1280) || viewport["height"] != float64(720) ||
+		screenshot["width"] != float64(1280) || screenshot["height"] != float64(720) {
+		t.Fatalf("observation dimensions = viewport %#v screenshot %#v", viewport, screenshot)
 	}
 	content := result["content"].([]any)
 	if len(content) != 2 || content[1].(map[string]any)["type"] != "image" ||
@@ -130,8 +231,133 @@ func TestServerReturnsStructuredObservationAndImage(t *testing.T) {
 	executor.mu.Lock()
 	defer executor.mu.Unlock()
 	if len(executor.actions) != 1 ||
-		executor.actions[0].Kind != browserprotocol.ActionScreenshot {
+		executor.actions[0].Kind != browserprotocol.ActionScreenshot ||
+		executor.actions[0].Observation != browserprotocol.ObservationBoth {
 		t.Fatalf("actions = %#v", executor.actions)
+	}
+}
+
+func TestServerReturnsOnlyValidatedBlockedClickMetadata(t *testing.T) {
+	navigationRemaining := 1
+	runRemaining := 9
+	failure := browserprotocol.NewFailure(
+		browserprotocol.ErrorHighImpactActionBlocked,
+		"Browser click target is blocked",
+		false,
+	)
+	failure.TargetCategory = browserprotocol.TargetCategoryButton
+	failure.PageStateID = "state-blocked"
+	failure.NavigationGeneration = 4
+	failure.BlockedClickNavigationAttemptsRemaining = &navigationRemaining
+	failure.BlockedClickRunAttemptsRemaining = &runRemaining
+	executor := &fakeExecutor{failure: failure}
+	input := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"act","actions":[{"kind":"click","x":100,"y":200}]}}}` + "\n",
+	)
+	var output bytes.Buffer
+	server := &Server{
+		Host: "codex",
+		IO:   shared.IO{Getenv: func(string) string { return "" }},
+		ClientFactory: func() (Executor, error) {
+			return executor, nil
+		},
+	}
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResponses(t, output.String())["1"]["result"].(map[string]any)
+	structured := result["structuredContent"].(map[string]any)
+	if result["isError"] != true ||
+		structured["target_category"] != string(browserprotocol.TargetCategoryButton) ||
+		structured["page_state_id"] != "state-blocked" ||
+		structured["navigation_generation"] != float64(4) ||
+		structured["blocked_click_navigation_attempts_remaining"] != float64(1) ||
+		structured["blocked_click_run_attempts_remaining"] != float64(9) {
+		t.Fatalf("blocked click result = %#v", result)
+	}
+}
+
+func TestServerBatchSuppressesIntermediateObservationsAndReportsProgress(t *testing.T) {
+	failedIndex := 2
+	executor := &fakeExecutor{
+		execute: func(
+			_ context.Context,
+			action browserprotocol.Action,
+		) (browserprotocol.Observation, *browserprotocol.Failure) {
+			if action.Kind != browserprotocol.ActionBatch {
+				t.Fatalf("action = %#v", action)
+			}
+			failure := browserprotocol.NewFailure(
+				browserprotocol.ErrorRuntimeUnavailable,
+				"fixture failed",
+				true,
+			)
+			failure.ActionIndex = &failedIndex
+			return browserprotocol.Observation{}, failure
+		},
+	}
+	input := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"act","observation":"both","actions":[{"kind":"scroll","delta_y":1},{"kind":"wait","duration_ms":1},{"kind":"screenshot"}]}}}` + "\n",
+	)
+	var output bytes.Buffer
+	server := &Server{
+		Host: "codex",
+		IO:   shared.IO{Getenv: func(string) string { return "" }},
+		ClientFactory: func() (Executor, error) {
+			return executor, nil
+		},
+	}
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResponses(t, output.String())["1"]["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("result = %#v", result)
+	}
+	structured := result["structuredContent"].(map[string]any)
+	if structured["completed_actions"] != float64(2) {
+		t.Fatalf("structuredContent = %#v", structured)
+	}
+	if structured["failed_action_index"] != float64(2) {
+		t.Fatalf("structuredContent = %#v", structured)
+	}
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	if len(executor.actions) != 1 ||
+		executor.actions[0].Kind != browserprotocol.ActionBatch ||
+		executor.actions[0].Observation != browserprotocol.ObservationBoth ||
+		len(executor.actions[0].Actions) != 3 ||
+		executor.actions[0].Actions[0].Kind != browserprotocol.ActionScroll ||
+		executor.actions[0].Actions[1].Kind != browserprotocol.ActionWait ||
+		executor.actions[0].Actions[2].Kind != browserprotocol.ActionScreenshot {
+		t.Fatalf("batch observation modes = %#v", executor.actions)
+	}
+}
+
+func TestServerCheckpointRequestsNoFullObservation(t *testing.T) {
+	executor := &fakeExecutor{observation: browserprotocol.Observation{
+		PageStateID: "checkpoint-state",
+	}}
+	input := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"checkpoint","observation":"semantic"}}}` + "\n",
+	)
+	var output bytes.Buffer
+	server := &Server{
+		Host: "claude",
+		IO:   shared.IO{Getenv: func(string) string { return "" }},
+		ClientFactory: func() (Executor, error) {
+			return executor, nil
+		},
+	}
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	if len(executor.actions) != 1 ||
+		executor.actions[0].Kind != browserprotocol.ActionCheckpoint ||
+		executor.actions[0].Observation != browserprotocol.ObservationNone {
+		t.Fatalf("checkpoint actions = %#v", executor.actions)
 	}
 }
 

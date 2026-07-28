@@ -38,8 +38,13 @@ func TestExecuteSendsCredentialAndLeaseIdentityOverUDS(t *testing.T) {
 			request.RequestID,
 			browserprotocol.Observation{
 				PageStateID: "page-state-1",
-				Origin:      "https://example.com",
-				Title:       "Example",
+				Viewport: &browserprotocol.Viewport{
+					Width:  browserprotocol.BrowserViewportWidth,
+					Height: browserprotocol.BrowserViewportHeight,
+				},
+				NavigationGeneration: 1,
+				Origin:               "https://example.com",
+				Title:                "Example",
 			},
 		))
 	}()

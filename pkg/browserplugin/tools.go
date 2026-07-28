@@ -30,7 +30,6 @@ func browserToolDefinitions() []toolDefinition {
 				"type_non_secret",
 				"scroll",
 				"keypress",
-				"select",
 				"wait",
 				"back",
 				"forward",
@@ -38,20 +37,20 @@ func browserToolDefinitions() []toolDefinition {
 			},
 		},
 		"url":         stringProperty("Public HTTP(S) URL for navigate"),
-		"x":           integerProperty("Viewport X coordinate"),
-		"y":           integerProperty("Viewport Y coordinate"),
+		"x":           integerProperty("X coordinate in the viewport reported by the latest screenshot observation"),
+		"y":           integerProperty("Y coordinate in the viewport reported by the latest screenshot observation"),
 		"delta_x":     integerProperty("Horizontal scroll delta"),
 		"delta_y":     integerProperty("Vertical scroll delta"),
-		"text":        stringProperty("Non-secret text; credentials are forbidden"),
+		"text":        stringProperty("Non-secret text for the currently focused safe text/search input; credentials are forbidden"),
 		"key":         stringProperty("Allowed keyboard key"),
-		"value":       stringProperty("Select option value"),
 		"duration_ms": integerProperty("Wait duration in milliseconds"),
 	}
 	return []toolDefinition{{
 		Name:  "browser_session",
 		Title: "Use isolated Browser session",
 		Description: "Observe or operate the container-isolated Browser attached to the current client conversation. " +
-			"Identity is supplied by the trusted worker, not tool arguments. Never enter credentials or perform high-impact actions.",
+			"Identity is supplied by the trusted worker, not tool arguments. Before a coordinate click, request a screenshot and use its reported viewport. " +
+			"Clicks activate only public links or focus safe text/search inputs; buttons and custom controls are blocked. Never enter credentials or perform high-impact actions.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -63,6 +62,15 @@ func browserToolDefinitions() []toolDefinition {
 						"checkpoint",
 						"close",
 					},
+				},
+				"observation": map[string]any{
+					"type": "string",
+					"enum": []string{
+						"semantic",
+						"screenshot",
+						"both",
+					},
+					"description": "Optional response detail for observe or act; defaults to semantic. Accepted but ignored for checkpoint or close.",
 				},
 				"actions": map[string]any{
 					"type":     "array",
@@ -82,7 +90,7 @@ func browserToolDefinitions() []toolDefinition {
 		},
 		Annotations: map[string]any{
 			"readOnlyHint":    false,
-			"destructiveHint": false,
+			"destructiveHint": true,
 			"idempotentHint":  false,
 			"openWorldHint":   true,
 		},
@@ -90,6 +98,12 @@ func browserToolDefinitions() []toolDefinition {
 }
 
 func validateToolArguments(arguments toolArguments) error {
+	if failure := arguments.Observation.Validate(); failure != nil {
+		return failure
+	}
+	if arguments.Observation == browserprotocol.ObservationNone {
+		return errors.New("Browser tool observation mode is invalid")
+	}
 	switch arguments.Operation {
 	case "observe", "checkpoint", "close":
 		if len(arguments.Actions) != 0 {
@@ -104,6 +118,9 @@ func validateToolArguments(arguments toolArguments) error {
 		return errors.New("Browser operation is invalid")
 	}
 	for _, action := range arguments.Actions {
+		if action.Observation != browserprotocol.ObservationDefault {
+			return errors.New("Browser action observation is controlled by the operation")
+		}
 		if failure := action.Validate(); failure != nil {
 			return failure
 		}

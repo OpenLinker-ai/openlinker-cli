@@ -24,6 +24,36 @@ npm run lint
 npm test
 ```
 
+## Operator-built Chrome channel
+
+The official multi-architecture image remains Chromium-only. An operator may
+locally extend a pinned `openlinker-browser-runtime` amd64 image with
+`Dockerfile.browser.chrome`; OpenLinker release workflows do not publish that
+result.
+
+Prepare a normalized `chrome.tar` whose entries are all under `chrome/` and
+whose executable is `chrome/chrome`, plus a strict `chrome.lock.json` matching
+`test/browser-image/chrome-lock.example.json`. Then build with explicit locked
+distribution and version:
+
+```bash
+docker build \
+  -f Dockerfile.browser.chrome \
+  --build-arg OPENLINKER_BROWSER_BASE=openlinker-browser-runtime@sha256:<digest> \
+  --build-arg OPENLINKER_BROWSER_DISTRIBUTION=chrome_for_testing \
+  --build-arg OPENLINKER_BROWSER_VERSION=<full-version> \
+  --build-arg OPENLINKER_BROWSER_PROFILE_GENERATION=<new-positive-generation> \
+  -t operator/openlinker-browser-runtime-chrome:<version> \
+  .
+```
+
+The build verifies the artifact digest, archive containment, Browser-reported
+version and fixed `/opt/google/chrome/chrome` discovery path. Runtime input
+cannot set an executable path, and `channel: "chrome"` never falls back to
+Chromium. The required new Profile generation makes the engine/distribution
+change explicit and preserves the prior Chromium generation. The operator
+remains responsible for Browser acquisition, use, and distribution rights.
+
 ## 中文说明
 
 此目录只实现 `openlinker.browser.v1` 后面的容器内 Chromium 引擎，不是 MCP
@@ -33,3 +63,11 @@ JSON 行协议监管该进程，并使用显式环境白名单启动；Provider�
 
 可信 Runtime Agent 分配权威 lease，并把 Browser MCP 工具暴露给普通 Codex 或
 Claude Code 客户端；浏览器执行不使用 Provider 原生 computer-use API。
+
+官方多架构镜像仍只包含 Chromium。Operator 可以用
+`Dockerfile.browser.chrome`、本地规范化 `chrome.tar` 与严格
+`chrome.lock.json` 构建 amd64 Chrome Channel 镜像；OpenLinker Release Workflow
+不会发布该镜像。构建会校验 Digest、Archive 路径、Browser 实际版本及固定
+`/opt/google/chrome/chrome` 位置，Runtime 不接受任意 Executable Path，也不会从
+Chrome 静默回退到 Chromium。构建必须显式指定新的 Profile Generation，从而保留
+原 Chromium 代际。Browser 的取得、使用与分发权利由 Operator 负责。
