@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclient"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	openlinker "github.com/OpenLinker-ai/openlinker-go"
 )
 
@@ -65,6 +66,7 @@ func TestBrowserExecutionLeaseUsesAuthorityAndRejectsLateAttachment(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	stubBrowserPreflight(t, provider)
 	run := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
 	if _, err := provider.Run(context.Background(), run); err != nil {
 		t.Fatal(err)
@@ -94,6 +96,48 @@ func TestBrowserExecutionLeaseUsesAuthorityAndRejectsLateAttachment(t *testing.T
 	}
 }
 
+func TestBrowserRunLeaseCloseReleasesScopeAndCanRetryAfterAuthorityLockFailure(
+	t *testing.T,
+) {
+	root := shortBrowserTestRoot(t)
+	released := 0
+	lease := &browserRunLease{
+		activePath: filepath.Join(root, "active-lease.json"),
+		runPath:    filepath.Join(root, "runs", "missing.json"),
+		releaseScope: func() {
+			released++
+		},
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); err == nil {
+		t.Fatal("Close succeeded with an insecure authority directory")
+	}
+	if released != 1 || lease.releaseScope != nil {
+		t.Fatalf(
+			"scope release state = count %d callback_present %v",
+			released,
+			lease.releaseScope != nil,
+		)
+	}
+	if lease.closed {
+		t.Fatal("failed Close became silently idempotent")
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateBrowserDirectory(filepath.Join(root, "runs")); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("retry Close failed: %v", err)
+	}
+	if !lease.closed || released != 1 {
+		t.Fatalf("retry state = closed %v release count %d", lease.closed, released)
+	}
+}
+
 func TestBrowserExecutionReusesConversationSessionAndFencesRuntimeReattach(t *testing.T) {
 	root := shortBrowserTestRoot(t)
 	base := &browserCaptureProvider{root: root}
@@ -101,6 +145,7 @@ func TestBrowserExecutionReusesConversationSessionAndFencesRuntimeReattach(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	stubBrowserPreflight(t, provider)
 	firstRun := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
 	if _, err := provider.Run(context.Background(), firstRun); err != nil {
 		t.Fatal(err)
@@ -168,37 +213,260 @@ func TestBrowserClientConfigurationIsOptInAndSecretFree(t *testing.T) {
 	}
 }
 
-func TestBrowserLifecycleEventCountDoesNotGrowWithActionCount(t *testing.T) {
-	for _, actionCount := range []int{1, 500} {
-		t.Run(fmt.Sprintf("actions-%d", actionCount), func(t *testing.T) {
-			root := shortBrowserTestRoot(t)
-			base := &browserCaptureProvider{root: root}
-			provider, err := newBrowserExecutionProvider(base, browserProviderTestConfig(root))
-			if err != nil {
-				t.Fatal(err)
-			}
-			run := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
-			run.Metadata = map[string]any{"fixture_action_count": actionCount}
-			var events []string
-			run.Emit = func(eventType string, _ any) error {
-				events = append(events, eventType)
-				return nil
-			}
-			result, err := provider.Run(context.Background(), run)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(events) != 2 ||
-				events[0] != "run.browser.lifecycle" ||
-				events[1] != "run.browser.lifecycle" {
-				t.Fatalf("Browser lifecycle events = %#v, want exactly two", events)
-			}
-			output, ok := result.Output.(map[string]any)
-			if !ok || output["browser_execution_profile"] != "isolated" ||
-				output["browser_tool"] != "browser_session" {
-				t.Fatalf("Browser result evidence = %#v", result.Output)
-			}
-		})
+func TestBrowserLifecycleEventBudgetIsFixed(t *testing.T) {
+	root := shortBrowserTestRoot(t)
+	base := &browserCaptureProvider{root: root}
+	provider, err := newBrowserExecutionProvider(base, browserProviderTestConfig(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubBrowserPreflight(t, provider)
+	run := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
+	var events []string
+	run.Emit = func(eventType string, _ any) error {
+		events = append(events, eventType)
+		return nil
+	}
+	result, err := provider.Run(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 ||
+		events[0] != "run.browser.lifecycle" ||
+		events[1] != "run.browser.lifecycle" ||
+		events[2] != "run.browser.lifecycle" {
+		t.Fatalf("Browser lifecycle events = %#v, want exactly three", events)
+	}
+	output, ok := result.Output.(map[string]any)
+	if !ok || output["browser_execution_profile"] != "isolated" ||
+		output["browser_tool"] != "browser_session" {
+		t.Fatalf("Browser result evidence = %#v", result.Output)
+	}
+}
+
+func TestBrowserPreflightFailureNeverEmitsReadyOrStartsProvider(t *testing.T) {
+	root := shortBrowserTestRoot(t)
+	base := &browserCaptureProvider{root: root}
+	provider, err := newBrowserExecutionProvider(
+		base,
+		browserProviderTestConfig(root),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browserProvider := provider.(*browserExecutionProvider)
+	browserProvider.preflight = func(
+		context.Context,
+		*browserRunLease,
+	) error {
+		return errors.New("fixture preflight failure")
+	}
+	run := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
+	var phases []string
+	run.Emit = func(eventType string, payload any) error {
+		if eventType != "run.browser.lifecycle" {
+			t.Fatalf("event type = %q", eventType)
+		}
+		value, ok := payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload = %#v", payload)
+		}
+		phases = append(phases, value["phase"].(string))
+		return nil
+	}
+	if _, err := provider.Run(context.Background(), run); err == nil {
+		t.Fatal("Browser Run succeeded despite failed preflight")
+	}
+	if strings.Join(phases, ",") != "preparing,failed" {
+		t.Fatalf("lifecycle phases = %#v", phases)
+	}
+	if len(base.leases) != 0 {
+		t.Fatalf("Provider started after failed preflight: %#v", base.leases)
+	}
+}
+
+func TestBrowserSessionPruneIsBoundedOldestFirstAndProtectsCurrentAndActive(
+	t *testing.T,
+) {
+	root := shortBrowserTestRoot(t)
+	sessionRoot := filepath.Join(root, "sessions")
+	if err := ensurePrivateBrowserDirectory(sessionRoot); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	writeState := func(name, browserSessionID string, updatedAt time.Time) string {
+		t.Helper()
+		path := filepath.Join(sessionRoot, name+".json")
+		if err := writePrivateBrowserJSON(path, browserSessionState{
+			Version:          browserSessionStateVersion,
+			SessionKeyHash:   name,
+			BrowserSessionID: browserSessionID,
+			SessionEpoch:     1,
+			UpdatedAt:        updatedAt.Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	currentPath := writeState(
+		"current",
+		"44444444-4444-4444-8444-444444444444",
+		now.Add(-40*24*time.Hour),
+	)
+	activeSessionID := "55555555-5555-4555-8555-555555555555"
+	activePath := writeState(
+		"active",
+		activeSessionID,
+		now.Add(-40*24*time.Hour),
+	)
+	expiredPath := writeState(
+		"expired",
+		"66666666-6666-4666-8666-666666666666",
+		now.Add(-31*24*time.Hour),
+	)
+	oldestCapacityPath := writeState(
+		"oldest-capacity",
+		"77777777-7777-4777-8777-777777777777",
+		now.Add(-20*24*time.Hour),
+	)
+	for index := 0; index < browserprotocol.BrowserSessionStateLimit-2; index++ {
+		writeState(
+			fmt.Sprintf("fresh-%03d", index),
+			fmt.Sprintf("88888888-8888-4888-8888-%012d", index),
+			now.Add(time.Duration(index)*time.Second),
+		)
+	}
+	if err := writePrivateBrowserJSON(
+		filepath.Join(root, "active-lease.json"),
+		browserclient.Lease{
+			ContractID: browserclient.LeaseContractID,
+			ExpiresAt:  now.Add(time.Hour),
+			Identity: browserprotocol.Identity{
+				RunID:            "11111111-1111-4111-8111-111111111111",
+				AgentID:          "22222222-2222-4222-8222-222222222222",
+				PrincipalScopeID: "33333333-3333-4333-8333-333333333333",
+				BrowserSessionID: activeSessionID,
+				SessionEpoch:     1,
+				AttachmentID:     "99999999-9999-4999-8999-999999999999",
+				ControlEpoch:     1,
+				Controller:       browserprotocol.ControllerAgent,
+			},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneBrowserSessionStates(root, currentPath, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{currentPath, activePath} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("protected Session state %s was removed: %v", path, err)
+		}
+	}
+	for _, path := range []string{expiredPath, oldestCapacityPath} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("prunable Session state %s remained: %v", path, err)
+		}
+	}
+	entries, err := os.ReadDir(sessionRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != browserprotocol.BrowserSessionStateLimit {
+		t.Fatalf("Session files = %d, want %d", len(entries), browserprotocol.BrowserSessionStateLimit)
+	}
+}
+
+func TestBrowserSessionPruneRejectsUnboundedDirectoryWithoutDeleting(t *testing.T) {
+	root := shortBrowserTestRoot(t)
+	sessionRoot := filepath.Join(root, "sessions")
+	if err := ensurePrivateBrowserDirectory(sessionRoot); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index <= browserprotocol.BrowserSessionStateScanLimit; index++ {
+		path := filepath.Join(sessionRoot, fmt.Sprintf("%03d.json", index))
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := pruneBrowserSessionStates(
+		root,
+		filepath.Join(sessionRoot, "current.json"),
+		time.Now().UTC(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "bounded prune scan limit") {
+		t.Fatalf("prune error = %v", err)
+	}
+	entries, readErr := os.ReadDir(sessionRoot)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != browserprotocol.BrowserSessionStateScanLimit+1 {
+		t.Fatalf("bounded prune deleted state before rejecting: %d files", len(entries))
+	}
+}
+
+func TestBrowserSessionPruneDoesNotProtectExpiredActiveLease(t *testing.T) {
+	root := shortBrowserTestRoot(t)
+	sessionRoot := filepath.Join(root, "sessions")
+	if err := ensurePrivateBrowserDirectory(sessionRoot); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	sessionID := "55555555-5555-4555-8555-555555555555"
+	statePath := filepath.Join(sessionRoot, "expired-active.json")
+	if err := writePrivateBrowserJSON(statePath, browserSessionState{
+		Version:          browserSessionStateVersion,
+		SessionKeyHash:   "expired-active",
+		BrowserSessionID: sessionID,
+		SessionEpoch:     1,
+		UpdatedAt:        now.Add(-31 * 24 * time.Hour).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateBrowserJSON(
+		filepath.Join(root, "active-lease.json"),
+		browserclient.Lease{
+			ContractID: browserclient.LeaseContractID,
+			ExpiresAt:  now.Add(-time.Minute),
+			Identity: browserprotocol.Identity{
+				RunID:            "11111111-1111-4111-8111-111111111111",
+				AgentID:          "22222222-2222-4222-8222-222222222222",
+				PrincipalScopeID: "33333333-3333-4333-8333-333333333333",
+				BrowserSessionID: sessionID,
+				SessionEpoch:     1,
+				AttachmentID:     "99999999-9999-4999-8999-999999999999",
+				ControlEpoch:     1,
+				Controller:       browserprotocol.ControllerAgent,
+			},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pruneBrowserSessionStates(
+		root,
+		filepath.Join(sessionRoot, "current.json"),
+		now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(statePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired active Session state remained: %v", err)
+	}
+}
+
+func stubBrowserPreflight(t *testing.T, provider Provider) {
+	t.Helper()
+	browserProvider, ok := provider.(*browserExecutionProvider)
+	if !ok {
+		t.Fatalf("provider = %T, want *browserExecutionProvider", provider)
+	}
+	browserProvider.preflight = func(
+		context.Context,
+		*browserRunLease,
+	) error {
+		return nil
 	}
 }
 

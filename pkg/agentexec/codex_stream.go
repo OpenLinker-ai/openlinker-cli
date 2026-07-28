@@ -8,13 +8,20 @@ import (
 )
 
 type codexJSONLObserver struct {
-	mu      sync.Mutex
-	pending []byte
-	emit    func(string, any) error
+	mu                  sync.Mutex
+	pending             []byte
+	emit                func(string, any) error
+	suppressMCPProgress bool
 }
 
-func newCodexJSONLObserver(emit func(string, any) error) *codexJSONLObserver {
-	return &codexJSONLObserver{emit: emit}
+func newCodexJSONLObserver(
+	emit func(string, any) error,
+	suppressMCPProgress bool,
+) *codexJSONLObserver {
+	return &codexJSONLObserver{
+		emit:                emit,
+		suppressMCPProgress: suppressMCPProgress,
+	}
 }
 
 func (observer *codexJSONLObserver) Write(value []byte) (int, error) {
@@ -69,9 +76,31 @@ func (observer *codexJSONLObserver) observeLine(line []byte) {
 	if !ok {
 		return
 	}
+	if observer.suppressMCPProgress && isOpenLinkerBrowserMCPEvent(event) {
+		return
+	}
 	// Provider progress is best-effort. Losing a display-only event must not
 	// terminate a healthy provider process.
 	_ = observer.emit("run.status.changed", payload)
+}
+
+func isOpenLinkerBrowserMCPEvent(event map[string]any) bool {
+	item, ok := event["item"].(map[string]any)
+	if !ok || normalizedCodexToolKind(item["type"]) != "mcp_tool" {
+		return false
+	}
+	server := firstCodexString(item, "server", "server_name")
+	tool := firstCodexString(item, "tool", "tool_name")
+	return server == "openlinker_browser" && tool == "browser_session"
+}
+
+func firstCodexString(item map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(stringValue(item[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func codexProgressPayload(event map[string]any) (map[string]any, bool) {

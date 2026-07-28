@@ -208,8 +208,7 @@ func (client *Client) Execute(
 			)
 		}
 		var failure *browserprotocol.Failure
-		if action.Kind == browserprotocol.ActionClose &&
-			strings.HasPrefix(response.Observation.PageStateID, "closed-") {
+		if action.Kind == browserprotocol.ActionClose {
 			failure = response.Observation.ValidateClosed()
 		} else {
 			failure = response.Observation.ValidateEngine()

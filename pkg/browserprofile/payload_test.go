@@ -8,28 +8,28 @@ import (
 
 func TestPayloadRoundTripAcrossAuthenticatedChunks(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	root := testRootKey(t, 1, 0x11)
 	defer root.Close()
 	identity := testIdentity()
-	metadata, encryptor, err := protector.Create(identity, root)
+	metadata, encryptor, err := protector.create(identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plaintext := bytes.Repeat([]byte("browser-profile-data"), (2*payloadChunkSize/20)+100)
 	var encrypted bytes.Buffer
-	if err := encryptor.Encrypt(&encrypted, bytes.NewReader(plaintext)); err != nil {
+	if err := encryptor.encrypt(&encrypted, bytes.NewReader(plaintext)); err != nil {
 		t.Fatal(err)
 	}
-	encryptor.Close()
+	encryptor.close()
 
-	decryptor, err := protector.Open(metadata, identity, root)
+	decryptor, err := protector.open(metadata, identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer decryptor.Close()
+	defer decryptor.close()
 	var decrypted bytes.Buffer
-	if err := decryptor.Decrypt(&decrypted, bytes.NewReader(encrypted.Bytes())); err != nil {
+	if err := decryptor.decrypt(&decrypted, bytes.NewReader(encrypted.Bytes())); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(decrypted.Bytes(), plaintext) {
@@ -39,19 +39,19 @@ func TestPayloadRoundTripAcrossAuthenticatedChunks(t *testing.T) {
 
 func TestPayloadTamperingTruncationAndTrailingDataFailClosed(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	root := testRootKey(t, 1, 0x11)
 	defer root.Close()
 	identity := testIdentity()
-	metadata, encryptor, err := protector.Create(identity, root)
+	metadata, encryptor, err := protector.create(identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var encrypted bytes.Buffer
-	if err := encryptor.Encrypt(&encrypted, bytes.NewReader([]byte("profile"))); err != nil {
+	if err := encryptor.encrypt(&encrypted, bytes.NewReader([]byte("profile"))); err != nil {
 		t.Fatal(err)
 	}
-	encryptor.Close()
+	encryptor.close()
 
 	cases := map[string][]byte{}
 	tampered := append([]byte(nil), encrypted.Bytes()...)
@@ -61,12 +61,12 @@ func TestPayloadTamperingTruncationAndTrailingDataFailClosed(t *testing.T) {
 	cases["trailing"] = append(append([]byte(nil), encrypted.Bytes()...), 0x01)
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			decryptor, err := protector.Open(metadata, identity, root)
+			decryptor, err := protector.open(metadata, identity, root)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer decryptor.Close()
-			if err := decryptor.Decrypt(&bytes.Buffer{}, bytes.NewReader(payload)); !errors.Is(err, ErrProfileCorrupt) {
+			defer decryptor.close()
+			if err := decryptor.decrypt(&bytes.Buffer{}, bytes.NewReader(payload)); !errors.Is(err, ErrProfileCorrupt) {
 				t.Fatalf("Decrypt() error = %v, want %v", err, ErrProfileCorrupt)
 			}
 		})
@@ -75,20 +75,20 @@ func TestPayloadTamperingTruncationAndTrailingDataFailClosed(t *testing.T) {
 
 func TestPayloadFinalRecordPreventsAuthenticatedTruncation(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	root := testRootKey(t, 1, 0x11)
 	defer root.Close()
 	identity := testIdentity()
-	metadata, encryptor, err := protector.Create(identity, root)
+	metadata, encryptor, err := protector.create(identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plaintext := bytes.Repeat([]byte{'x'}, payloadChunkSize+100)
 	var encrypted bytes.Buffer
-	if err := encryptor.Encrypt(&encrypted, bytes.NewReader(plaintext)); err != nil {
+	if err := encryptor.encrypt(&encrypted, bytes.NewReader(plaintext)); err != nil {
 		t.Fatal(err)
 	}
-	encryptor.Close()
+	encryptor.close()
 
 	// Drop the second encrypted chunk but retain the original final record.
 	firstRecordSize := 4 + payloadChunkSize + 16
@@ -97,12 +97,12 @@ func TestPayloadFinalRecordPreventsAuthenticatedTruncation(t *testing.T) {
 	truncated := append([]byte(nil), encrypted.Bytes()[:headerSize+firstRecordSize]...)
 	truncated = append(truncated, encrypted.Bytes()[encrypted.Len()-finalRecordSize:]...)
 
-	decryptor, err := protector.Open(metadata, identity, root)
+	decryptor, err := protector.open(metadata, identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer decryptor.Close()
-	if err := decryptor.Decrypt(&bytes.Buffer{}, bytes.NewReader(truncated)); !errors.Is(err, ErrProfileCorrupt) {
+	defer decryptor.close()
+	if err := decryptor.decrypt(&bytes.Buffer{}, bytes.NewReader(truncated)); !errors.Is(err, ErrProfileCorrupt) {
 		t.Fatalf("Decrypt() error = %v, want %v", err, ErrProfileCorrupt)
 	}
 }

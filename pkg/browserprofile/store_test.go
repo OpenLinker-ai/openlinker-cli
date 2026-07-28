@@ -67,7 +67,7 @@ func TestStoreRewrapDoesNotRewritePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.Rewrap(
+	if err := store.rewrap(
 		identity,
 		map[uint64]*RootKey{oldRoot.Generation(): oldRoot},
 		newRoot,
@@ -258,7 +258,7 @@ func TestStoreRejectsSymlinkRootAndInvalidPointerTraversal(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	if _, err := NewStore(link, nil); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := NewStore(link); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("NewStore() error = %v, want %v", err, ErrInvalidConfiguration)
 	}
 
@@ -288,17 +288,17 @@ func TestStoreRejectsSymlinkRootAndInvalidPointerTraversal(t *testing.T) {
 func TestStoreHoldsExclusiveManagerLock(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "browser-profiles")
-	first, err := NewStore(root, nil)
+	first, err := NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewStore(root, nil); !errors.Is(err, ErrProfileStoreLocked) {
+	if _, err := NewStore(root); !errors.Is(err, ErrProfileStoreLocked) {
 		t.Fatalf("second NewStore() error = %v, want %v", err, ErrProfileStoreLocked)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewStore(root, nil)
+	second, err := NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func (reader *errorReader) Read(value []byte) (int, error) {
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "browser-profiles")
-	store, err := NewStore(root, nil)
+	store, err := NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}

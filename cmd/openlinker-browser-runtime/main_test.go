@@ -95,3 +95,52 @@ func TestReadCredentialFileRejectsUnsafeSources(t *testing.T) {
 		})
 	}
 }
+
+func TestBrowserProfileEnvironmentIsOperatorOnlyAndStrict(t *testing.T) {
+	fontSHA := strings.Repeat("a", 64)
+	for _, name := range []string{
+		"OPENLINKER_BROWSER_ENGINE",
+		"OPENLINKER_BROWSER_DISTRIBUTION",
+		"OPENLINKER_BROWSER_VERSION",
+		"OPENLINKER_BROWSER_PROFILE_GENERATION",
+		"OPENLINKER_BROWSER_LOCALE",
+		"OPENLINKER_BROWSER_TIMEZONE",
+		"OPENLINKER_BROWSER_FONT_CONTRACT_VERSION",
+		"OPENLINKER_BROWSER_FONT_MANIFEST_SHA256",
+		"OPENLINKER_BROWSER_EGRESS_LABEL",
+	} {
+		t.Setenv(name, "")
+	}
+	if _, err := browserProfileEnvironment(); err == nil {
+		t.Fatal("missing font-manifest fixture was accepted")
+	}
+	t.Setenv("OPENLINKER_BROWSER_FONT_MANIFEST_SHA256", fontSHA)
+	environment, err := browserProfileEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environment.Evidence.BrowserEngine != "chromium" ||
+		environment.Evidence.BrowserVersion != defaultBrowserVersion ||
+		environment.ProfileGeneration != 1 ||
+		environment.EgressLabel != defaultEgressLabel {
+		t.Fatalf("default Browser environment = %#v", environment)
+	}
+
+	t.Setenv("OPENLINKER_BROWSER_ENGINE", "chrome")
+	if _, err := browserProfileEnvironment(); err == nil {
+		t.Fatal("Chrome without an explicit compatible distribution was accepted")
+	}
+	t.Setenv("OPENLINKER_BROWSER_DISTRIBUTION", "chrome_for_testing")
+	if _, err := browserProfileEnvironment(); err != nil {
+		t.Fatalf("locked Chrome environment was rejected: %v", err)
+	}
+	t.Setenv("OPENLINKER_BROWSER_EGRESS_LABEL", "tenant-a")
+	if environment, err := browserProfileEnvironment(); err != nil ||
+		environment.EgressLabel != "tenant-a" {
+		t.Fatalf("declared egress binding = %#v, %v", environment, err)
+	}
+	t.Setenv("OPENLINKER_BROWSER_EGRESS_LABEL", "site response")
+	if _, err := browserProfileEnvironment(); err == nil {
+		t.Fatal("invalid egress binding was accepted")
+	}
+}

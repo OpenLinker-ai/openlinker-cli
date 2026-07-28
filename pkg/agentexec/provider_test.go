@@ -310,15 +310,43 @@ func TestHandlerTrustsOnlyCoreConversation(t *testing.T) {
 	}
 	assignment.Metadata["conversation"] = map[string]any{
 		"id": "trusted", "session_key": "trusted", "current_run_id": "run-1", "source": "core",
+		"history_before_current": []any{
+			map[string]any{
+				"run_id": "run-previous", "role": "user", "content": "first question",
+			},
+			map[string]any{
+				"run_id": "run-previous", "role": "agent", "content": "first answer",
+			},
+		},
 	}
 	if _, err := handler.Handle(context.Background(), assignment); err != nil {
 		t.Fatal(err)
 	}
-	if provider.run.Conversation == nil || provider.run.Conversation.SessionKey != "trusted" {
+	if provider.run.Conversation == nil ||
+		provider.run.Conversation.SessionKey != "trusted" ||
+		len(provider.run.Conversation.HistoryBeforeCurrent) != 2 {
 		t.Fatalf("Core conversation missing: %#v", provider.run.Conversation)
+	}
+	for _, expected := range []string{"first question", "first answer"} {
+		if !strings.Contains(buildPrompt("Codex", provider.run, true), expected) {
+			t.Fatalf("initial provider prompt missing %q", expected)
+		}
 	}
 	if _, exists := provider.run.Metadata["conversation"]; exists {
 		t.Fatalf("trusted conversation was duplicated into provider task metadata: %#v", provider.run.Metadata)
+	}
+
+	assignment.Metadata["conversation"] = map[string]any{
+		"id": "malformed", "session_key": "trusted", "source": "core",
+	}
+	if _, err := handler.Handle(context.Background(), assignment); err != nil {
+		t.Fatal(err)
+	}
+	if provider.run.Conversation != nil {
+		t.Fatalf("malformed Core conversation was trusted: %#v", provider.run.Conversation)
+	}
+	if _, exists := provider.run.Metadata["conversation"]; exists {
+		t.Fatalf("malformed conversation leaked into provider task metadata: %#v", provider.run.Metadata)
 	}
 }
 

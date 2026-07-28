@@ -16,34 +16,52 @@ import (
 )
 
 const (
-	defaultIOTimeout    = 5 * time.Second
-	maxRequestsPerLease = 2048
+	defaultIOTimeout              = 5 * time.Second
+	maxRequestsPerLease           = 2048
+	maxCloseAttemptsPerAttachment = 3
+	maxBlockedClicksPerNavigation = 3
+	maxBlockedClicksPerRun        = 12
+	maxViewerRequestsPerEpoch     = 8192
 )
 
 type ServerOptions struct {
-	SocketPath        string
-	SocketMode        os.FileMode
-	ChannelCredential string
-	Lease             LeaseValidator
-	Engine            Engine
-	Now               func() time.Time
-	MaxRequestBytes   int64
-	MaxResponseBytes  int
-	MaxRequests       int
-	IOTimeout         time.Duration
+	SocketPath            string
+	SocketMode            os.FileMode
+	ChannelCredential     string
+	Lease                 LeaseValidator
+	Engine                Engine
+	Now                   func() time.Time
+	MaxRequestBytes       int64
+	MaxResponseBytes      int
+	MaxRequests           int
+	IOTimeout             time.Duration
+	HumanControlAvailable bool
 }
 
 type Server struct {
-	options    ServerOptions
-	mu         sync.Mutex
-	listener   *net.UnixListener
-	socketInfo os.FileInfo
-	closed     bool
-	wg         sync.WaitGroup
-	sem        chan struct{}
-	seenMu     sync.Mutex
-	seenScope  string
-	seen       map[string]struct{}
+	options     ServerOptions
+	mu          sync.Mutex
+	listener    *net.UnixListener
+	socketInfo  os.FileInfo
+	closed      bool
+	wg          sync.WaitGroup
+	sem         chan struct{}
+	seenMu      sync.Mutex
+	seenScope   string
+	seen        map[string]struct{}
+	actionCount int
+	viewerCount int
+	closeCount  int
+	terminal    bool
+
+	clickRunID                  string
+	blockedClickRunCount        int
+	clickNavigationScope        string
+	clickEngineInstanceID       uint64
+	clickNavigationGeneration   uint64
+	blockedClickNavigationCount int
+	clickPageStateID            string
+	lastBlockedTargetCategory   browserprotocol.TargetCategory
 }
 
 func NewServer(options ServerOptions) (*Server, error) {
@@ -99,7 +117,10 @@ func NewServer(options ServerOptions) (*Server, error) {
 	return &Server{
 		options: options,
 		sem:     make(chan struct{}, 1),
-		seen:    make(map[string]struct{}, options.MaxRequests),
+		seen: make(
+			map[string]struct{},
+			options.MaxRequests+maxCloseAttemptsPerAttachment,
+		),
 	}, nil
 }
 

@@ -67,6 +67,7 @@ type RunContext struct {
 	A2A               map[string]any
 	Conversation      *ConversationContext
 	Browser           *BrowserRunContext
+	RuntimeExtensions *openlinker.RuntimeExtensions
 	Emit              func(string, any) error
 	CallAgent         func(context.Context, string, any, openlinker.RuntimeCallOptions) (any, error)
 }
@@ -138,6 +139,7 @@ func (handler Handler) Handle(ctx context.Context, assignment openlinker.Runtime
 		Metadata:          metadata,
 		A2A:               mapValue(assignmentMetadata["a2a"]),
 		Emit:              assignment.Emit,
+		RuntimeExtensions: assignment.Extensions,
 		CallAgent: func(callCtx context.Context, target string, input any, options openlinker.RuntimeCallOptions) (any, error) {
 			return assignment.CallAgent(callCtx, target, input, options)
 		},

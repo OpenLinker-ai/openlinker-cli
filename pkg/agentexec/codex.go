@@ -230,7 +230,7 @@ func runCodexCommand(
 	command.Stdin = strings.NewReader(prompt)
 	stdout := newLimitedOutputBuffer(cancel)
 	stderr := newLimitedOutputBuffer(cancel)
-	observer := newCodexJSONLObserver(emit)
+	observer := newCodexJSONLObserver(emit, browserProfileEnabled(config))
 	command.Stdout, command.Stderr = io.MultiWriter(stdout, observer), stderr
 	err := command.Run()
 	observer.Flush()

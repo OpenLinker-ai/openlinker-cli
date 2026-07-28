@@ -30,6 +30,7 @@ func startBrowserToolBroker(
 	host string,
 	root string,
 	lease *browserRunLease,
+	clientFactory func() (browserplugin.Executor, error),
 ) (*browserToolBroker, error) {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host != "codex" && host != "claude" {
@@ -37,6 +38,9 @@ func startBrowserToolBroker(
 	}
 	if lease == nil {
 		return nil, errors.New("Browser tool broker lease is missing")
+	}
+	if clientFactory == nil {
+		clientFactory = lease.browserClient
 	}
 	root = filepath.Clean(strings.TrimSpace(root))
 	if !filepath.IsAbs(root) {
@@ -99,7 +103,7 @@ func startBrowserToolBroker(
 		done:       make(chan struct{}),
 		info:       info,
 	}
-	go broker.serve(ctx, host, lease)
+	go broker.serve(ctx, host, lease, clientFactory)
 	return broker, nil
 }
 
@@ -107,6 +111,7 @@ func (broker *browserToolBroker) serve(
 	ctx context.Context,
 	host string,
 	lease *browserRunLease,
+	clientFactory func() (browserplugin.Executor, error),
 ) {
 	defer close(broker.done)
 	for {
@@ -119,7 +124,8 @@ func (broker *browserToolBroker) serve(
 			IO: shared.IO{
 				Getenv: func(string) string { return "" },
 			},
-			ClientFactory: lease.browserClient,
+			ClientFactory:    clientFactory,
+			EvidenceSupplier: lease.browserEvidenceSnapshot,
 		}
 		_ = server.Serve(ctx, connection, connection)
 		_ = connection.Close()

@@ -3,6 +3,8 @@ package agentexec
 import (
 	"context"
 	"errors"
+
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserplugin"
 )
 
 type browserToolBroker struct{}
@@ -12,6 +14,7 @@ func startBrowserToolBroker(
 	string,
 	string,
 	*browserRunLease,
+	func() (browserplugin.Executor, error),
 ) (*browserToolBroker, error) {
 	return nil, errors.New("Browser execution profile requires a Linux container or Unix host")
 }

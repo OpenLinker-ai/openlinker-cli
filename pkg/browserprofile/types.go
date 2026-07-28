@@ -77,25 +77,25 @@ type Metadata struct {
 	WrappedDEK        []byte   `json:"wrapped_dek"`
 }
 
-type Protector struct {
+type protector struct {
 	random io.Reader
 }
 
-func NewProtector(randomSource io.Reader) *Protector {
+func newProtector(randomSource io.Reader) *protector {
 	if randomSource == nil {
 		randomSource = rand.Reader
 	}
-	return &Protector{random: randomSource}
+	return &protector{random: randomSource}
 }
 
-type PayloadCipher struct {
+type payloadCipher struct {
 	identity Identity
 	key      [32]byte
 	closed   bool
 	random   io.Reader
 }
 
-func (cipher *PayloadCipher) Close() {
+func (cipher *payloadCipher) close() {
 	if cipher == nil {
 		return
 	}

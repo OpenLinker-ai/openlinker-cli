@@ -61,6 +61,37 @@ func TestProcessEngineSuccessFailureAndProtocolReset(t *testing.T) {
 	}
 }
 
+func TestEngineDiagnosticsAreLocalBoundedAndRedacted(t *testing.T) {
+	var output strings.Builder
+	writer := newEngineDiagnosticWriter(&output)
+	_, _ = writer.Write([]byte(
+		"launch failed at https://user:pass@example.com/private?token=value " +
+			"Authorization: Bear",
+	))
+	_, _ = writer.Write([]byte("er sk-super-secret-value\n"))
+	for index := 0; index < 100; index++ {
+		_, _ = writer.Write([]byte(strings.Repeat("x", maxEngineLogLine) + "\n"))
+	}
+	writer.Flush()
+	logged := output.String()
+	for _, secret := range []string{
+		"https://user:pass@example.com",
+		"token=value",
+		"sk-super-secret-value",
+		"Bearer",
+	} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("engine diagnostic leaked %q: %s", secret, logged)
+		}
+	}
+	if !strings.Contains(logged, "browser-engine: launch failed at [url]") {
+		t.Fatalf("bounded diagnostic lost safe context: %q", logged)
+	}
+	if len(logged) > maxEngineLogBytes {
+		t.Fatalf("engine diagnostic bytes = %d, want <= %d", len(logged), maxEngineLogBytes)
+	}
+}
+
 func TestProcessEngineCancellationKillsChildAndRecovers(t *testing.T) {
 	t.Parallel()
 	engine := testProcessEngine(t)
@@ -140,8 +171,13 @@ func TestProcessEngineHelper(t *testing.T) {
 				Status:     "ok",
 				Observation: &browserprotocol.Observation{
 					PageStateID: fmt.Sprintf("state-%d", counter),
-					Origin:      strings.TrimSuffix(request.Action.URL, "/"),
-					Title:       os.Getenv("HOME"),
+					Viewport: &browserprotocol.Viewport{
+						Width:  browserprotocol.BrowserViewportWidth,
+						Height: browserprotocol.BrowserViewportHeight,
+					},
+					NavigationGeneration: 1,
+					Origin:               strings.TrimSuffix(request.Action.URL, "/"),
+					Title:                os.Getenv("HOME"),
 				},
 			})
 		}
