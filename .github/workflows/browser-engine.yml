@@ -6,6 +6,8 @@ on:
       - "browser-engine/**"
       - "pkg/browserprotocol/**"
       - "pkg/browserruntime/**"
+      - "pkg/egressgateway/**"
+      - "pkg/netpolicy/**"
       - ".github/workflows/browser-engine.yml"
   workflow_dispatch:
 

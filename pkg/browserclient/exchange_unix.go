@@ -93,6 +93,77 @@ func exchange(
 	return response, nil
 }
 
+func exchangeViewer(
+	ctx context.Context,
+	socketPath string,
+	request browserprotocol.ViewerRequest,
+	deadline time.Time,
+) (browserprotocol.ViewerResponse, *browserprotocol.Failure) {
+	dialer := net.Dialer{}
+	connection, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return browserprotocol.ViewerResponse{}, contextFailure(
+			ctx,
+			"connect to Browser Runtime Viewer",
+		)
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(deadline); err != nil {
+		return browserprotocol.ViewerResponse{}, browserprotocol.NewFailure(
+			browserprotocol.ErrorRuntimeUnavailable,
+			"set Browser Runtime Viewer deadline",
+			true,
+		)
+	}
+	stopCancellation := context.AfterFunc(ctx, func() {
+		_ = connection.SetDeadline(time.Now())
+	})
+	defer stopCancellation()
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		return browserprotocol.ViewerResponse{}, contextFailure(
+			ctx,
+			"send Browser Runtime Viewer request",
+		)
+	}
+	if unixConnection, ok := connection.(*net.UnixConn); ok {
+		if err := unixConnection.CloseWrite(); err != nil {
+			return browserprotocol.ViewerResponse{}, contextFailure(
+				ctx,
+				"finish Browser Runtime Viewer request",
+			)
+		}
+	}
+	limited := &io.LimitedReader{
+		R: connection,
+		N: int64(browserprotocol.MaxResponseBytes) + 1,
+	}
+	decoder := json.NewDecoder(limited)
+	decoder.DisallowUnknownFields()
+	var response browserprotocol.ViewerResponse
+	if err := decoder.Decode(&response); err != nil {
+		if limited.N == 0 {
+			return browserprotocol.ViewerResponse{}, browserprotocol.NewFailure(
+				browserprotocol.ErrorOutputTooLarge,
+				"Browser Runtime Viewer response exceeds the output limit",
+				false,
+			)
+		}
+		return browserprotocol.ViewerResponse{}, contextFailure(
+			ctx,
+			"read Browser Runtime Viewer response",
+		)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return browserprotocol.ViewerResponse{}, browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"Browser Runtime Viewer response contains trailing data",
+			false,
+		)
+	}
+	return response, nil
+}
+
 func contextFailure(
 	ctx context.Context,
 	operation string,

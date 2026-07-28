@@ -1,6 +1,15 @@
 import { isIP } from "node:net";
 
+import {
+  BROWSER_VIEWPORT_HEIGHT,
+  BROWSER_VIEWPORT_WIDTH,
+} from "./browser-contract.generated.js";
+
 export const ENGINE_CONTRACT_ID = "openlinker.browser.engine.v1";
+export const ENGINE_VIEWER_CONTRACT_ID =
+  "openlinker.browser.engine.viewer.v1";
+
+export type Controller = "agent" | "none" | "human";
 
 export const ACTION_KINDS = [
   "navigate",
@@ -13,9 +22,21 @@ export const ACTION_KINDS = [
   "back",
   "forward",
   "screenshot",
+  "checkpoint",
+  "preflight",
+  "batch",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
+
+export const OBSERVATION_MODES = [
+  "semantic",
+  "screenshot",
+  "both",
+  "none",
+] as const;
+
+export type ObservationMode = (typeof OBSERVATION_MODES)[number];
 
 export interface Identity {
   run_id: string;
@@ -25,10 +46,12 @@ export interface Identity {
   session_epoch: number;
   attachment_id: string;
   control_epoch: number;
+  controller: Controller;
 }
 
 export interface BrowserAction {
   kind: ActionKind;
+  observation?: ObservationMode;
   url?: string;
   x?: number;
   y?: number;
@@ -38,6 +61,7 @@ export interface BrowserAction {
   key?: string;
   value?: string;
   duration_ms?: number;
+  actions?: BrowserAction[];
 }
 
 export interface EngineRequest {
@@ -48,37 +72,138 @@ export interface EngineRequest {
   action: BrowserAction;
 }
 
+export type ViewerOperation = "enter" | "exit" | "frame" | "input";
+
+export type ViewerInput =
+  | {
+      kind: "pointer";
+      pointer_action: "move" | "click";
+      x: number;
+      y: number;
+      button?: "left" | "middle" | "right";
+      click_count?: number;
+    }
+  | {
+      kind: "keyboard";
+      keyboard_action: "press" | "text";
+      key?: string;
+      text?: string;
+    }
+  | {
+      kind: "scroll";
+      delta_x: number;
+      delta_y: number;
+    };
+
+export interface EngineViewerRequest {
+  contract_id: typeof ENGINE_VIEWER_CONTRACT_ID;
+  action_id: string;
+  deadline: string;
+  identity: Identity;
+  operation: ViewerOperation;
+  input?: ViewerInput;
+}
+
 export type BrowserErrorCode =
   | "BROWSER_OUTPUT_TOO_LARGE"
   | "BROWSER_RUNTIME_UNAVAILABLE"
+  | "BROWSER_ENGINE_UNAVAILABLE"
   | "BROWSER_EGRESS_UNAVAILABLE"
   | "BROWSER_TARGET_BLOCKED"
   | "BROWSER_PROFILE_LOCKED"
   | "BROWSER_PROFILE_CORRUPT"
-  | "BROWSER_CONVERSATION_RECOVERY_FAILED"
+  | "BROWSER_PROFILE_ENVIRONMENT_MISMATCH"
+  | "BROWSER_PROFILE_ENGINE_DOWNGRADE_UNSUPPORTED"
+  | "BROWSER_PROFILE_ENGINE_UPGRADE_FAILED"
   | "BROWSER_USER_ACTION_REQUIRED"
   | "BROWSER_HIGH_IMPACT_ACTION_BLOCKED"
+  | "BROWSER_ACCESS_DENIED"
+  | "BROWSER_RATE_LIMITED"
+  | "BROWSER_CHALLENGE_SUSPECTED"
+  | "BROWSER_CHALLENGE_REQUIRED"
+  | "BROWSER_ORIGIN_RATE_LIMITED"
   | "BROWSER_ACTION_LIMIT_EXCEEDED"
+  | "BROWSER_CLICK_RETRY_EXHAUSTED"
+  | "BROWSER_CLOSE_RETRY_EXHAUSTED"
   | "BROWSER_CANCELED"
+  | "BROWSER_ACTION_REJECTED"
   | "BROWSER_OUTPUT_INVALID"
   | "BROWSER_INTERNAL";
+
+export type ClickEffect = "activated" | "focused";
+
+export type TargetCategory =
+  | "link"
+  | "text_input"
+  | "button"
+  | "custom"
+  | "none"
+  | "other";
 
 export interface EngineFailure {
   code: BrowserErrorCode;
   message: string;
   recoverable: boolean;
+  action_index?: number;
+  target_category?: TargetCategory;
+  page_state_id?: string;
+  navigation_generation?: number;
+  blocked_click_navigation_attempts_remaining?: number;
+  blocked_click_run_attempts_remaining?: number;
+  site_outcome?: SiteOutcome;
+  retry_after_ms?: number;
+  classifier_rules_version?: string;
+  consecutive_access_denials?: number;
+  origin_blocked_for_attachment?: boolean;
+  challenge_release_unavailable?: boolean;
+}
+
+export type SiteOutcome =
+  | "BROWSER_ACCESS_DENIED"
+  | "BROWSER_RATE_LIMITED"
+  | "BROWSER_CHALLENGE_SUSPECTED"
+  | "BROWSER_CHALLENGE_REQUIRED"
+  | "BROWSER_ORIGIN_RATE_LIMITED";
+
+export interface EnvironmentEvidence {
+  browser_engine: "chromium" | "chrome";
+  browser_distribution:
+    | "playwright_chromium"
+    | "google_chrome"
+    | "chrome_for_testing";
+  browser_version: string;
+  browser_major_version: number;
+  browser_locale: string;
+  browser_timezone: string;
+  font_contract_version: string;
+  font_manifest_sha256: string;
 }
 
 export interface Observation {
   page_state_id: string;
+  viewport: {
+    width: number;
+    height: number;
+  };
+  navigation_generation: number;
   screenshot?: {
     mime_type: "image/jpeg";
     data: string;
+    width: number;
+    height: number;
   };
   ax_tree?: unknown;
   dom_diff?: unknown;
+  ax_tree_timed_out?: boolean;
+  dom_diff_timed_out?: boolean;
   origin?: string;
   title?: string;
+  click_effect?: ClickEffect;
+  target_category?: "link" | "text_input";
+  environment?: EnvironmentEvidence;
+  site_outcome?: SiteOutcome;
+  classifier_rules_version?: string;
+  challenge_release_unavailable?: boolean;
 }
 
 export type EngineResponse =
@@ -90,6 +215,25 @@ export type EngineResponse =
     }
   | {
       contract_id: typeof ENGINE_CONTRACT_ID;
+      action_id: string;
+      status: "error";
+      error: EngineFailure;
+    };
+
+export type EngineViewerResponse =
+  | {
+      contract_id: typeof ENGINE_VIEWER_CONTRACT_ID;
+      action_id: string;
+      status: "ok";
+      frame?: {
+        mime_type: "image/jpeg";
+        data: string;
+        width: number;
+        height: number;
+      };
+    }
+  | {
+      contract_id: typeof ENGINE_VIEWER_CONTRACT_ID;
       action_id: string;
       status: "error";
       error: EngineFailure;
@@ -110,9 +254,32 @@ const IDENTITY_FIELDS = new Set([
   "session_epoch",
   "attachment_id",
   "control_epoch",
+  "controller",
+]);
+const VIEWER_REQUEST_FIELDS = new Set([
+  "contract_id",
+  "action_id",
+  "deadline",
+  "identity",
+  "operation",
+  "input",
+]);
+const VIEWER_INPUT_FIELDS = new Set([
+  "kind",
+  "pointer_action",
+  "keyboard_action",
+  "x",
+  "y",
+  "button",
+  "click_count",
+  "key",
+  "text",
+  "delta_x",
+  "delta_y",
 ]);
 const ACTION_FIELDS = new Set([
   "kind",
+  "observation",
   "url",
   "x",
   "y",
@@ -122,6 +289,7 @@ const ACTION_FIELDS = new Set([
   "key",
   "value",
   "duration_ms",
+  "actions",
 ]);
 
 export function parseRequest(line: string, now = Date.now()): EngineRequest {
@@ -138,21 +306,70 @@ export function parseRequest(line: string, now = Date.now()): EngineRequest {
   if (!/^[1-9][0-9]*$/.test(actionID)) {
     throw new Error("action_id is invalid");
   }
-  const deadline = requireString(request.deadline, "deadline", 20, 64);
-  const deadlineMillis = Date.parse(deadline);
-  if (
-    !Number.isFinite(deadlineMillis) ||
-    deadlineMillis <= now ||
-    deadlineMillis > now + 60_000
-  ) {
-    throw new Error("deadline has elapsed");
+  const deadline = parseDeadline(request.deadline, now);
+  const identity = parseIdentity(request.identity);
+  if (identity.controller !== "agent") {
+    throw new Error("browser action does not hold agent control");
   }
   return {
     contract_id: ENGINE_CONTRACT_ID,
     action_id: actionID,
     deadline,
-    identity: parseIdentity(request.identity),
+    identity,
     action: parseAction(request.action),
+  };
+}
+
+export function parseViewerRequest(
+  line: string,
+  now = Date.now(),
+): EngineViewerRequest {
+  if (Buffer.byteLength(line, "utf8") > 256 * 1024) {
+    throw new Error("engine viewer request exceeds input limit");
+  }
+  const value: unknown = JSON.parse(line);
+  const request = requireRecord(value, "request");
+  requireKnownFields(request, VIEWER_REQUEST_FIELDS, "request");
+  for (const field of [
+    "contract_id",
+    "action_id",
+    "deadline",
+    "identity",
+    "operation",
+  ]) {
+    if (!(field in request)) {
+      throw new Error("request is missing a field");
+    }
+  }
+  if (request.contract_id !== ENGINE_VIEWER_CONTRACT_ID) {
+    throw new Error("unsupported engine viewer contract");
+  }
+  const actionID = requireString(request.action_id, "action_id", 1, 32);
+  if (!/^[1-9][0-9]*$/.test(actionID)) {
+    throw new Error("action_id is invalid");
+  }
+  const identity = parseIdentity(request.identity);
+  if (identity.controller !== "human") {
+    throw new Error("browser viewer request does not hold human control");
+  }
+  const operation = requireString(request.operation, "operation", 4, 16);
+  if (!["enter", "exit", "frame", "input"].includes(operation)) {
+    throw new Error("browser viewer operation is invalid");
+  }
+  const input =
+    request.input === undefined
+      ? undefined
+      : parseViewerInput(request.input);
+  if ((operation === "input") !== (input !== undefined)) {
+    throw new Error("browser viewer input shape is invalid");
+  }
+  return {
+    contract_id: ENGINE_VIEWER_CONTRACT_ID,
+    action_id: actionID,
+    deadline: parseDeadline(request.deadline, now),
+    identity,
+    operation: operation as ViewerOperation,
+    ...(input === undefined ? {} : { input }),
   };
 }
 
@@ -167,8 +384,148 @@ function parseIdentity(value: unknown): Identity {
     session_epoch: requirePositiveInteger(identity.session_epoch, "session_epoch"),
     attachment_id: requireUUID(identity.attachment_id, "attachment_id"),
     control_epoch: requirePositiveInteger(identity.control_epoch, "control_epoch"),
+    controller: requireController(identity.controller),
   };
   return parsed;
+}
+
+function parseViewerInput(value: unknown): ViewerInput {
+  const input = requireRecord(value, "viewer input");
+  requireKnownFields(input, VIEWER_INPUT_FIELDS, "viewer input");
+  const kind = requireString(input.kind, "kind", 6, 16);
+  switch (kind) {
+    case "pointer": {
+      const pointerAction = requireString(
+        input.pointer_action,
+        "pointer_action",
+        4,
+        8,
+      );
+      const x = requireInteger(input.x, "x");
+      const y = requireInteger(input.y, "y");
+      validateCoordinates({ kind: "click", x, y });
+      if (pointerAction === "move") {
+        requireOnlyViewerInputFields(input, [
+          "kind",
+          "pointer_action",
+          "x",
+          "y",
+        ]);
+        return { kind, pointer_action: pointerAction, x, y };
+      }
+      if (pointerAction !== "click") {
+        throw new Error("browser viewer pointer action is invalid");
+      }
+      requireOnlyViewerInputFields(input, [
+        "kind",
+        "pointer_action",
+        "x",
+        "y",
+        "button",
+        "click_count",
+      ]);
+      const button = requireString(input.button, "button", 4, 6);
+      if (!["left", "middle", "right"].includes(button)) {
+        throw new Error("browser viewer pointer button is invalid");
+      }
+      const clickCount = requireInteger(input.click_count, "click_count");
+      if (clickCount < 1 || clickCount > 3) {
+        throw new Error("browser viewer click count is invalid");
+      }
+      return {
+        kind,
+        pointer_action: pointerAction,
+        x,
+        y,
+        button: button as "left" | "middle" | "right",
+        click_count: clickCount,
+      };
+    }
+    case "keyboard": {
+      const keyboardAction = requireString(
+        input.keyboard_action,
+        "keyboard_action",
+        4,
+        8,
+      );
+      if (keyboardAction === "press") {
+        requireOnlyViewerInputFields(input, [
+          "kind",
+          "keyboard_action",
+          "key",
+        ]);
+        return {
+          kind,
+          keyboard_action: keyboardAction,
+          key: requireString(input.key, "key", 1, 64),
+        };
+      }
+      if (keyboardAction !== "text") {
+        throw new Error("browser viewer keyboard action is invalid");
+      }
+      requireOnlyViewerInputFields(input, [
+        "kind",
+        "keyboard_action",
+        "text",
+      ]);
+      const text = requireString(input.text, "text", 1, 4096);
+      if (text.includes("\u0000")) {
+        throw new Error("browser viewer text input is invalid");
+      }
+      return { kind, keyboard_action: keyboardAction, text };
+    }
+    case "scroll": {
+      requireOnlyViewerInputFields(input, ["kind", "delta_x", "delta_y"]);
+      const deltaX = requireFiniteNumber(input.delta_x, "delta_x");
+      const deltaY = requireFiniteNumber(input.delta_y, "delta_y");
+      if (
+        (deltaX === 0 && deltaY === 0) ||
+        Math.abs(deltaX) > 4096 ||
+        Math.abs(deltaY) > 4096
+      ) {
+        throw new Error("browser viewer scroll input is invalid");
+      }
+      return { kind, delta_x: deltaX, delta_y: deltaY };
+    }
+    default:
+      throw new Error("browser viewer input kind is invalid");
+  }
+}
+
+function requireOnlyViewerInputFields(
+  input: Record<string, unknown>,
+  fields: string[],
+): void {
+  const allowed = new Set(fields);
+  requireExactFields(input, allowed, "viewer input");
+}
+
+function parseDeadline(value: unknown, now: number): string {
+  const deadline = requireString(value, "deadline", 20, 64);
+  const deadlineMillis = Date.parse(deadline);
+  if (
+    !Number.isFinite(deadlineMillis) ||
+    deadlineMillis <= now ||
+    deadlineMillis > now + 60_000
+  ) {
+    throw new Error("deadline has elapsed");
+  }
+  return deadline;
+}
+
+function requireController(value: unknown): Controller {
+  const controller = requireString(value, "controller", 4, 5);
+  if (!["agent", "none", "human"].includes(controller)) {
+    throw new Error("controller is invalid");
+  }
+  return controller as Controller;
+}
+
+function requireFiniteNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be finite`);
+  }
+  return value;
 }
 
 function parseAction(value: unknown): BrowserAction {
@@ -179,6 +536,18 @@ function parseAction(value: unknown): BrowserAction {
     throw new Error("action kind is not allowed");
   }
   const parsed: BrowserAction = { kind: kind as ActionKind };
+  if (action.observation !== undefined) {
+    const observation = requireString(
+      action.observation,
+      "observation",
+      1,
+      32,
+    );
+    if (!OBSERVATION_MODES.includes(observation as ObservationMode)) {
+      throw new Error("observation mode is invalid");
+    }
+    parsed.observation = observation as ObservationMode;
+  }
   for (const field of ["url", "text", "key", "value"] as const) {
     if (action[field] !== undefined) {
       const maximum =
@@ -191,6 +560,12 @@ function parseAction(value: unknown): BrowserAction {
       parsed[field] = requireInteger(action[field], field);
     }
   }
+  if (action.actions !== undefined) {
+    if (!Array.isArray(action.actions)) {
+      throw new Error("actions must be an array");
+    }
+    parsed.actions = action.actions.map((nested) => parseAction(nested));
+  }
   validateActionShape(parsed);
   return parsed;
 }
@@ -198,7 +573,10 @@ function parseAction(value: unknown): BrowserAction {
 function validateActionShape(action: BrowserAction): void {
   const present = new Set(
     Object.entries(action)
-      .filter(([field, value]) => field !== "kind" && value !== undefined)
+      .filter(
+        ([field, value]) =>
+          field !== "kind" && field !== "observation" && value !== undefined,
+      )
       .map(([field]) => field),
   );
   const requireFields = (...fields: string[]): void => {
@@ -251,16 +629,13 @@ function validateActionShape(action: BrowserAction): void {
           "End",
           "Backspace",
           "Delete",
-          "Space",
         ].includes(action.key ?? "")
       ) {
         throw new Error("keypress key is not allowed");
       }
       return;
     case "select":
-      requireFields("x", "y", "value");
-      validateCoordinates(action);
-      return;
+      throw new Error("Phase 1 does not allow select controls");
     case "wait":
       requireFields("duration_ms");
       if ((action.duration_ms ?? 0) < 1 || (action.duration_ms ?? 0) > 5000) {
@@ -270,20 +645,41 @@ function validateActionShape(action: BrowserAction): void {
     case "back":
     case "forward":
     case "screenshot":
+    case "checkpoint":
+    case "preflight":
       requireFields();
+      return;
+    case "batch":
+      requireFields("actions");
+      if ((action.actions?.length ?? 0) < 2 || (action.actions?.length ?? 0) > 8) {
+        throw new Error("browser batch requires two to eight actions");
+      }
+      for (const nested of action.actions ?? []) {
+        if (
+          nested.observation !== undefined ||
+          !["scroll", "wait", "screenshot"].includes(nested.kind)
+        ) {
+          throw new Error("browser batch contains a disallowed action");
+        }
+      }
       return;
   }
 }
 
 function validateCoordinates(action: BrowserAction): void {
-  for (const coordinate of [action.x, action.y]) {
-    if (coordinate === undefined || coordinate < 0 || coordinate > 32768) {
-      throw new Error("coordinates are out of range");
-    }
+  if (
+    action.x === undefined ||
+    action.y === undefined ||
+    action.x < 0 ||
+    action.y < 0 ||
+    action.x >= BROWSER_VIEWPORT_WIDTH ||
+    action.y >= BROWSER_VIEWPORT_HEIGHT
+  ) {
+    throw new Error("coordinates are out of range");
   }
 }
 
-function isPublicHTTPURL(raw: string): boolean {
+export function isPublicHTTPURL(raw: string): boolean {
   try {
     const url = new URL(raw);
     return (
@@ -392,9 +788,63 @@ export function failure(
   code: BrowserErrorCode,
   message: string,
   recoverable: boolean,
+  actionIndex?: number,
+  details: Partial<
+    Pick<
+      EngineFailure,
+      | "target_category"
+      | "page_state_id"
+      | "navigation_generation"
+      | "blocked_click_navigation_attempts_remaining"
+      | "blocked_click_run_attempts_remaining"
+      | "site_outcome"
+      | "retry_after_ms"
+      | "classifier_rules_version"
+      | "consecutive_access_denials"
+      | "origin_blocked_for_attachment"
+      | "challenge_release_unavailable"
+    >
+  > = {},
 ): Extract<EngineResponse, { status: "error" }> {
   return {
     contract_id: ENGINE_CONTRACT_ID,
+    action_id: actionID,
+    status: "error",
+    error: {
+      code,
+      message: truncateUTF8(message.trim(), 500),
+      recoverable,
+      ...(actionIndex === undefined ? {} : { action_index: actionIndex }),
+      ...details,
+    },
+  };
+}
+
+export function viewerSuccess(
+  actionID: string,
+  frame?: {
+    mime_type: "image/jpeg";
+    data: string;
+    width: number;
+    height: number;
+  },
+): EngineViewerResponse {
+  return {
+    contract_id: ENGINE_VIEWER_CONTRACT_ID,
+    action_id: actionID,
+    status: "ok",
+    ...(frame === undefined ? {} : { frame }),
+  };
+}
+
+export function viewerFailure(
+  actionID: string,
+  code: BrowserErrorCode,
+  message: string,
+  recoverable: boolean,
+): EngineViewerResponse {
+  return {
+    contract_id: ENGINE_VIEWER_CONTRACT_ID,
     action_id: actionID,
     status: "error",
     error: {

@@ -110,8 +110,6 @@ func normalizedCodexToolKind(value any) string {
 		return "command"
 	case "mcp_tool_call":
 		return "mcp_tool"
-	case "computer_tool_call":
-		return "browser"
 	default:
 		return ""
 	}
