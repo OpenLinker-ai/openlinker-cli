@@ -3,6 +3,7 @@
 package browserruntime
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,37 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		t.Fatal(err)
 	}
 	browserSource := string(browserDockerfile)
+	versionFixture, err := os.ReadFile(
+		filepath.Join(root, "browser-engine", "browser-versions.json"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lockedBrowserVersions map[string]string
+	if err := json.Unmarshal(versionFixture, &lockedBrowserVersions); err != nil {
+		t.Fatal(err)
+	}
+	if len(lockedBrowserVersions) != 2 {
+		t.Fatalf("Browser version fixture = %#v", lockedBrowserVersions)
+	}
+	for platform, lockedBrowserVersion := range lockedBrowserVersions {
+		if (platform != "linux-amd64" && platform != "linux-arm64") ||
+			lockedBrowserVersion == "" ||
+			!strings.Contains(
+				browserSource,
+				"FROM browser-base AS browser-"+platform,
+			) ||
+			!strings.Contains(
+				browserSource,
+				"OPENLINKER_BROWSER_VERSION="+lockedBrowserVersion,
+			) {
+			t.Fatalf(
+				"Dockerfile.browser does not use Browser version fixture %q=%q",
+				platform,
+				lockedBrowserVersion,
+			)
+		}
+	}
 	required := []string{
 		"mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294a",
 		"useradd --uid 10001 --gid 10001",
@@ -31,6 +63,10 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		"OPENLINKER_BROWSER_PROFILE_DIR=/browser-tmp/profiles/active",
 		"OPENLINKER_BROWSER_PROFILE_STORE=/browser-state/encrypted-profiles",
 		"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-key/profile-root-key",
+		"OPENLINKER_BROWSER_ENGINE=chromium",
+		"OPENLINKER_BROWSER_DISTRIBUTION=playwright_chromium",
+		"OPENLINKER_BROWSER_FONT_MANIFEST_SHA256=8a130568",
+		"openlinker-browser-font-manifest",
 		`ENTRYPOINT ["/usr/local/bin/openlinker-browser-runtime"]`,
 	}
 	for _, value := range required {
@@ -54,12 +90,92 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			t.Errorf("Dockerfile.browser contains forbidden surface %q", value)
 		}
 	}
+	engineSource, err := os.ReadFile(
+		filepath.Join(root, "browser-engine", "src", "engine.ts"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documentTrackerSource, err := os.ReadFile(
+		filepath.Join(root, "browser-engine", "src", "document-generation.ts"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combinedBrowserSource := string(engineSource) + string(documentTrackerSource)
+	for _, forbiddenSource := range []string{
+		"connectOverCDP",
+		"--remote-debugging-port",
+		"--remote-debugging-address",
+	} {
+		if strings.Contains(combinedBrowserSource, forbiddenSource) {
+			t.Errorf("Browser Engine contains forbidden CDP surface %q", forbiddenSource)
+		}
+	}
+	if !strings.Contains(combinedBrowserSource, "newCDPSession") {
+		t.Error("Browser Engine does not establish its private pipe-backed CDP session")
+	}
+	if !strings.Contains(
+		combinedBrowserSource,
+		`ignoreDefaultArgs: ["--disable-back-forward-cache"]`,
+	) {
+		t.Error("Browser Engine does not enable the real BFCache lifecycle contract")
+	}
+	if !strings.Contains(
+		combinedBrowserSource,
+		`channel: browserEnvironment.engine === "chrome" ? "chrome" : "chromium"`,
+	) {
+		t.Error("Browser Engine does not select the pinned full Browser channel")
+	}
+	chromeDockerfile, err := os.ReadFile(
+		filepath.Join(root, "Dockerfile.browser.chrome"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chromeSource := string(chromeDockerfile)
+	for _, required := range []string{
+		"OPENLINKER_CHROME_ARTIFACT",
+		"OPENLINKER_CHROME_LOCK",
+		"OPENLINKER_BROWSER_PROFILE_GENERATION",
+		"verify-chrome-lock.mjs",
+		"/opt/google/chrome/chrome",
+		"OPENLINKER_BROWSER_ENGINE=chrome",
+		`org.opencontainers.image.openlinker.redistribution="not-approved"`,
+	} {
+		if !strings.Contains(chromeSource, required) {
+			t.Errorf("operator Chrome Dockerfile is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"apt-get",
+		"curl ",
+		"wget ",
+		"google-chrome-stable",
+		"EXPOSE ",
+	} {
+		if strings.Contains(chromeSource, forbidden) {
+			t.Errorf("operator Chrome Dockerfile contains forbidden fetch or surface %q", forbidden)
+		}
+	}
 
 	providerDockerfile, err := os.ReadFile(filepath.Join(root, "Dockerfile.providers"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	providerSource := string(providerDockerfile)
+	if !strings.Contains(
+		providerSource,
+		`ENTRYPOINT ["/usr/local/bin/openlinker-runtime-entrypoint"]`,
+	) {
+		t.Error("Dockerfile.providers must start the privileged entrypoint directly so it can drop identity before execing tini")
+	}
+	if strings.Contains(
+		providerSource,
+		`ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/openlinker-runtime-entrypoint"]`,
+	) {
+		t.Error("Dockerfile.providers must not leave a capability-limited root tini unable to signal the Runtime UID")
+	}
 	for _, value := range []string{
 		"COPY browser-engine",
 		"mcr.microsoft.com/playwright",
@@ -87,6 +203,9 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-key/profile-root-key",
 			"-profile-key:/browser-key",
 			"- agent-internal",
+			"/browser-home:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
+			"/tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
+			"stop_grace_period: 30s",
 		} {
 			if !strings.Contains(source, required) {
 				t.Errorf("%s is missing %q", name, required)

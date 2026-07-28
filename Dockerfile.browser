@@ -7,7 +7,7 @@ ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOWORK=off
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
-RUN go test ./cmd/openlinker-browser-runtime ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime
+RUN go test ./cmd/openlinker-browser-runtime ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/netpolicy
 ARG TARGETOS
 ARG TARGETARCH
 RUN test "${TARGETOS}" = linux \
@@ -19,24 +19,35 @@ COPY browser-engine/package.json browser-engine/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY browser-engine/tsconfig.json ./
 COPY browser-engine/contract-fixtures.json ./
-COPY browser-engine/browser-version.txt ./
+COPY browser-engine/browser-versions.json ./
 COPY browser-engine/src ./src
 RUN npm run lint \
  && npm test \
  && npm prune --omit=dev \
  && npm cache clean --force
 
-FROM mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48 AS browser
+FROM mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48 AS browser-base
 USER root
 RUN groupadd --gid 10001 openlinker-browser \
  && useradd --uid 10001 --gid 10001 --home-dir /browser-home --no-create-home --shell /usr/sbin/nologin openlinker-browser \
  && install -d -o 10001 -g 10001 -m 0700 /browser-home /browser-key /browser-state /browser-state/encrypted-profiles /browser-tmp /browser-tmp/profiles \
  && install -d -o 10001 -g 10001 -m 0700 /browser-control /browser-control/leases \
  && install -d -o root -g root -m 0555 /opt/openlinker/browser-engine
+COPY --chown=root:root --chmod=0555 test/browser-image/font-manifest.sh /usr/local/bin/openlinker-browser-font-manifest
+COPY --chown=root:root --chmod=0444 browser-engine/font-contract-v1.sha256 /opt/openlinker/browser-engine/font-contract-v1.sha256
+RUN test "$(/usr/local/bin/openlinker-browser-font-manifest)" = "$(tr -d '\n' </opt/openlinker/browser-engine/font-contract-v1.sha256)"
 COPY --from=go-build --chown=root:root --chmod=0555 /out/openlinker-browser-runtime /usr/local/bin/openlinker-browser-runtime
 COPY --from=engine-build --chown=root:root /src/browser-engine/dist /opt/openlinker/browser-engine/dist
 COPY --from=engine-build --chown=root:root /src/browser-engine/node_modules /opt/openlinker/browser-engine/node_modules
 COPY --from=engine-build --chown=root:root /src/browser-engine/package.json /opt/openlinker/browser-engine/package.json
+
+FROM browser-base AS browser-linux-amd64
+ENV OPENLINKER_BROWSER_VERSION=149.0.7827.55
+
+FROM browser-base AS browser-linux-arm64
+ENV OPENLINKER_BROWSER_VERSION=149.0.7827.0
+
+FROM browser-${TARGETOS}-${TARGETARCH} AS browser
 ENV HOME=/browser-home \
     TMPDIR=/browser-tmp \
     NO_PROXY= \
@@ -47,7 +58,16 @@ ENV HOME=/browser-home \
     OPENLINKER_BROWSER_PROFILE_DIR=/browser-tmp/profiles/active \
     OPENLINKER_BROWSER_PROFILE_STORE=/browser-state/encrypted-profiles \
     OPENLINKER_BROWSER_PROFILE_WORK_ROOT=/browser-tmp/profiles \
-    OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-key/profile-root-key
+    OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE=/browser-key/profile-root-key \
+    OPENLINKER_BROWSER_ENGINE=chromium \
+    OPENLINKER_BROWSER_DISTRIBUTION=playwright_chromium \
+    OPENLINKER_BROWSER_PROFILE_GENERATION=1 \
+    OPENLINKER_BROWSER_MAX_ACTIONS_PER_ORIGIN_MINUTE=120 \
+    OPENLINKER_BROWSER_MAX_NAVIGATIONS_PER_ORIGIN_MINUTE=20 \
+    OPENLINKER_BROWSER_LOCALE=en-US \
+    OPENLINKER_BROWSER_TIMEZONE=UTC \
+    OPENLINKER_BROWSER_FONT_CONTRACT_VERSION=openlinker.browser.fonts.v1 \
+    OPENLINKER_BROWSER_FONT_MANIFEST_SHA256=8a130568f9f30f5ca10a64b5e99e16d3b813e4cf733fd8feefc43992c6fc759f
 WORKDIR /browser-state
 USER 10001:10001
 STOPSIGNAL SIGTERM

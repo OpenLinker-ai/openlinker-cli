@@ -1,0 +1,7 @@
+{
+  "distribution": "chrome_for_testing",
+  "version": "149.0.7827.55",
+  "filename": "chrome.tar",
+  "source_reference": "operator-recorded acquisition reference",
+  "sha256": "replace-with-lowercase-sha256-of-chrome.tar"
+}

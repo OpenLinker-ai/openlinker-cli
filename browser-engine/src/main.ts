@@ -134,5 +134,6 @@ async function writeResponse(
 }
 
 void main().catch(() => {
+  process.stderr.write("browser engine startup or stream loop failed\n");
   process.exit(1);
 });

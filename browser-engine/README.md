@@ -11,10 +11,12 @@ inherited. The engine accepts only the Phase 1 action enum and never accepts
 arbitrary JavaScript, CDP, shell, path, upload, download, clipboard, extension,
 or credential-input requests.
 
-The Browser image contains this package and pinned Playwright/Chromium
-versions. A trusted Runtime Agent assigns the authoritative lease and exposes
-the Browser MCP tool to the ordinary Codex or Claude Code client. Browser
-execution never uses a Provider-native computer-use API.
+The Browser image contains this package and a pinned Playwright/Chromium
+generation. `browser-versions.json` records the exact observed Chromium
+version for each published Linux architecture. A trusted Runtime Agent assigns
+the authoritative lease and exposes the Browser MCP tool to the ordinary Codex
+or Claude Code client. Browser execution never uses a Provider-native
+computer-use API.
 
 Local contract checks:
 

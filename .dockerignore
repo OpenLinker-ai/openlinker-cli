@@ -5,6 +5,7 @@
 .DS_Store
 dist
 coverage
+**/node_modules
 *.log
 .env
 .env.*
