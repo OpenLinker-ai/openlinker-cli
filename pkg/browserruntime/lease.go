@@ -21,6 +21,11 @@ type LeaseValidator interface {
 	Validate(browserprotocol.Identity) *browserprotocol.Failure
 }
 
+type LeaseRevoker interface {
+	IsRevoked(browserprotocol.Identity) (bool, *browserprotocol.Failure)
+	Revoke(browserprotocol.Identity) *browserprotocol.Failure
+}
+
 type StaticLease struct {
 	Identity browserprotocol.Identity
 }
@@ -46,17 +51,14 @@ func (lease StaticLease) Validate(identity browserprotocol.Identity) *browserpro
 			false,
 		)
 	}
+	if identity.Controller != expected.Controller {
+		return browserprotocol.NewFailure(
+			browserprotocol.ErrorIdentityMismatch,
+			"browser controller does not match the active lease",
+			false,
+		)
+	}
 	return nil
-}
-
-type NoActiveLease struct{}
-
-func (NoActiveLease) Validate(browserprotocol.Identity) *browserprotocol.Failure {
-	return browserprotocol.NewFailure(
-		browserprotocol.ErrorRuntimeUnavailable,
-		"browser runtime has no active attachment",
-		true,
-	)
 }
 
 type FileLease struct {
@@ -65,9 +67,63 @@ type FileLease struct {
 }
 
 func (lease FileLease) Validate(identity browserprotocol.Identity) *browserprotocol.Failure {
+	revoked, err := lease.isRevoked(identity)
+	if err != nil {
+		return browserprotocol.NewFailure(
+			browserprotocol.ErrorRuntimeUnavailable,
+			"browser runtime revocation state is invalid",
+			false,
+		)
+	}
+	if revoked {
+		return browserprotocol.NewFailure(
+			browserprotocol.ErrorIdentityMismatch,
+			"browser attachment has been closed",
+			false,
+		)
+	}
+	if failure := lease.validateActive(identity); failure != nil {
+		return failure
+	}
+	return nil
+}
+
+func (lease FileLease) IsRevoked(
+	identity browserprotocol.Identity,
+) (bool, *browserprotocol.Failure) {
+	revoked, err := lease.isRevoked(identity)
+	if err != nil {
+		return false, browserprotocol.NewFailure(
+			browserprotocol.ErrorRuntimeUnavailable,
+			"browser runtime revocation state is invalid",
+			false,
+		)
+	}
+	return revoked, nil
+}
+
+func (lease FileLease) validateActive(identity browserprotocol.Identity) *browserprotocol.Failure {
+	_, failure := lease.active(identity)
+	return failure
+}
+
+func (lease FileLease) active(
+	identity browserprotocol.Identity,
+) (browserclient.Lease, *browserprotocol.Failure) {
+	now := lease.Now
+	if now == nil {
+		now = time.Now
+	}
+	return lease.activeAt(identity, now().UTC())
+}
+
+func (lease FileLease) activeAt(
+	identity browserprotocol.Identity,
+	now time.Time,
+) (browserclient.Lease, *browserprotocol.Failure) {
 	path := filepath.Clean(strings.TrimSpace(lease.Path))
 	if !filepath.IsAbs(path) {
-		return browserprotocol.NewFailure(
+		return browserclient.Lease{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorRuntimeUnavailable,
 			"browser runtime active lease path is invalid",
 			false,
@@ -75,7 +131,7 @@ func (lease FileLease) Validate(identity browserprotocol.Identity) *browserproto
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
-		return browserprotocol.NewFailure(
+		return browserclient.Lease{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorRuntimeUnavailable,
 			"browser runtime has no active attachment",
 			true,
@@ -89,7 +145,7 @@ func (lease FileLease) Validate(identity browserprotocol.Identity) *browserproto
 		int(stat.Uid) != os.Geteuid() ||
 		info.Size() <= 0 ||
 		info.Size() > 16<<10 {
-		return browserprotocol.NewFailure(
+		return browserclient.Lease{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorRuntimeUnavailable,
 			"browser runtime active lease is invalid",
 			false,
@@ -97,7 +153,7 @@ func (lease FileLease) Validate(identity browserprotocol.Identity) *browserproto
 	}
 	file, err := os.Open(path) // #nosec G304 -- operator-selected active lease path is validated above.
 	if err != nil {
-		return browserprotocol.NewFailure(
+		return browserclient.Lease{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorRuntimeUnavailable,
 			"browser runtime active lease is unavailable",
 			true,
@@ -106,7 +162,7 @@ func (lease FileLease) Validate(identity browserprotocol.Identity) *browserproto
 	raw, err := io.ReadAll(io.LimitReader(file, (16<<10)+1))
 	_ = file.Close()
 	if err != nil || len(raw) > 16<<10 {
-		return browserprotocol.NewFailure(
+		return browserclient.Lease{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorRuntimeUnavailable,
 			"browser runtime active lease is unreadable",
 			true,
@@ -116,7 +172,7 @@ func (lease FileLease) Validate(identity browserprotocol.Identity) *browserproto
 	decoder.DisallowUnknownFields()
 	var active browserclient.Lease
 	if err := decoder.Decode(&active); err != nil {
-		return browserprotocol.NewFailure(
+		return browserclient.Lease{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorRuntimeUnavailable,
 			"browser runtime active lease is invalid",
 			false,
@@ -124,18 +180,17 @@ func (lease FileLease) Validate(identity browserprotocol.Identity) *browserproto
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return browserprotocol.NewFailure(
+		return browserclient.Lease{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorRuntimeUnavailable,
 			"browser runtime active lease is invalid",
 			false,
 		)
 	}
-	now := lease.Now
-	if now == nil {
-		now = time.Now
+	if failure := active.Validate(now.UTC()); failure != nil {
+		return browserclient.Lease{}, failure
 	}
-	if failure := active.Validate(now().UTC()); failure != nil {
-		return failure
+	if failure := (StaticLease{Identity: active.Identity}).Validate(identity); failure != nil {
+		return browserclient.Lease{}, failure
 	}
-	return StaticLease{Identity: active.Identity}.Validate(identity)
+	return active, nil
 }

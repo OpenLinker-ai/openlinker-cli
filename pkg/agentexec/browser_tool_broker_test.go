@@ -24,19 +24,44 @@ type brokerTestEngine struct {
 
 func (engine brokerTestEngine) Execute(
 	_ context.Context,
-	_ browserprotocol.Identity,
+	identity browserprotocol.Identity,
 	action browserprotocol.Action,
 ) (browserprotocol.Observation, *browserprotocol.Failure) {
 	engine.actions <- action.Kind
-	return browserprotocol.Observation{
+	if action.Kind == browserprotocol.ActionClose {
+		return browserprotocol.Observation{
+			PageStateID: "closed-" + identity.AttachmentID,
+		}, nil
+	}
+	observation := browserprotocol.Observation{
 		PageStateID: "page-state-1",
+		Viewport: &browserprotocol.Viewport{
+			Width:  browserprotocol.BrowserViewportWidth,
+			Height: browserprotocol.BrowserViewportHeight,
+		},
+		NavigationGeneration: 1,
 		Screenshot: &browserprotocol.Screenshot{
 			MIMEType: "image/jpeg",
 			Data:     []byte("jpeg"),
+			Width:    browserprotocol.BrowserViewportWidth,
+			Height:   browserprotocol.BrowserViewportHeight,
 		},
 		Origin: "https://example.com",
 		Title:  "Example",
-	}, nil
+	}
+	if action.Kind == browserprotocol.ActionPreflight {
+		observation.Environment = &browserprotocol.EnvironmentEvidence{
+			BrowserEngine:       "chromium",
+			BrowserDistribution: "playwright_chromium",
+			BrowserVersion:      "149.0.7827.55",
+			BrowserMajorVersion: 149,
+			BrowserLocale:       "en-US",
+			BrowserTimezone:     "UTC",
+			FontContractVersion: "openlinker.browser.fonts.v1",
+			FontManifestSHA256:  strings.Repeat("a", 64),
+		}
+	}
+	return observation, nil
 }
 
 type brokerMCPProvider struct {
@@ -90,7 +115,9 @@ func (provider *brokerMCPProvider) Run(
 		raw := string(scanner.Bytes())
 		if strings.Contains(raw, "page-state-1") &&
 			strings.Contains(raw, "https://example.com") &&
-			strings.Contains(raw, `"type":"image"`) {
+			strings.Contains(raw, `"type":"image"`) &&
+			strings.Contains(raw, `"attachment_evidence"`) &&
+			!strings.Contains(raw, `"browser_version"`) {
 			provider.observed = true
 		}
 		break
@@ -155,9 +182,15 @@ func TestBrowserToolBrokerKeepsAuthorityOutOfProviderProcess(t *testing.T) {
 	if !base.observed {
 		t.Fatal("MCP Browser observation did not cross trusted broker and Runtime UDS")
 	}
-	if first, second := <-actions, <-actions; first != browserprotocol.ActionScreenshot ||
-		second != browserprotocol.ActionClose {
-		t.Fatalf("Browser actions = [%s %s], want screenshot followed by trusted close", first, second)
+	if first, second, third := <-actions, <-actions, <-actions; first != browserprotocol.ActionPreflight ||
+		second != browserprotocol.ActionScreenshot ||
+		third != browserprotocol.ActionClose {
+		t.Fatalf(
+			"Browser actions = [%s %s %s], want preflight, screenshot, close",
+			first,
+			second,
+			third,
+		)
 	}
 	stopRuntime()
 	if err := <-runtimeDone; err != nil {

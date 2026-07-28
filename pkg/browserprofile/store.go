@@ -18,22 +18,41 @@ import (
 )
 
 const (
-	currentVersion    = 1
-	currentFileName   = "current.json"
-	metadataFileName  = "metadata.json"
-	payloadFileName   = "payload.bin"
-	quarantineReason  = "profile_authentication_failed"
-	maxCurrentBytes   = 512
-	checkpointIDBytes = 16
+	currentVersion        = 1
+	currentFileName       = "current.json"
+	metadataFileName      = "metadata.json"
+	payloadFileName       = "payload.bin"
+	quarantineReason      = "profile_authentication_failed"
+	stateQuarantineReason = "profile_state_invalid"
+	maxCurrentBytes       = 512
+	checkpointIDBytes     = 16
 )
 
 type Store struct {
 	root      string
-	protector *Protector
+	protector *protector
 	random    io.Reader
 	now       func() time.Time
 	lockFile  *os.File
 	mu        sync.Mutex
+}
+
+// QuarantineInvalidState removes an authenticated Profile whose decrypted
+// application state failed strict semantic validation. Authentication alone
+// cannot make a malformed Browser-owned state file safe to load.
+func (store *Store) QuarantineInvalidState(identity Identity) error {
+	if store == nil || identity.validate() != nil {
+		return ErrInvalidConfiguration
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.lockFile == nil {
+		return ErrProfileStoreClosed
+	}
+	if err := store.quarantine(identity, stateQuarantineReason); err != nil {
+		return fmt.Errorf("quarantine invalid browser profile state: %w", err)
+	}
+	return errors.Join(ErrProfileQuarantined, ErrProfileCorrupt)
 }
 
 type currentRecord struct {
@@ -57,12 +76,16 @@ type quarantineFileInfo struct {
 	SHA256 string `json:"sha256"`
 }
 
-func NewStore(root string, protector *Protector) (*Store, error) {
+func NewStore(root string) (*Store, error) {
+	return newStore(root, nil)
+}
+
+func newStore(root string, protector *protector) (*Store, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return nil, ErrInvalidConfiguration
 	}
 	if protector == nil {
-		protector = NewProtector(nil)
+		protector = newProtector(nil)
 	}
 	if protector.random == nil {
 		return nil, ErrInvalidConfiguration
@@ -126,12 +149,12 @@ func (store *Store) Create(
 	if err := ensurePrivateDirectory(profileDir); err != nil {
 		return fmt.Errorf("create browser profile: %w", err)
 	}
-	metadata, payloadCipher, err := store.protector.Create(identity, root)
+	metadata, payloadCipher, err := store.protector.create(identity, root)
 	if err != nil {
 		_ = os.Remove(profileDir)
 		return err
 	}
-	defer payloadCipher.Close()
+	defer payloadCipher.close()
 	committed, err := store.commitSnapshot(profileDir, metadata, payloadCipher, payload)
 	if err != nil {
 		if !committed {
@@ -203,7 +226,7 @@ func (store *Store) Load(
 	if _, err := snapshot.payload.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind browser profile payload: %w", err)
 	}
-	if err := snapshot.payloadCipher.Decrypt(writer, snapshot.payload); err != nil {
+	if err := snapshot.payloadCipher.decrypt(writer, snapshot.payload); err != nil {
 		if errors.Is(err, ErrProfileCorrupt) {
 			snapshot.close()
 			return store.handleOpenError(identity, err)
@@ -213,7 +236,7 @@ func (store *Store) Load(
 	return nil
 }
 
-func (store *Store) Rewrap(
+func (store *Store) rewrap(
 	identity Identity,
 	roots map[uint64]*RootKey,
 	newRoot *RootKey,
@@ -237,11 +260,11 @@ func (store *Store) Rewrap(
 		return store.handleOpenError(identity, err)
 	}
 	oldRoot := roots[snapshot.metadata.RootKeyGeneration]
-	rewrapped, err := store.protector.Rewrap(snapshot.metadata, identity, oldRoot, newRoot)
+	rewrapped, err := store.protector.rewrap(snapshot.metadata, identity, oldRoot, newRoot)
 	if err != nil {
 		return store.handleOpenError(identity, err)
 	}
-	raw, err := MarshalMetadata(rewrapped)
+	raw, err := marshalMetadata(rewrapped)
 	if err != nil {
 		return err
 	}
@@ -298,7 +321,7 @@ type openProfileSnapshot struct {
 	dir           string
 	metadata      Metadata
 	payload       *os.File
-	payloadCipher *PayloadCipher
+	payloadCipher *payloadCipher
 }
 
 func (snapshot *openProfileSnapshot) close() {
@@ -309,7 +332,7 @@ func (snapshot *openProfileSnapshot) close() {
 		_ = snapshot.payload.Close()
 	}
 	if snapshot.payloadCipher != nil {
-		snapshot.payloadCipher.Close()
+		snapshot.payloadCipher.close()
 	}
 }
 
@@ -349,7 +372,7 @@ func (store *Store) openSnapshot(
 	if err != nil {
 		return nil, ErrProfileCorrupt
 	}
-	metadata, err := ParseMetadata(metadataRaw)
+	metadata, err := parseMetadata(metadataRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -357,13 +380,13 @@ func (store *Store) openSnapshot(
 	if !validRoot(root) {
 		return nil, ErrRootKeyUnavailable
 	}
-	payloadCipher, err := store.protector.Open(metadata, identity, root)
+	payloadCipher, err := store.protector.open(metadata, identity, root)
 	if err != nil {
 		return nil, err
 	}
 	payload, err := openRegularFile(filepath.Join(snapshotDir, payloadFileName))
 	if err != nil {
-		payloadCipher.Close()
+		payloadCipher.close()
 		return nil, ErrProfileCorrupt
 	}
 	return &openProfileSnapshot{
@@ -374,17 +397,17 @@ func (store *Store) openSnapshot(
 	}, nil
 }
 
-func authenticatePayload(payload *os.File, payloadCipher *PayloadCipher) error {
+func authenticatePayload(payload *os.File, payloadCipher *payloadCipher) error {
 	if _, err := payload.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind browser profile payload: %w", err)
 	}
-	return payloadCipher.Decrypt(io.Discard, payload)
+	return payloadCipher.decrypt(io.Discard, payload)
 }
 
 func (store *Store) commitSnapshot(
 	profileDir string,
 	metadata Metadata,
-	payloadCipher *PayloadCipher,
+	payloadCipher *payloadCipher,
 	payload io.Reader,
 ) (bool, error) {
 	checkpointsDir := filepath.Join(profileDir, "checkpoints")
@@ -406,7 +429,7 @@ func (store *Store) commitSnapshot(
 		}
 	}()
 
-	rawMetadata, err := MarshalMetadata(metadata)
+	rawMetadata, err := marshalMetadata(metadata)
 	if err != nil {
 		return false, err
 	}
@@ -417,7 +440,7 @@ func (store *Store) commitSnapshot(
 	if err != nil {
 		return false, fmt.Errorf("create browser profile payload: %w", err)
 	}
-	encryptErr := payloadCipher.Encrypt(payloadFile, payload)
+	encryptErr := payloadCipher.encrypt(payloadFile, payload)
 	if encryptErr == nil {
 		encryptErr = payloadFile.Sync()
 	}

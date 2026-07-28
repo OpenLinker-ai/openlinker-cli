@@ -68,10 +68,7 @@ func (identity Identity) Validate() *Failure {
 		return NewFailure(ErrorProtocolInvalid, "control_epoch must be positive", false)
 	}
 	switch identity.Controller {
-	case "", ControllerAgent, ControllerNone, ControllerHuman:
-		// The protocol/Engine batch lands before the Runtime ownership batch.
-		// An omitted controller therefore preserves the pre-controller Agent
-		// meaning until that dependent batch starts emitting it explicitly.
+	case ControllerAgent, ControllerNone, ControllerHuman:
 	default:
 		return NewFailure(ErrorProtocolInvalid, "controller is invalid", false)
 	}
@@ -86,25 +83,18 @@ func (observation Observation) ValidateEngine() *Failure {
 	if failure := observation.validateCommon(); failure != nil {
 		return failure
 	}
-	legacyEvidence := observation.Viewport == nil &&
-		observation.NavigationGeneration == 0 &&
-		(observation.Screenshot == nil ||
-			(observation.Screenshot.Width == 0 &&
-				observation.Screenshot.Height == 0))
-	if !legacyEvidence {
-		if observation.Viewport == nil ||
-			observation.Viewport.Width != BrowserViewportWidth ||
-			observation.Viewport.Height != BrowserViewportHeight {
-			return NewFailure(ErrorOutputInvalid, "browser viewport is invalid", false)
-		}
-		if observation.NavigationGeneration == 0 {
-			return NewFailure(ErrorOutputInvalid, "navigation_generation must be positive", false)
-		}
-		if observation.Screenshot != nil &&
-			(observation.Screenshot.Width != BrowserViewportWidth ||
-				observation.Screenshot.Height != BrowserViewportHeight) {
-			return NewFailure(ErrorOutputInvalid, "screenshot dimensions are invalid", false)
-		}
+	if observation.Viewport == nil ||
+		observation.Viewport.Width != BrowserViewportWidth ||
+		observation.Viewport.Height != BrowserViewportHeight {
+		return NewFailure(ErrorOutputInvalid, "browser viewport is invalid", false)
+	}
+	if observation.NavigationGeneration == 0 {
+		return NewFailure(ErrorOutputInvalid, "navigation_generation must be positive", false)
+	}
+	if observation.Screenshot != nil &&
+		(observation.Screenshot.Width != BrowserViewportWidth ||
+			observation.Screenshot.Height != BrowserViewportHeight) {
+		return NewFailure(ErrorOutputInvalid, "screenshot dimensions are invalid", false)
 	}
 	switch {
 	case observation.ClickEffect == "" && observation.TargetCategory == "":
@@ -170,10 +160,7 @@ func (observation Observation) validateCommon() *Failure {
 		if len(observation.Screenshot.Data) == 0 || len(observation.Screenshot.Data) > MaxScreenshotBytes {
 			return NewFailure(ErrorOutputTooLarge, "screenshot exceeds the output limit", false)
 		}
-		if observation.Screenshot.Width < 0 ||
-			observation.Screenshot.Height < 0 ||
-			(observation.Screenshot.Width == 0) !=
-				(observation.Screenshot.Height == 0) {
+		if observation.Screenshot.Width <= 0 || observation.Screenshot.Height <= 0 {
 			return NewFailure(ErrorOutputInvalid, "screenshot dimensions are invalid", false)
 		}
 	}

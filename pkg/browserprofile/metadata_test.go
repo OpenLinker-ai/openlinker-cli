@@ -9,47 +9,47 @@ import (
 
 func TestMetadataCreateMarshalOpenAndIdentityBinding(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	root := testRootKey(t, 1, 0x11)
 	defer root.Close()
 	identity := testIdentity()
 
-	metadata, payloadCipher, err := protector.Create(identity, root)
+	metadata, payloadCipher, err := protector.create(identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer payloadCipher.Close()
-	raw, err := MarshalMetadata(metadata)
+	defer payloadCipher.close()
+	raw, err := marshalMetadata(metadata)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := ParseMetadata(raw)
+	decoded, err := parseMetadata(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := protector.Open(decoded, identity, root)
+	opened, err := protector.open(decoded, identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened.Close()
+	opened.close()
 
 	other := identity
 	other.PrincipalScopeID = "scope_other"
-	if _, err := protector.Open(decoded, other, root); !errors.Is(err, ErrIdentityMismatch) {
+	if _, err := protector.open(decoded, other, root); !errors.Is(err, ErrIdentityMismatch) {
 		t.Fatalf("cross-principal Open() error = %v, want %v", err, ErrIdentityMismatch)
 	}
 }
 
 func TestMetadataParserRejectsUnknownTrailingAndOversizedInput(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	root := testRootKey(t, 1, 0x11)
 	defer root.Close()
-	metadata, payloadCipher, err := protector.Create(testIdentity(), root)
+	metadata, payloadCipher, err := protector.create(testIdentity(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payloadCipher.Close()
+	payloadCipher.close()
 	raw, err := json.Marshal(metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -71,8 +71,8 @@ func TestMetadataParserRejectsUnknownTrailingAndOversizedInput(t *testing.T) {
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseMetadata(payload); !errors.Is(err, ErrProfileCorrupt) {
-				t.Fatalf("ParseMetadata() error = %v, want %v", err, ErrProfileCorrupt)
+			if _, err := parseMetadata(payload); !errors.Is(err, ErrProfileCorrupt) {
+				t.Fatalf("parseMetadata() error = %v, want %v", err, ErrProfileCorrupt)
 			}
 		})
 	}
@@ -80,54 +80,54 @@ func TestMetadataParserRejectsUnknownTrailingAndOversizedInput(t *testing.T) {
 
 func TestMetadataRejectsWrongOrTamperedRootMaterial(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	root := testRootKey(t, 1, 0x11)
 	defer root.Close()
 	identity := testIdentity()
-	metadata, payloadCipher, err := protector.Create(identity, root)
+	metadata, payloadCipher, err := protector.create(identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payloadCipher.Close()
+	payloadCipher.close()
 
 	wrongGeneration := testRootKey(t, 2, 0x11)
 	defer wrongGeneration.Close()
-	if _, err := protector.Open(metadata, identity, wrongGeneration); !errors.Is(err, ErrKeyGeneration) {
+	if _, err := protector.open(metadata, identity, wrongGeneration); !errors.Is(err, ErrKeyGeneration) {
 		t.Fatalf("wrong generation error = %v, want %v", err, ErrKeyGeneration)
 	}
 	wrongKey := testRootKey(t, 1, 0x22)
 	defer wrongKey.Close()
-	if _, err := protector.Open(metadata, identity, wrongKey); !errors.Is(err, ErrProfileCorrupt) {
+	if _, err := protector.open(metadata, identity, wrongKey); !errors.Is(err, ErrProfileCorrupt) {
 		t.Fatalf("wrong key error = %v, want %v", err, ErrProfileCorrupt)
 	}
 	tampered := cloneMetadata(metadata)
 	tampered.WrappedDEK[0] ^= 0xff
-	if _, err := protector.Open(tampered, identity, root); !errors.Is(err, ErrProfileCorrupt) {
+	if _, err := protector.open(tampered, identity, root); !errors.Is(err, ErrProfileCorrupt) {
 		t.Fatalf("tampered metadata error = %v, want %v", err, ErrProfileCorrupt)
 	}
 }
 
 func TestMetadataRewrapChangesOnlyWrappedKeyMetadata(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	oldRoot := testRootKey(t, 1, 0x11)
 	defer oldRoot.Close()
 	newRoot := testRootKey(t, 2, 0x22)
 	defer newRoot.Close()
 	identity := testIdentity()
-	metadata, payloadCipher, err := protector.Create(identity, oldRoot)
+	metadata, payloadCipher, err := protector.create(identity, oldRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var encrypted bytes.Buffer
 	plaintext := bytes.Repeat([]byte("profile-data-"), 1000)
-	if err := payloadCipher.Encrypt(&encrypted, bytes.NewReader(plaintext)); err != nil {
+	if err := payloadCipher.encrypt(&encrypted, bytes.NewReader(plaintext)); err != nil {
 		t.Fatal(err)
 	}
-	payloadCipher.Close()
+	payloadCipher.close()
 	payloadBefore := append([]byte(nil), encrypted.Bytes()...)
 
-	rewrapped, err := protector.Rewrap(metadata, identity, oldRoot, newRoot)
+	rewrapped, err := protector.rewrap(metadata, identity, oldRoot, newRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,16 +138,16 @@ func TestMetadataRewrapChangesOnlyWrappedKeyMetadata(t *testing.T) {
 	if !bytes.Equal(payloadBefore, encrypted.Bytes()) {
 		t.Fatal("rewrap changed the encrypted profile payload")
 	}
-	if _, err := protector.Open(rewrapped, identity, oldRoot); !errors.Is(err, ErrKeyGeneration) {
+	if _, err := protector.open(rewrapped, identity, oldRoot); !errors.Is(err, ErrKeyGeneration) {
 		t.Fatalf("old root Open() error = %v, want %v", err, ErrKeyGeneration)
 	}
-	opened, err := protector.Open(rewrapped, identity, newRoot)
+	opened, err := protector.open(rewrapped, identity, newRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer opened.Close()
+	defer opened.close()
 	var decrypted bytes.Buffer
-	if err := opened.Decrypt(&decrypted, bytes.NewReader(encrypted.Bytes())); err != nil {
+	if err := opened.decrypt(&decrypted, bytes.NewReader(encrypted.Bytes())); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(decrypted.Bytes(), plaintext) {
@@ -157,19 +157,19 @@ func TestMetadataRewrapChangesOnlyWrappedKeyMetadata(t *testing.T) {
 
 func TestClosedRootAndPayloadKeysFailClosed(t *testing.T) {
 	t.Parallel()
-	protector := NewProtector(nil)
+	protector := newProtector(nil)
 	root := testRootKey(t, 1, 0x11)
 	identity := testIdentity()
-	metadata, payloadCipher, err := protector.Create(identity, root)
+	metadata, payloadCipher, err := protector.create(identity, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payloadCipher.Close()
-	if err := payloadCipher.Encrypt(&bytes.Buffer{}, bytes.NewReader(nil)); !errors.Is(err, ErrKeyClosed) {
+	payloadCipher.close()
+	if err := payloadCipher.encrypt(&bytes.Buffer{}, bytes.NewReader(nil)); !errors.Is(err, ErrKeyClosed) {
 		t.Fatalf("closed payload key error = %v, want %v", err, ErrKeyClosed)
 	}
 	root.Close()
-	if _, err := protector.Open(metadata, identity, root); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := protector.open(metadata, identity, root); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("closed root error = %v, want %v", err, ErrInvalidConfiguration)
 	}
 }

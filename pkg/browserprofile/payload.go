@@ -16,7 +16,7 @@ const (
 	noncePrefixSize  = 8
 )
 
-func (cipher *PayloadCipher) Encrypt(writer io.Writer, reader io.Reader) error {
+func (cipher *payloadCipher) encrypt(writer io.Writer, reader io.Reader) error {
 	if err := cipher.validate(); err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func (cipher *PayloadCipher) Encrypt(writer io.Writer, reader io.Reader) error {
 	return writePayloadRecord(writer, gcm, prefix, index, nil, true, cipher.identity)
 }
 
-func (cipher *PayloadCipher) Decrypt(writer io.Writer, reader io.Reader) error {
+func (cipher *payloadCipher) decrypt(writer io.Writer, reader io.Reader) error {
 	if err := cipher.validate(); err != nil {
 		return err
 	}
@@ -128,7 +128,7 @@ func (cipher *PayloadCipher) Decrypt(writer io.Writer, reader io.Reader) error {
 	}
 }
 
-func (cipher *PayloadCipher) validate() error {
+func (cipher *payloadCipher) validate() error {
 	if cipher == nil || cipher.closed {
 		return ErrKeyClosed
 	}

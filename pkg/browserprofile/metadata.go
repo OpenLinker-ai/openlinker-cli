@@ -16,7 +16,7 @@ const wrappingKeyContext = "openlinker.browser.profile.wrap.v1"
 
 const maxMetadataBytes = 4096
 
-func MarshalMetadata(metadata Metadata) ([]byte, error) {
+func marshalMetadata(metadata Metadata) ([]byte, error) {
 	if validateMetadataShape(metadata) != nil {
 		return nil, ErrProfileCorrupt
 	}
@@ -27,7 +27,7 @@ func MarshalMetadata(metadata Metadata) ([]byte, error) {
 	return raw, nil
 }
 
-func ParseMetadata(raw []byte) (Metadata, error) {
+func parseMetadata(raw []byte) (Metadata, error) {
 	if len(raw) == 0 || len(raw) > maxMetadataBytes {
 		return Metadata{}, ErrProfileCorrupt
 	}
@@ -47,10 +47,10 @@ func ParseMetadata(raw []byte) (Metadata, error) {
 	return metadata, nil
 }
 
-func (protector *Protector) Create(
+func (protector *protector) create(
 	identity Identity,
 	root *RootKey,
-) (Metadata, *PayloadCipher, error) {
+) (Metadata, *payloadCipher, error) {
 	if protector == nil || protector.random == nil || identity.validate() != nil || !validRoot(root) {
 		return Metadata{}, nil, ErrInvalidConfiguration
 	}
@@ -63,17 +63,17 @@ func (protector *Protector) Create(
 		clear(dek[:])
 		return Metadata{}, nil, err
 	}
-	payloadCipher := &PayloadCipher{identity: identity, random: protector.random}
+	payloadCipher := &payloadCipher{identity: identity, random: protector.random}
 	copy(payloadCipher.key[:], dek[:])
 	clear(dek[:])
 	return metadata, payloadCipher, nil
 }
 
-func (protector *Protector) Open(
+func (protector *protector) open(
 	metadata Metadata,
 	expected Identity,
 	root *RootKey,
-) (*PayloadCipher, error) {
+) (*payloadCipher, error) {
 	if protector == nil || protector.random == nil || expected.validate() != nil || !validRoot(root) {
 		return nil, ErrInvalidConfiguration
 	}
@@ -81,13 +81,13 @@ func (protector *Protector) Open(
 	if err != nil {
 		return nil, err
 	}
-	payloadCipher := &PayloadCipher{identity: expected, random: protector.random}
+	payloadCipher := &payloadCipher{identity: expected, random: protector.random}
 	copy(payloadCipher.key[:], dek)
 	clear(dek)
 	return payloadCipher, nil
 }
 
-func (protector *Protector) Rewrap(
+func (protector *protector) rewrap(
 	metadata Metadata,
 	expected Identity,
 	oldRoot *RootKey,
@@ -105,7 +105,7 @@ func (protector *Protector) Rewrap(
 	return protector.wrap(expected, newRoot, dek)
 }
 
-func (protector *Protector) wrap(
+func (protector *protector) wrap(
 	identity Identity,
 	root *RootKey,
 	dek []byte,

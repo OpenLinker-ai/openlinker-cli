@@ -8,16 +8,71 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agentexec"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo"
 	openlinker "github.com/OpenLinker-ai/openlinker-go"
 )
 
-const shutdownTimeout = 15 * time.Second
+const (
+	shutdownTimeout                = 15 * time.Second
+	browserExecutionProfileFeature = "browser_execution_profile.v1"
+	browserHumanControlFeature     = "browser_human_control.v1"
+	browserHumanControlEnvironment = "OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED"
+)
+
+func runtimeOptionalFeatures(
+	executionProfile string,
+	humanControlEnabled bool,
+) []string {
+	if strings.TrimSpace(executionProfile) != "browser" {
+		return nil
+	}
+	features := []string{browserExecutionProfileFeature}
+	if humanControlEnabled {
+		features = append(features, browserHumanControlFeature)
+	}
+	return features
+}
+
+func runtimeExtensionRoutes(
+	executionProfile string,
+	humanControlEnabled bool,
+) []openlinker.RuntimeExtensionRoute {
+	if strings.TrimSpace(executionProfile) != "browser" ||
+		!humanControlEnabled {
+		return nil
+	}
+	return []openlinker.RuntimeExtensionRoute{
+		browserprotocol.RuntimeViewerExtensionRoute,
+	}
+}
+
+func runtimeHumanControlEnabled(
+	getenv func(string) string,
+	executionProfile string,
+) (bool, error) {
+	if strings.TrimSpace(executionProfile) != "browser" {
+		return false, nil
+	}
+	raw := strings.TrimSpace(getenv(browserHumanControlEnvironment))
+	if raw == "" {
+		return false, nil
+	}
+	enabled, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf(
+			"%s must be true or false",
+			browserHumanControlEnvironment,
+		)
+	}
+	return enabled, nil
+}
 
 type Status struct {
 	State              string `json:"state"`
@@ -111,6 +166,14 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 		service.setStatus(Status{State: "error", Message: boundedStatusMessage(err), UpdatedAt: nowText()})
 		return err
 	}
+	humanControlEnabled, err := runtimeHumanControlEnabled(
+		service.getenv,
+		resolved.config.ExecutionProfile,
+	)
+	if err != nil {
+		service.setStatus(Status{State: "error", Message: boundedStatusMessage(err), UpdatedAt: nowText()})
+		return err
+	}
 	workerLock := resolved.workerLock
 	ready := make(chan struct{})
 	readyOnce := sync.Once{}
@@ -122,6 +185,14 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 		RequireTokenOnly: true,
 		DataDir:          filepath.Join(resolved.stateDir, "runtime"), Capacity: resolved.config.Capacity,
 		Handler: resolved.handler, Logger: service.logger,
+		OptionalFeatures: runtimeOptionalFeatures(
+			resolved.config.ExecutionProfile,
+			humanControlEnabled,
+		),
+		ExtensionRoutes: runtimeExtensionRoutes(
+			resolved.config.ExecutionProfile,
+			humanControlEnabled,
+		),
 		OnReady: func(_ openlinker.RuntimeReadyPayload) {
 			service.setStatus(Status{
 				State: "ready", Enabled: resolved.config.Enabled, Provider: resolved.config.Provider, AgentID: resolved.config.AgentID,

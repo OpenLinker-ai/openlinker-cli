@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,20 +29,22 @@ const (
 )
 
 type browserExecutionProvider struct {
-	base   Provider
-	config ProviderConfig
+	base      Provider
+	config    ProviderConfig
+	preflight func(context.Context, *browserRunLease) error
 }
 
 type browserSessionState struct {
-	Version             int    `json:"version"`
-	SessionKeyHash      string `json:"session_key_hash"`
-	BrowserSessionID    string `json:"browser_session_id"`
-	SessionEpoch        uint64 `json:"session_epoch"`
-	ControlEpoch        uint64 `json:"control_epoch"`
-	RuntimeSessionID    string `json:"runtime_session_id"`
-	RuntimeSessionEpoch int64  `json:"runtime_session_epoch"`
-	RuntimeAttachmentID string `json:"runtime_attachment_id"`
-	UpdatedAt           string `json:"updated_at"`
+	Version             int                        `json:"version"`
+	SessionKeyHash      string                     `json:"session_key_hash"`
+	BrowserSessionID    string                     `json:"browser_session_id"`
+	SessionEpoch        uint64                     `json:"session_epoch"`
+	ControlEpoch        uint64                     `json:"control_epoch"`
+	Controller          browserprotocol.Controller `json:"controller"`
+	RuntimeSessionID    string                     `json:"runtime_session_id"`
+	RuntimeSessionEpoch int64                      `json:"runtime_session_epoch"`
+	RuntimeAttachmentID string                     `json:"runtime_attachment_id"`
+	UpdatedAt           string                     `json:"updated_at"`
 }
 
 type browserRunLease struct {
@@ -55,6 +58,7 @@ type browserRunLease struct {
 	releaseScope func()
 	mu           sync.Mutex
 	runtimeUsed  bool
+	environment  *browserprotocol.EnvironmentEvidence
 	closed       bool
 }
 
@@ -81,26 +85,49 @@ func newBrowserExecutionProvider(base Provider, config ProviderConfig) (Provider
 		!filepath.IsAbs(config.BrowserBrokerRoot) {
 		return nil, errors.New("Browser execution paths must be absolute")
 	}
-	return &browserExecutionProvider{base: base, config: config}, nil
+	return &browserExecutionProvider{
+		base:      base,
+		config:    config,
+		preflight: preflightBrowserRuntime,
+	}, nil
 }
 
 func (provider *browserExecutionProvider) Run(
 	ctx context.Context,
 	run RunContext,
 ) (result openlinker.RuntimeResult, resultErr error) {
+	emitBrowserLifecycle(run.Emit, "preparing", "")
 	lease, err := acquireBrowserRunLease(provider.config, run)
 	if err != nil {
+		emitBrowserLifecycle(run.Emit, "failed", "failed")
 		return openlinker.RuntimeResult{}, err
 	}
+	err = provider.preflight(ctx, lease)
+	if err != nil {
+		runtimeErr := lease.closeBrowserRuntime()
+		leaseErr := lease.Close()
+		emitBrowserLifecycle(run.Emit, "failed", "failed")
+		return openlinker.RuntimeResult{}, errors.Join(err, runtimeErr, leaseErr)
+	}
+	humanControl := newBrowserHumanControl(
+		lease,
+		run.RuntimeExtensions,
+		run.Emit,
+	)
+	go humanControl.run(ctx)
+	defer humanControl.stopFrames()
 	broker, err := startBrowserToolBroker(
 		ctx,
 		provider.config.Provider,
 		provider.config.BrowserBrokerRoot,
 		lease,
+		humanControl.executor,
 	)
 	if err != nil {
-		_ = lease.Close()
-		return openlinker.RuntimeResult{}, err
+		runtimeErr := lease.closeBrowserRuntime()
+		leaseErr := lease.Close()
+		emitBrowserLifecycle(run.Emit, "failed", "failed")
+		return openlinker.RuntimeResult{}, errors.Join(err, runtimeErr, leaseErr)
 	}
 	run.Browser = &BrowserRunContext{
 		PluginBin:  provider.config.BrowserPluginBin,
@@ -136,6 +163,53 @@ func (provider *browserExecutionProvider) Run(
 		result.Output = copied
 	}
 	return result, resultErr
+}
+
+func preflightBrowserRuntime(
+	ctx context.Context,
+	lease *browserRunLease,
+) error {
+	client, err := lease.browserClient()
+	if err != nil {
+		return err
+	}
+	observation, failure := client.Execute(ctx, browserprotocol.Action{
+		Kind:        browserprotocol.ActionPreflight,
+		Observation: browserprotocol.ObservationSemantic,
+	})
+	if failure != nil {
+		return failure
+	}
+	if observation.Environment == nil {
+		return errors.New("Browser preflight did not return environment evidence")
+	}
+	environment := *observation.Environment
+	if failure := environment.Validate(); failure != nil {
+		return failure
+	}
+	lease.mu.Lock()
+	lease.environment = &environment
+	lease.mu.Unlock()
+	return nil
+}
+
+func (lease *browserRunLease) browserEvidenceSnapshot() (
+	browserplugin.EvidenceSnapshot,
+	error,
+) {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.closed || lease.environment == nil {
+		return browserplugin.EvidenceSnapshot{}, errors.New(
+			"Browser attachment evidence is unavailable",
+		)
+	}
+	return browserplugin.EvidenceSnapshot{
+		Environment:      *lease.environment,
+		BrowserSessionID: lease.identity.BrowserSessionID,
+		SessionEpoch:     lease.identity.SessionEpoch,
+		ControlEpoch:     lease.identity.ControlEpoch,
+	}, nil
 }
 
 func emitBrowserLifecycle(emit func(string, any) error, phase, status string) {
@@ -179,6 +253,19 @@ func (lease *browserRunLease) closeBrowserRuntime() error {
 	if !used || closed {
 		return nil
 	}
+	identity, err := lease.identitySnapshot()
+	if err != nil {
+		return err
+	}
+	if identity.Controller != browserprotocol.ControllerAgent {
+		if _, err := lease.transitionController(
+			identity.Controller,
+			browserprotocol.ControllerAgent,
+			0,
+		); err != nil {
+			return err
+		}
+	}
 	client, err := browserclient.New(browserclient.Config{
 		SocketPath:     lease.config.BrowserSocket,
 		CredentialFile: lease.config.BrowserCredentialFile,
@@ -192,6 +279,10 @@ func (lease *browserRunLease) closeBrowserRuntime() error {
 	if _, failure := client.Execute(ctx, browserprotocol.Action{
 		Kind: browserprotocol.ActionClose,
 	}); failure != nil {
+		if failure.Code == browserprotocol.ErrorIdentityMismatch ||
+			failure.Code == browserprotocol.ErrorStaleControlEpoch {
+			return nil
+		}
 		return failure
 	}
 	return nil
@@ -241,6 +332,13 @@ func acquireBrowserRunLease(
 		"sessions",
 		sessionKeyHash+".json",
 	)
+	if err := pruneBrowserSessionStates(
+		config.BrowserLeaseRoot,
+		statePath,
+		time.Now().UTC(),
+	); err != nil {
+		return nil, err
+	}
 	state, err := readBrowserSessionState(statePath)
 	if err != nil {
 		return nil, err
@@ -255,6 +353,7 @@ func acquireBrowserRunLease(
 			SessionKeyHash:   sessionKeyHash,
 			BrowserSessionID: browserSessionID,
 			SessionEpoch:     1,
+			Controller:       browserprotocol.ControllerAgent,
 		}
 	} else if state.SessionKeyHash != sessionKeyHash {
 		return nil, errors.New("Browser session state identity does not match")
@@ -270,6 +369,7 @@ func acquireBrowserRunLease(
 	state.RuntimeSessionEpoch = authority.RuntimeSessionEpoch
 	state.RuntimeAttachmentID = authority.RuntimeAttachmentID
 	state.ControlEpoch++
+	state.Controller = browserprotocol.ControllerAgent
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	attachmentID, err := newBrowserUUID()
 	if err != nil {
@@ -283,6 +383,7 @@ func acquireBrowserRunLease(
 		SessionEpoch:     state.SessionEpoch,
 		AttachmentID:     attachmentID,
 		ControlEpoch:     state.ControlEpoch,
+		Controller:       state.Controller,
 	}
 	if failure := identity.Validate(); failure != nil {
 		return nil, failure
@@ -310,6 +411,114 @@ func acquireBrowserRunLease(
 	}
 	keepLock = true
 	return lease, nil
+}
+
+type browserSessionPruneCandidate struct {
+	path      string
+	updatedAt time.Time
+}
+
+func pruneBrowserSessionStates(root, currentPath string, now time.Time) error {
+	sessionRoot := filepath.Join(root, "sessions")
+	directory, err := os.Open(sessionRoot) // #nosec G304 -- validated operator-owned state root.
+	if err != nil {
+		return err
+	}
+	entries, readErr := directory.ReadDir(browserprotocol.BrowserSessionStateScanLimit + 1)
+	closeErr := directory.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if len(entries) > browserprotocol.BrowserSessionStateScanLimit {
+		return errors.New("Browser Session state exceeds the bounded prune scan limit")
+	}
+
+	currentExists := false
+	if info, statErr := os.Lstat(currentPath); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("Browser Session state path is invalid")
+		}
+		currentExists = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+
+	activeSessionID, err := activeBrowserSessionID(root, now)
+	if err != nil {
+		return err
+	}
+	candidates := make([]browserSessionPruneCandidate, 0, len(entries))
+	protected := 0
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 ||
+			filepath.Ext(entry.Name()) != ".json" {
+			return errors.New("Browser Session directory contains an invalid entry")
+		}
+		path := filepath.Join(sessionRoot, entry.Name())
+		state, stateErr := readBrowserSessionState(path)
+		if stateErr != nil {
+			return stateErr
+		}
+		updatedAt, parseErr := time.Parse(time.RFC3339Nano, state.UpdatedAt)
+		if parseErr != nil {
+			return errors.New("Browser Session state timestamp is invalid")
+		}
+		if path == currentPath ||
+			(activeSessionID != "" && state.BrowserSessionID == activeSessionID) {
+			protected++
+			continue
+		}
+		candidates = append(candidates, browserSessionPruneCandidate{
+			path:      path,
+			updatedAt: updatedAt,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].updatedAt.Equal(candidates[j].updatedAt) {
+			return candidates[i].path < candidates[j].path
+		}
+		return candidates[i].updatedAt.Before(candidates[j].updatedAt)
+	})
+
+	target := browserprotocol.BrowserSessionStateLimit
+	if !currentExists {
+		target--
+	}
+	remaining := len(candidates) + protected
+	oldestAllowed := now.Add(-browserprotocol.BrowserStateRetention)
+	for _, candidate := range candidates {
+		if !candidate.updatedAt.Before(oldestAllowed) && remaining <= target {
+			break
+		}
+		if err := removePrivateBrowserFile(candidate.path); err != nil {
+			return err
+		}
+		remaining--
+	}
+	if remaining > target {
+		return errors.New("Browser Session state cannot be pruned without deleting an active Session")
+	}
+	return nil
+}
+
+func activeBrowserSessionID(root string, now time.Time) (string, error) {
+	lease, err := readBrowserLease(filepath.Join(root, "active-lease.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if failure := lease.Validate(now); failure != nil {
+		if failure.Code == browserprotocol.ErrorDeadlineExceeded {
+			return "", nil
+		}
+		return "", errors.New("active Browser lease is invalid")
+	}
+	return lease.Identity.BrowserSessionID, nil
 }
 
 func browserLeaseExpiry(config ProviderConfig, run RunContext) (time.Time, error) {
@@ -344,9 +553,11 @@ func (lease *browserRunLease) Rotate() error {
 	}
 	lease.state.SessionEpoch++
 	lease.state.ControlEpoch++
+	lease.state.Controller = browserprotocol.ControllerAgent
 	lease.state.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	lease.identity.SessionEpoch = lease.state.SessionEpoch
 	lease.identity.ControlEpoch = lease.state.ControlEpoch
+	lease.identity.Controller = lease.state.Controller
 	lease.identity.AttachmentID = attachmentID
 	if err := lease.persist(); err != nil {
 		return err
@@ -354,7 +565,76 @@ func (lease *browserRunLease) Rotate() error {
 	return nil
 }
 
+func (lease *browserRunLease) Pause() (browserprotocol.Identity, error) {
+	return lease.transitionController(
+		browserprotocol.ControllerAgent,
+		browserprotocol.ControllerNone,
+		0,
+	)
+}
+
+func (lease *browserRunLease) transitionController(
+	expected browserprotocol.Controller,
+	next browserprotocol.Controller,
+	targetEpoch uint64,
+) (browserprotocol.Identity, error) {
+	if lease == nil {
+		return browserprotocol.Identity{}, errors.New("Browser lease is unavailable")
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.closed {
+		return browserprotocol.Identity{}, errors.New("Browser lease is closed")
+	}
+	if lease.identity.Controller != expected {
+		return browserprotocol.Identity{}, fmt.Errorf(
+			"Browser controller is %s, expected %s",
+			lease.identity.Controller,
+			expected,
+		)
+	}
+	nextEpoch := lease.identity.ControlEpoch + 1
+	if targetEpoch != 0 && targetEpoch != nextEpoch {
+		return browserprotocol.Identity{}, errors.New(
+			"Browser control transition epoch is stale",
+		)
+	}
+	previousState := lease.state
+	previousIdentity := lease.identity
+	lease.state.ControlEpoch = nextEpoch
+	lease.state.Controller = next
+	lease.state.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	lease.identity.ControlEpoch = nextEpoch
+	lease.identity.Controller = next
+	if err := lease.persist(); err != nil {
+		lease.state = previousState
+		lease.identity = previousIdentity
+		return browserprotocol.Identity{}, err
+	}
+	return lease.identity, nil
+}
+
+func (lease *browserRunLease) identitySnapshot() (
+	browserprotocol.Identity,
+	error,
+) {
+	if lease == nil {
+		return browserprotocol.Identity{}, errors.New("Browser lease is unavailable")
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.closed {
+		return browserprotocol.Identity{}, errors.New("Browser lease is closed")
+	}
+	return lease.identity, nil
+}
+
 func (lease *browserRunLease) persist() error {
+	unlock, err := browserclient.LockAuthority(filepath.Dir(lease.activePath))
+	if err != nil {
+		return fmt.Errorf("lock Browser lease authority: %w", err)
+	}
+	defer unlock()
 	if err := writePrivateBrowserJSON(lease.statePath, lease.state); err != nil {
 		return fmt.Errorf("persist Browser session state: %w", err)
 	}
@@ -382,17 +662,24 @@ func (lease *browserRunLease) Close() error {
 	if lease.closed {
 		return nil
 	}
-	lease.closed = true
+	defer func() {
+		if lease.releaseScope != nil {
+			lease.releaseScope()
+			lease.releaseScope = nil
+		}
+	}()
+	unlock, lockErr := browserclient.LockAuthority(filepath.Dir(lease.activePath))
+	if lockErr != nil {
+		return fmt.Errorf("lock Browser lease authority: %w", lockErr)
+	}
+	defer unlock()
 	runErr := removePrivateBrowserFile(lease.runPath)
 	activeErr := lease.removeActiveIfCurrent()
-	if lease.releaseScope != nil {
-		lease.releaseScope()
-		lease.releaseScope = nil
+	if cleanupErr := errors.Join(runErr, activeErr); cleanupErr != nil {
+		return cleanupErr
 	}
-	if runErr != nil {
-		return runErr
-	}
-	return activeErr
+	lease.closed = true
+	return nil
 }
 
 func (lease *browserRunLease) removeActiveIfCurrent() error {
@@ -418,11 +705,22 @@ func readBrowserSessionState(path string) (browserSessionState, error) {
 		return browserSessionState{}, err
 	}
 	var state browserSessionState
-	if err := decodeStrictBrowserJSON(raw, &state); err != nil ||
-		state.Version != browserSessionStateVersion ||
+	if err := decodeStrictBrowserJSON(raw, &state); err != nil {
+		return browserSessionState{}, errors.New("Browser session state is invalid")
+	}
+	// Session-state files predate the explicit controller field. They were
+	// agent-owned by definition, so upgrade them in memory and persist the
+	// explicit value on the next authority mutation.
+	if state.Controller == "" {
+		state.Controller = browserprotocol.ControllerAgent
+	}
+	if state.Version != browserSessionStateVersion ||
 		state.SessionKeyHash == "" ||
 		state.BrowserSessionID == "" ||
-		state.SessionEpoch == 0 {
+		state.SessionEpoch == 0 ||
+		(state.Controller != browserprotocol.ControllerAgent &&
+			state.Controller != browserprotocol.ControllerNone &&
+			state.Controller != browserprotocol.ControllerHuman) {
 		return browserSessionState{}, errors.New("Browser session state is invalid")
 	}
 	return state, nil

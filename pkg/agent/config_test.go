@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 )
 
@@ -229,5 +230,58 @@ func TestAgentModeLockIsExclusiveAndReusable(t *testing.T) {
 	}
 	if err := second.release(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeOptionalFeaturesOnlyAdvertiseBrowserProfile(t *testing.T) {
+	if features := runtimeOptionalFeatures("standard", true); features != nil {
+		t.Fatalf("standard Runtime features = %#v", features)
+	}
+	features := runtimeOptionalFeatures("browser", false)
+	if len(features) != 1 ||
+		features[0] != browserExecutionProfileFeature {
+		t.Fatalf("Browser Runtime features without Viewer = %#v", features)
+	}
+	features = runtimeOptionalFeatures("browser", true)
+	if len(features) != 2 ||
+		features[0] != browserExecutionProfileFeature ||
+		features[1] != browserHumanControlFeature {
+		t.Fatalf("browser Runtime features = %#v", features)
+	}
+}
+
+func TestRuntimeViewerExtensionIsRegisteredOnlyWithHumanControl(t *testing.T) {
+	if routes := runtimeExtensionRoutes("standard", true); routes != nil {
+		t.Fatalf("standard Agent Runtime extension routes = %#v", routes)
+	}
+	if routes := runtimeExtensionRoutes("browser", false); routes != nil {
+		t.Fatalf("Browser Agent without human control routes = %#v", routes)
+	}
+	routes := runtimeExtensionRoutes("browser", true)
+	if len(routes) != 1 ||
+		routes[0] != browserprotocol.RuntimeViewerExtensionRoute {
+		t.Fatalf("Browser human-control Runtime extension routes = %#v", routes)
+	}
+}
+
+func TestRuntimeHumanControlIsAnExplicitDeploymentCapability(t *testing.T) {
+	values := map[string]string{}
+	getenv := func(name string) string { return values[name] }
+	if enabled, err := runtimeHumanControlEnabled(
+		getenv,
+		"browser",
+	); err != nil || enabled {
+		t.Fatalf("default human control = %v, %v", enabled, err)
+	}
+	values[browserHumanControlEnvironment] = "true"
+	if enabled, err := runtimeHumanControlEnabled(
+		getenv,
+		"browser",
+	); err != nil || !enabled {
+		t.Fatalf("configured human control = %v, %v", enabled, err)
+	}
+	values[browserHumanControlEnvironment] = "site-response"
+	if _, err := runtimeHumanControlEnabled(getenv, "browser"); err == nil {
+		t.Fatal("invalid human-control capability value was accepted")
 	}
 }

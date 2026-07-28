@@ -13,22 +13,31 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserruntime"
 )
 
 const (
-	defaultBrowserSocket    = "/browser-control/openlinker.browser.sock"
-	defaultActiveLeaseFile  = "/browser-control/leases/active-lease.json"
-	defaultEngineExecutable = "/usr/bin/node"
-	defaultEngineScript     = "/opt/openlinker/browser-engine/dist/main.js"
-	defaultProfileStore     = "/browser-state/encrypted-profiles"
-	defaultProfileWorkRoot  = "/browser-tmp/profiles"
-	defaultProfileRootKey   = "/browser-key/profile-root-key"
-	defaultProfileDirectory = "/browser-tmp/profiles/active"
-	maxCredentialBytes      = 4096
+	defaultBrowserSocket       = "/browser-control/openlinker.browser.sock"
+	defaultActiveLeaseFile     = "/browser-control/leases/active-lease.json"
+	defaultEngineExecutable    = "/usr/bin/node"
+	defaultEngineScript        = "/opt/openlinker/browser-engine/dist/main.js"
+	defaultProfileStore        = "/browser-state/encrypted-profiles"
+	defaultProfileWorkRoot     = "/browser-tmp/profiles"
+	defaultProfileRootKey      = "/browser-key/profile-root-key"
+	defaultProfileDirectory    = "/browser-tmp/profiles/active"
+	defaultBrowserEngine       = "chromium"
+	defaultBrowserDistribution = "playwright_chromium"
+	defaultBrowserVersion      = "149.0.7827.0"
+	defaultBrowserLocale       = "en-US"
+	defaultBrowserTimezone     = "UTC"
+	defaultFontContractVersion = "openlinker.browser.fonts.v1"
+	defaultEgressLabel         = "default"
+	maxCredentialBytes         = 4096
 )
 
 func main() {
@@ -51,13 +60,18 @@ func run() error {
 	if activeLeaseFile == "" {
 		activeLeaseFile = defaultActiveLeaseFile
 	}
+	profileEnvironment, err := browserProfileEnvironment()
+	if err != nil {
+		return err
+	}
 	engine, err := browserruntime.NewProfileEngine(browserruntime.ProfileEngineOptions{
 		Process: browserruntime.ProcessEngineOptions{
 			Command:     []string{defaultEngineExecutable, defaultEngineScript},
-			Environment: browserEngineEnvironment(),
+			Environment: browserEngineEnvironment(profileEnvironment),
 		},
-		StoreRoot: value("OPENLINKER_BROWSER_PROFILE_STORE", defaultProfileStore),
-		WorkRoot:  value("OPENLINKER_BROWSER_PROFILE_WORK_ROOT", defaultProfileWorkRoot),
+		Environment: profileEnvironment,
+		StoreRoot:   value("OPENLINKER_BROWSER_PROFILE_STORE", defaultProfileStore),
+		WorkRoot:    value("OPENLINKER_BROWSER_PROFILE_WORK_ROOT", defaultProfileWorkRoot),
 		RootKeyFile: value(
 			"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE",
 			defaultProfileRootKey,
@@ -66,11 +80,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	humanControlAvailable, err := booleanValue(
+		"OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED",
+		false,
+	)
+	if err != nil {
+		return err
+	}
 	server, err := browserruntime.NewServer(browserruntime.ServerOptions{
-		SocketPath:        socketPath,
-		ChannelCredential: credential,
-		Lease:             browserruntime.FileLease{Path: activeLeaseFile},
-		Engine:            engine,
+		SocketPath:            socketPath,
+		ChannelCredential:     credential,
+		Lease:                 browserruntime.FileLease{Path: activeLeaseFile},
+		Engine:                engine,
+		HumanControlAvailable: humanControlAvailable,
 	})
 	if err != nil {
 		return errors.Join(err, engine.Close())
@@ -82,16 +104,93 @@ func run() error {
 	return errors.Join(serveErr, closeErr)
 }
 
-func browserEngineEnvironment() []string {
+func browserEngineEnvironment(environment browserruntime.ProfileEnvironment) []string {
 	return []string{
 		"HOME=" + value("HOME", "/home/pwuser"),
 		"TMPDIR=" + value("TMPDIR", "/browser-tmp"),
 		"NO_PROXY=",
 		"OPENLINKER_BROWSER_EGRESS_PROXY=" + strings.TrimSpace(os.Getenv("OPENLINKER_BROWSER_EGRESS_PROXY")),
 		"OPENLINKER_BROWSER_PROFILE_DIR=" + value("OPENLINKER_BROWSER_PROFILE_DIR", defaultProfileDirectory),
+		"OPENLINKER_BROWSER_ENGINE=" + environment.Evidence.BrowserEngine,
+		"OPENLINKER_BROWSER_DISTRIBUTION=" + environment.Evidence.BrowserDistribution,
+		"OPENLINKER_BROWSER_VERSION=" + environment.Evidence.BrowserVersion,
+		"OPENLINKER_BROWSER_LOCALE=" + environment.Evidence.BrowserLocale,
+		"OPENLINKER_BROWSER_TIMEZONE=" + environment.Evidence.BrowserTimezone,
+		"OPENLINKER_BROWSER_FONT_CONTRACT_VERSION=" + environment.Evidence.FontContractVersion,
+		"OPENLINKER_BROWSER_FONT_MANIFEST_SHA256=" + environment.Evidence.FontManifestSHA256,
+		"OPENLINKER_BROWSER_PROFILE_GENERATION=" + strconv.FormatUint(
+			environment.ProfileGeneration,
+			10,
+		),
+		"OPENLINKER_BROWSER_MAX_ACTIONS_PER_ORIGIN_MINUTE=" + value(
+			"OPENLINKER_BROWSER_MAX_ACTIONS_PER_ORIGIN_MINUTE",
+			"120",
+		),
+		"OPENLINKER_BROWSER_MAX_NAVIGATIONS_PER_ORIGIN_MINUTE=" + value(
+			"OPENLINKER_BROWSER_MAX_NAVIGATIONS_PER_ORIGIN_MINUTE",
+			"20",
+		),
 		"PLAYWRIGHT_BROWSERS_PATH=" + value("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright"),
 		"LANG=" + value("LANG", "C.UTF-8"),
 	}
+}
+
+func browserProfileEnvironment() (browserruntime.ProfileEnvironment, error) {
+	version := value("OPENLINKER_BROWSER_VERSION", defaultBrowserVersion)
+	majorText, _, found := strings.Cut(version, ".")
+	if !found {
+		return browserruntime.ProfileEnvironment{}, errors.New("OPENLINKER_BROWSER_VERSION is invalid")
+	}
+	major, err := strconv.Atoi(majorText)
+	if err != nil {
+		return browserruntime.ProfileEnvironment{}, errors.New("OPENLINKER_BROWSER_VERSION is invalid")
+	}
+	generation, err := strconv.ParseUint(
+		value("OPENLINKER_BROWSER_PROFILE_GENERATION", "1"),
+		10,
+		64,
+	)
+	if err != nil {
+		return browserruntime.ProfileEnvironment{}, errors.New("OPENLINKER_BROWSER_PROFILE_GENERATION is invalid")
+	}
+	environment := browserruntime.ProfileEnvironment{
+		ProfileGeneration: generation,
+		EgressLabel: value(
+			"OPENLINKER_BROWSER_EGRESS_LABEL",
+			defaultEgressLabel,
+		),
+		Evidence: browserprotocol.EnvironmentEvidence{
+			BrowserEngine: value(
+				"OPENLINKER_BROWSER_ENGINE",
+				defaultBrowserEngine,
+			),
+			BrowserDistribution: value(
+				"OPENLINKER_BROWSER_DISTRIBUTION",
+				defaultBrowserDistribution,
+			),
+			BrowserVersion:      version,
+			BrowserMajorVersion: major,
+			BrowserLocale: value(
+				"OPENLINKER_BROWSER_LOCALE",
+				defaultBrowserLocale,
+			),
+			BrowserTimezone: value(
+				"OPENLINKER_BROWSER_TIMEZONE",
+				defaultBrowserTimezone,
+			),
+			FontContractVersion: value(
+				"OPENLINKER_BROWSER_FONT_CONTRACT_VERSION",
+				defaultFontContractVersion,
+			),
+			FontManifestSHA256: strings.TrimSpace(
+				os.Getenv("OPENLINKER_BROWSER_FONT_MANIFEST_SHA256"),
+			),
+		},
+	}
+	if err := environment.Validate(); err != nil {
+		return browserruntime.ProfileEnvironment{}, err
+	}
+	return environment, nil
 }
 
 func value(name, fallback string) string {
@@ -99,6 +198,18 @@ func value(name, fallback string) string {
 		return configured
 	}
 	return fallback
+}
+
+func booleanValue(name string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+	return value, nil
 }
 
 func readCredentialFile(rawPath string) (string, error) {
@@ -159,6 +270,10 @@ func loadOrCreateCredentialFile(rawPath string) (string, error) {
 		info.Mode().Perm()&0o077 != 0 {
 		return "", errors.New("Browser channel credential directory is invalid")
 	}
+	stat, owned := info.Sys().(*syscall.Stat_t)
+	if !owned || int(stat.Uid) != os.Geteuid() {
+		return "", errors.New("Browser channel credential directory is not owned by the current user")
+	}
 	var secret [32]byte
 	if _, err := io.ReadFull(rand.Reader, secret[:]); err != nil {
 		return "", errors.New("generate Browser channel credential")
@@ -176,7 +291,17 @@ func loadOrCreateCredentialFile(rawPath string) (string, error) {
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if writeErr != nil || syncErr != nil || closeErr != nil {
+		_ = os.Remove(path)
 		return "", errors.Join(writeErr, syncErr, closeErr)
+	}
+	directory, openErr := os.Open(parent) // #nosec G304 -- parent is the validated credential directory.
+	if openErr != nil {
+		return "", openErr
+	}
+	directorySyncErr := directory.Sync()
+	directoryCloseErr := directory.Close()
+	if directorySyncErr != nil || directoryCloseErr != nil {
+		return "", errors.Join(directorySyncErr, directoryCloseErr)
 	}
 	return value, nil
 }
