@@ -17,6 +17,11 @@ runtime boundaries are stabilizing.
   Runtime registration, native stdio MCP plugins, Core-owned conversation
   continuity, and private Codex/Claude session reuse.
 - Added hardened Codex, Claude, and egress-gateway production image targets.
+- Added the isolated Browser execution profile. Human continuation is
+  capability-gated: with `human_control_available=false`, a required challenge
+  remains fenced and terminal; with `human_control_available=true`, the Owner
+  can drive the bounded `PAUSED -> HUMAN -> PAUSED -> AGENT` lifecycle without
+  persisting Viewer frames or input as Run events.
 
 ### Changed
 
@@ -25,6 +30,9 @@ runtime boundaries are stabilizing.
   run from non-Git workspaces.
 - Pinned `openlinker-go` to the Runtime v2-only SDK revision that exposes Agent
   credentials exclusively as Agent Tokens.
+- Kept Browser Viewer actions, frames and validation in the CLI while using
+  the Go SDK only for an explicitly registered opaque Runtime extension
+  transport.
 - Reworked bundled Skills and examples around User Token discovery, top-level
   calls, run inspection, and SDK `RuntimeContext` delegation.
 - Clarified the command-to-grant mapping and the credential boundary between

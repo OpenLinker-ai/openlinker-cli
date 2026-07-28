@@ -1,24 +1,32 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 ARG GO_VERSION=1.26.4
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b AS go-build
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b AS go-source
 WORKDIR /src
 ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOWORK=off
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
-RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-egress-gateway ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/pluginbridge
+
+FROM go-source AS go-build
+RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/netpolicy ./pkg/pluginbridge
 ARG TARGETOS
 ARG TARGETARCH
 ARG OPENLINKER_VERSION=container
 RUN test "${TARGETOS}" = linux \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo.Version=${OPENLINKER_VERSION}" -o /out/openlinker ./cmd/openlinker \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/openlinker-browser-runtime ./cmd/openlinker-browser-runtime \
- && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/openlinker-egress-gateway ./cmd/openlinker-egress-gateway \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=codex" -o /out/openlinker-provider-launcher-codex ./cmd/openlinker-provider-launcher \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=claude" -o /out/openlinker-provider-launcher-claude ./cmd/openlinker-provider-launcher \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=codex" -o /out/openlinker-runtime-entrypoint-codex ./cmd/openlinker-runtime-entrypoint \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=claude" -o /out/openlinker-runtime-entrypoint-claude ./cmd/openlinker-runtime-entrypoint
+
+FROM go-source AS egress-build
+RUN go test ./cmd/openlinker-egress-gateway ./pkg/egressgateway ./pkg/netpolicy
+ARG TARGETOS
+ARG TARGETARCH
+RUN test "${TARGETOS}" = linux \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/openlinker-egress-gateway ./cmd/openlinker-egress-gateway
 
 FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320ac8d898416327bacf1bbfa AS provider-base
 ARG OPENLINKER_UID=10001
@@ -64,7 +72,7 @@ ENV OPENLINKER_CODEX_BIN=/usr/local/bin/openlinker-provider-launcher \
     OPENLINKER_CODEX_SANDBOX=read-only \
     OPENLINKER_CODEX_APPROVAL=never \
     OPENLINKER_CODEX_WEB_SEARCH=disabled
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/openlinker-runtime-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/openlinker-runtime-entrypoint"]
 LABEL org.opencontainers.image.title="OpenLinker Runtime Codex" \
       org.opencontainers.image.description="OpenLinker CLI Runtime Worker with a pinned Codex CLI provider" \
       org.opencontainers.image.source="https://github.com/OpenLinker-ai/openlinker-cli" \
@@ -82,14 +90,14 @@ COPY --from=go-build /out/openlinker-provider-launcher-claude /usr/local/bin/ope
 ENV OPENLINKER_CLAUDE_BIN=/usr/local/bin/openlinker-provider-launcher \
     OPENLINKER_CLAUDE_PERMISSION=dontAsk \
     OPENLINKER_CLAUDE_WEB_SEARCH=false
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/openlinker-runtime-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/openlinker-runtime-entrypoint"]
 LABEL org.opencontainers.image.title="OpenLinker Runtime Claude" \
       org.opencontainers.image.description="OpenLinker CLI Runtime Worker with a pinned Claude Code CLI provider" \
       org.opencontainers.image.source="https://github.com/OpenLinker-ai/openlinker-cli" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35 AS egress
-COPY --from=go-build /out/openlinker-egress-gateway /usr/local/bin/openlinker-egress-gateway
+COPY --from=egress-build /out/openlinker-egress-gateway /usr/local/bin/openlinker-egress-gateway
 EXPOSE 3128
 ENTRYPOINT ["/usr/local/bin/openlinker-egress-gateway"]
 LABEL org.opencontainers.image.title="OpenLinker Egress Gateway" \

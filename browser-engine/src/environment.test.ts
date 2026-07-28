@@ -9,11 +9,13 @@ import {
 } from "./environment.js";
 
 const fontSHA = "a".repeat(64);
-// Playwright's registry currently advertises 149.0.7827.55, while the
-// Chromium binary in the pinned image reports 149.0.7827.0 through
-// Browser.version(). Runtime/Profile evidence must lock the executable's
-// observed value; the real-image preflight is the authoritative check.
-const browserVersion = "149.0.7827.0";
+const browserVersions = JSON.parse(
+  readFileSync(
+    new URL("../browser-versions.json", import.meta.url),
+    "utf8",
+  ),
+) as Record<string, string>;
+const browserVersion = browserVersions["linux-amd64"] ?? "";
 
 test("locks the image to the observed Chromium binary generation", () => {
   const registry = JSON.parse(
@@ -25,15 +27,15 @@ test("locks the image to the observed Chromium binary generation", () => {
     browsers: Array<{ name: string; browserVersion?: string }>;
   };
   const chromium = registry.browsers.find((entry) => entry.name === "chromium");
-  const locked = readFileSync(
-    new URL("../browser-version.txt", import.meta.url),
-    "utf8",
-  ).trim();
-  assert.equal(locked, browserVersion);
-  assert.equal(
-    chromium?.browserVersion?.split(".", 1)[0],
-    locked.split(".", 1)[0],
-  );
+  assert.deepEqual(Object.keys(browserVersions).sort(), [
+    "linux-amd64",
+    "linux-arm64",
+  ]);
+  for (const locked of Object.values(browserVersions)) {
+    assert.match(locked, /^[1-9][0-9]{0,3}(?:\.[0-9]{1,8}){1,3}$/);
+    assert.equal(locked.split(".", 1)[0], browserVersion.split(".", 1)[0]);
+  }
+  assert.equal(chromium?.browserVersion, browserVersion);
 });
 
 test("defaults to the pinned Chromium environment", () => {
@@ -56,7 +58,7 @@ test("defaults to the pinned Chromium environment", () => {
   assert.deepEqual(environmentEvidence(config, browserVersion), {
     browser_engine: "chromium",
     browser_distribution: "playwright_chromium",
-    browser_version: "149.0.7827.0",
+    browser_version: browserVersion,
     browser_major_version: 149,
     browser_locale: "en-US",
     browser_timezone: "UTC",

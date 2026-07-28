@@ -1,5 +1,6 @@
 services:
   openlinker-agent-claude:
+    stop_grace_period: 30s
     depends_on:
       openlinker-egress-gateway:
         condition: service_started
@@ -8,6 +9,7 @@ services:
     environment:
       OPENLINKER_AGENT_EXECUTION_PROFILE: browser
       OPENLINKER_AGENT_CAPACITY: "1"
+      OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED: "true"
     volumes:
       - claude-browser-control:/browser-control
     tmpfs:
@@ -26,7 +28,9 @@ services:
     security_opt:
       - no-new-privileges:true
     tmpfs:
+      - /browser-home:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
       - /browser-tmp:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
     shm_size: 1gb
     networks:
       - agent-internal
@@ -39,6 +43,7 @@ services:
       OPENLINKER_BROWSER_PROFILE_STORE: /browser-state/encrypted-profiles
       OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles
       OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-key/profile-root-key
+      OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED: "true"
     volumes:
       - claude-browser-control:/browser-control
       - claude-browser-profile-key:/browser-key

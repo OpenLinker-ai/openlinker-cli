@@ -1,4 +1,4 @@
-package main
+package egressgateway
 
 import (
 	"context"
@@ -16,9 +16,12 @@ import (
 	"time"
 )
 
-const maxDoHResponseBytes = 64 << 10
+const (
+	maxDoHResponseBytes = 64 << 10
+	maxDoHCacheEntries  = 1024
+)
 
-type dohResolver struct {
+type DoHResolver struct {
 	endpoint *url.URL
 	client   *http.Client
 
@@ -40,13 +43,18 @@ type dohJSONResponse struct {
 	} `json:"Answer"`
 }
 
-func newDoHResolver(raw string, upstream *url.URL) (*dohResolver, error) {
+func NewDoHResolver(raw string, upstream *url.URL) (*DoHResolver, error) {
 	endpoint, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+	if err != nil ||
+		endpoint.Scheme != "https" ||
+		endpoint.Hostname() == "" ||
+		endpoint.User != nil ||
+		endpoint.RawQuery != "" ||
+		endpoint.Fragment != "" {
 		return nil, errors.New("OPENLINKER_EGRESS_DOH_URL must be a public HTTPS URL with a literal IP host")
 	}
 	endpointIP := net.ParseIP(endpoint.Hostname())
-	if endpointIP == nil || blockedIP(endpointIP) {
+	if endpointIP == nil || IsBlockedIP(endpointIP) {
 		return nil, errors.New("OPENLINKER_EGRESS_DOH_URL must use a public literal IP host")
 	}
 	if endpoint.Port() != "" && endpoint.Port() != "443" {
@@ -58,22 +66,25 @@ func newDoHResolver(raw string, upstream *url.URL) (*dohResolver, error) {
 	transport := &http.Transport{
 		Proxy:               http.ProxyURL(upstream),
 		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        16,
+		MaxIdleConnsPerHost: 4,
+		MaxConnsPerHost:     8,
 		TLSHandshakeTimeout: 15 * time.Second,
 		IdleConnTimeout:     90 * time.Second,
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 	}
-	return &dohResolver{
+	return &DoHResolver{
 		endpoint: endpoint,
 		client:   &http.Client{Transport: transport, Timeout: 20 * time.Second},
 		cache:    make(map[string]dohCacheEntry),
 	}, nil
 }
 
-func (r *dohResolver) EndpointHost() string {
+func (r *DoHResolver) EndpointHost() string {
 	return r.endpoint.Host
 }
 
-func (r *dohResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
+func (r *DoHResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	now := time.Now()
 	r.mu.Lock()
@@ -111,18 +122,46 @@ func (r *dohResolver) LookupIP(ctx context.Context, host string) ([]net.IP, erro
 		minimumTTL = 300
 	}
 	r.mu.Lock()
-	r.cache[host] = dohCacheEntry{addresses: cloneIPs(addresses), expires: now.Add(time.Duration(minimumTTL) * time.Second)}
+	for cachedHost, entry := range r.cache {
+		if !now.Before(entry.expires) {
+			delete(r.cache, cachedHost)
+		}
+	}
+	if len(r.cache) >= maxDoHCacheEntries {
+		var oldestHost string
+		var oldestExpiry time.Time
+		for cachedHost, entry := range r.cache {
+			if oldestHost == "" || entry.expires.Before(oldestExpiry) {
+				oldestHost = cachedHost
+				oldestExpiry = entry.expires
+			}
+		}
+		delete(r.cache, oldestHost)
+	}
+	r.cache[host] = dohCacheEntry{
+		addresses: cloneIPs(addresses),
+		expires:   now.Add(time.Duration(minimumTTL) * time.Second),
+	}
 	r.mu.Unlock()
 	return addresses, nil
 }
 
-func (r *dohResolver) lookupType(ctx context.Context, host, queryType string) ([]net.IP, int64, error) {
+func (r *DoHResolver) lookupType(
+	ctx context.Context,
+	host string,
+	queryType string,
+) ([]net.IP, int64, error) {
 	requestURL := *r.endpoint
 	query := requestURL.Query()
 	query.Set("name", host)
 	query.Set("type", queryType)
 	requestURL.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		requestURL.String(),
+		nil,
+	)
 	if err != nil {
 		return nil, 0, errors.New("build secure DNS request")
 	}

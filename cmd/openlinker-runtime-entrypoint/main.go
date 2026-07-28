@@ -268,7 +268,7 @@ func validateSetUIDCapability() error {
 		}
 		mask, err := strconv.ParseUint(fields[1], 16, 64)
 		const required = (uint64(1) << 6) | (uint64(1) << 7)
-		if err != nil || mask&required != required {
+		if err != nil || mask != required {
 			return errors.New("official Provider images require only CAP_SETUID and CAP_SETGID for process isolation")
 		}
 		return nil
