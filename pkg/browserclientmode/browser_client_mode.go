@@ -35,6 +35,10 @@ func Select(options Options) (Selection, error) {
 		Selected:   strings.TrimSpace(options.Requested),
 		PluginPath: filepath.Clean(strings.TrimSpace(options.PluginPath)),
 	}
+	if selection.Requested == "" {
+		selection.Requested = "mcp"
+		selection.Selected = "mcp"
+	}
 	switch selection.Requested {
 	case "mcp":
 		selection.PluginPath = ""
@@ -375,12 +379,11 @@ func validateCodexPluginList(raw []byte, expectedRoot string) error {
 			InstallPolicy     string          `json:"installPolicy"`
 			AuthPolicy        string          `json:"authPolicy"`
 		} `json:"installed"`
-		Available []json.RawMessage `json:"available"`
 	}
-	if err := decodeStrictBrowserClientJSON(raw, &list); err != nil {
+	if err := json.Unmarshal(raw, &list); err != nil {
 		return errors.New("Codex Plugin list is invalid")
 	}
-	if len(list.Installed) != 1 || len(list.Available) != 0 {
+	if len(list.Installed) != 1 {
 		return errors.New("Codex Provider home contains an unexpected Plugin")
 	}
 	plugin := list.Installed[0]
