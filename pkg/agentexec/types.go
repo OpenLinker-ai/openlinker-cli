@@ -12,27 +12,31 @@ import (
 )
 
 type ProviderConfig struct {
-	Provider              string
-	Bin                   string
-	Workspace             string
-	Model                 string
-	Sandbox               string
-	Permission            string
-	AllowedTools          []string
-	Timeout               time.Duration
-	SessionReuse          bool
-	SessionStore          string
-	WebSearch             bool
-	CodexApproval         string
-	CodexBaseURL          string
-	Env                   []string
-	EnvAllowlist          []string
-	ExecutionProfile      string
-	BrowserPluginBin      string
-	BrowserSocket         string
-	BrowserCredentialFile string
-	BrowserLeaseRoot      string
-	BrowserBrokerRoot     string
+	Provider                    string
+	Bin                         string
+	Workspace                   string
+	Model                       string
+	Sandbox                     string
+	Permission                  string
+	AllowedTools                []string
+	Timeout                     time.Duration
+	SessionReuse                bool
+	SessionStore                string
+	WebSearch                   bool
+	CodexApproval               string
+	CodexBaseURL                string
+	Env                         []string
+	EnvAllowlist                []string
+	ExecutionProfile            string
+	BrowserClientModeRequested  string
+	BrowserClientMode           string
+	BrowserClientFallbackReason string
+	BrowserPluginBin            string
+	BrowserNativePlugin         string
+	BrowserSocket               string
+	BrowserCredentialFile       string
+	BrowserLeaseRoot            string
+	BrowserBrokerRoot           string
 }
 
 type ConversationContext struct {
@@ -106,6 +110,9 @@ func NewProvider(config ProviderConfig) (Provider, error) {
 	case "", "standard":
 		return provider, nil
 	case "browser":
+		if err := validateBrowserClientConfig(config); err != nil {
+			return nil, err
+		}
 		return newBrowserExecutionProvider(provider, config)
 	default:
 		return nil, fmt.Errorf("execution profile must be standard or browser")

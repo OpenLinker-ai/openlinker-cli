@@ -29,6 +29,29 @@ func TestFixedProviderBinary(t *testing.T) {
 	}
 }
 
+func TestCodexPluginPreparationNeverStartsProviderAuthProxy(t *testing.T) {
+	for _, args := range [][]string{
+		{"plugin", "list", "--json"},
+		{"plugin", "marketplace", "add", "/opt/plugin"},
+		{"mcp", "list", "--json"},
+		{"doctor"},
+		{"--version"},
+	} {
+		if codexCommandNeedsAuthProxy(args) {
+			t.Fatalf("management command requires auth proxy: %#v", args)
+		}
+	}
+	for _, args := range [][]string{
+		nil,
+		{"exec", "-"},
+		{"-c", `model_provider="openlinker_proxy"`, "exec", "-"},
+	} {
+		if !codexCommandNeedsAuthProxy(args) {
+			t.Fatalf("model command skipped auth proxy: %#v", args)
+		}
+	}
+}
+
 func TestProviderPrivilegeDropBlocksAgentState(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("container-build root is required for the privilege boundary integration")

@@ -24,7 +24,9 @@ type ConfigureOptions struct {
 	ClaudePermission      string
 	AllowedTools          []string
 	ExecutionProfile      string
+	BrowserClientMode     string
 	BrowserPluginBin      string
+	BrowserNativePlugin   string
 	BrowserSocket         string
 	BrowserCredentialFile string
 	BrowserLeaseRoot      string
@@ -96,8 +98,17 @@ func ConfigureNonSecret(getenv func(string) string, options ConfigureOptions) (C
 	if value := strings.TrimSpace(options.ExecutionProfile); value != "" {
 		config.ExecutionProfile = strings.ToLower(value)
 	}
+	if value := strings.TrimSpace(options.BrowserClientMode); value != "" {
+		config.BrowserClientMode = strings.ToLower(value)
+	}
 	if value := strings.TrimSpace(options.BrowserPluginBin); value != "" {
 		config.BrowserPluginBin = value
+	}
+	if value := strings.TrimSpace(options.BrowserNativePlugin); value != "" {
+		config.BrowserNativePlugin, err = filepath.Abs(value)
+		if err != nil {
+			return Config{}, path, err
+		}
 	}
 	if value := strings.TrimSpace(options.BrowserSocket); value != "" {
 		config.BrowserSocket, err = filepath.Abs(value)

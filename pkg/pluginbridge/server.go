@@ -430,6 +430,8 @@ func (server *Server) configureAgent(arguments map[string]any) (toolResult, erro
 		CodexSandbox: stringArgument(arguments, "codex_sandbox"), CodexApproval: stringArgument(arguments, "codex_approval"),
 		ClaudePermission: stringArgument(arguments, "claude_permission"), AllowedTools: stringSliceArgument(arguments, "allowed_tools"),
 		ExecutionProfile:      stringArgument(arguments, "execution_profile"),
+		BrowserClientMode:     stringArgument(arguments, "browser_client_mode"),
+		BrowserNativePlugin:   stringArgument(arguments, "browser_native_plugin"),
 		BrowserPluginBin:      stringArgument(arguments, "browser_plugin_bin"),
 		BrowserSocket:         stringArgument(arguments, "browser_socket"),
 		BrowserCredentialFile: stringArgument(arguments, "browser_credential_file"),
@@ -442,7 +444,8 @@ func (server *Server) configureAgent(arguments map[string]any) (toolResult, erro
 	return successToolResult(map[string]any{
 		"configured": true, "config_path": path, "provider": config.Provider, "agent_id": config.AgentID,
 		"workspace": config.Workspace, "secrets_written": false, "enabled": config.Enabled,
-		"execution_profile": config.ExecutionProfile,
+		"execution_profile":   config.ExecutionProfile,
+		"browser_client_mode": config.BrowserClientMode,
 	})
 }
 

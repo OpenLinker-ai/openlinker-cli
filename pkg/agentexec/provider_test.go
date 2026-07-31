@@ -328,7 +328,7 @@ func TestHandlerTrustsOnlyCoreConversation(t *testing.T) {
 		t.Fatalf("Core conversation missing: %#v", provider.run.Conversation)
 	}
 	for _, expected := range []string{"first question", "first answer"} {
-		if !strings.Contains(buildPrompt("Codex", provider.run, true), expected) {
+		if !strings.Contains(buildPrompt("Codex", provider.run, true, false), expected) {
 			t.Fatalf("initial provider prompt missing %q", expected)
 		}
 	}

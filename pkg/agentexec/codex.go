@@ -45,10 +45,27 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 	sessionKey := conversationSessionKey(run)
 	sessionPath := sessionStorePath(config.SessionStore, "codex", workspace)
 	sessionID := ""
+	clientMode := providerSessionClientMode(config)
+	clientModeGeneration := uint64(1)
 	if config.SessionReuse && sessionKey != "" {
 		unlock := lockSession("codex", workspace, sessionKey)
 		defer unlock()
-		sessionID = loadSessionID(sessionPath, "codex", workspace, sessionKey)
+		var modeChanged bool
+		sessionID, clientModeGeneration, modeChanged = loadSessionForClientMode(
+			sessionPath,
+			"codex",
+			workspace,
+			sessionKey,
+			clientMode,
+		)
+		if modeChanged && run.Browser != nil && run.Browser.Rotate != nil {
+			if rotateErr := run.Browser.Rotate(); rotateErr != nil {
+				return openlinker.RuntimeResult{}, fmt.Errorf(
+					"rotate Browser attachment after Codex client-mode change: %w",
+					rotateErr,
+				)
+			}
+		}
 	}
 	resumed := sessionID != ""
 	recovered := false
@@ -62,7 +79,12 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 			bin,
 			args,
 			workspace,
-			buildCodexPrompt(run, sessionID == "", config.WebSearch),
+			buildCodexPrompt(
+				run,
+				sessionID == "",
+				config.WebSearch,
+				browserProfileEnabled(config),
+			),
 			config,
 			run.Emit,
 		)
@@ -89,7 +111,15 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 	}
 	if config.SessionReuse && sessionKey != "" {
 		if observed := extractCodexSessionID(stdoutText + "\n" + stderrText); observed != "" {
-			if err := saveSessionID(sessionPath, "codex", workspace, sessionKey, observed); err != nil {
+			if err := saveSessionForClientMode(
+				sessionPath,
+				"codex",
+				workspace,
+				sessionKey,
+				observed,
+				clientMode,
+				clientModeGeneration,
+			); err != nil {
 				return openlinker.RuntimeResult{}, sessionPersistenceError("Codex", err)
 			}
 		}
@@ -114,6 +144,9 @@ func (provider CodexProvider) Run(ctx context.Context, run RunContext) (openlink
 		result["codex_session_key_hash"] = sessionKeyHash("codex", workspace, sessionKey)
 		result["codex_session_resumed"] = resumed
 		result["codex_session_recovered"] = recovered
+	}
+	if browserProfileEnabled(config) {
+		result["browser_client_mode_generation"] = clientModeGeneration
 	}
 	return openlinker.RuntimeResult{
 		Status: "success", Output: result,
@@ -159,13 +192,17 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		)
 	}
 	if sessionID != "" {
-		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json")
+		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--skip-git-repo-check")
+		args = append(args, codexConfigIsolationArguments(config)...)
+		args = append(args, "--json")
 		if config.Model != "" {
 			args = append(args, "--model", config.Model)
 		}
 		return append(args, sessionID, "-")
 	}
-	args = append(args, "exec", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "-C", workspace, "--sandbox", sandbox, "--color", "never")
+	args = append(args, "exec", "--skip-git-repo-check")
+	args = append(args, codexConfigIsolationArguments(config)...)
+	args = append(args, "-C", workspace, "--sandbox", sandbox, "--color", "never")
 	if persistent {
 		args = append(args, "--json")
 	} else {
@@ -175,6 +212,13 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		args = append(args, "--model", config.Model)
 	}
 	return append(args, "-")
+}
+
+func codexConfigIsolationArguments(config ProviderConfig) []string {
+	if nativeBrowserClientEnabled(config) {
+		return []string{"--ignore-rules"}
+	}
+	return []string{"--ignore-user-config", "--ignore-rules"}
 }
 
 func codexCommandEnvironment(environment []string) string {

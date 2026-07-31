@@ -88,6 +88,19 @@ provider-specific `OPENLINKER_CODEX_MODEL` / `OPENLINKER_CLAUDE_MODEL`, web
 search, sandbox, and permission variables. See
 [`deploy/.env.providers.example`](./deploy/.env.providers.example).
 
+The packaged Browser profile adds
+`OPENLINKER_BROWSER_CLIENT_MODE=auto|native|mcp`. Existing generic CLI
+configuration defaults to legacy-compatible `mcp`; the official Codex and
+Claude Browser Compose overlays explicitly use `auto`. `native` loads only the
+image-owned Browser Plugin, while `mcp` uses the direct Runtime-injected MCP
+configuration. “Native” is the Provider Plugin/Skill/Command experience; its
+tool transport is still MCP, and both modes use the same isolated Browser
+Runtime. One Provider Session generation exposes exactly one surface.
+
+Packaged Browser Agents require the Agent Token and Provider API key but not a
+User Token. `OPENLINKER_USER_TOKEN` is rejected by the official Browser
+entrypoint and is never forwarded to the child Provider or Browser Runtime.
+
 When Codex uses an OpenAI-compatible router, set the non-secret
 `OPENLINKER_CODEX_BASE_URL` (for example, `https://router.example/v1`) or pass
 `--codex-base-url` to `openlinker agent configure`. The value must be an
@@ -220,6 +233,10 @@ pkg/context
 pkg/buildinfo
 pkg/agent
 pkg/agentexec
+pkg/browserclient
+pkg/browserplugin
+pkg/browserprotocol
+pkg/browserruntime
 pkg/plugin
 pkg/pluginbridge
 pkg/run

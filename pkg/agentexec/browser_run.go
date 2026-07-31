@@ -134,7 +134,12 @@ func (provider *browserExecutionProvider) Run(
 		ToolSocket: broker.SocketPath(),
 		Rotate:     lease.Rotate,
 	}
-	emitBrowserLifecycle(run.Emit, "ready", "")
+	emitBrowserLifecycle(
+		run.Emit,
+		"ready",
+		"",
+		browserClientEvidence(provider.config),
+	)
 	status := "failed"
 	defer func() {
 		brokerErr := broker.Close()
@@ -154,12 +159,16 @@ func (provider *browserExecutionProvider) Run(
 		status = "success"
 	}
 	if output, ok := result.Output.(map[string]any); ok {
-		copied := make(map[string]any, len(output)+2)
+		evidence := browserClientEvidence(provider.config)
+		copied := make(map[string]any, len(output)+2+len(evidence))
 		for key, value := range output {
 			copied[key] = value
 		}
 		copied["browser_execution_profile"] = "isolated"
 		copied["browser_tool"] = "browser_session"
+		for key, value := range evidence {
+			copied[key] = value
+		}
 		result.Output = copied
 	}
 	return result, resultErr
@@ -212,7 +221,12 @@ func (lease *browserRunLease) browserEvidenceSnapshot() (
 	}, nil
 }
 
-func emitBrowserLifecycle(emit func(string, any) error, phase, status string) {
+func emitBrowserLifecycle(
+	emit func(string, any) error,
+	phase,
+	status string,
+	evidence ...map[string]any,
+) {
 	if emit == nil {
 		return
 	}
@@ -223,6 +237,11 @@ func emitBrowserLifecycle(emit func(string, any) error, phase, status string) {
 	}
 	if status != "" {
 		payload["status"] = status
+	}
+	for _, values := range evidence {
+		for key, value := range values {
+			payload[key] = value
+		}
 	}
 	_ = emit("run.browser.lifecycle", payload)
 }

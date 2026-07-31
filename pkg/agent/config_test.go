@@ -93,6 +93,9 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 		"OPENLINKER_CODEX_SANDBOX":                   "workspace-write",
 		"OPENLINKER_CODEX_APPROVAL":                  "never",
 		"OPENLINKER_AGENT_EXECUTION_PROFILE":         "browser",
+		"OPENLINKER_BROWSER_CLIENT_MODE":             "auto",
+		"OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE":   "native",
+		"OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH":      "/opt/openlinker/agent-runtime-plugin/codex",
 		"OPENLINKER_BROWSER_SOCKET":                  "/browser/control.sock",
 		"OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE": "/browser/channel",
 		"OPENLINKER_BROWSER_LEASE_ROOT":              "/browser/leases",
@@ -107,7 +110,10 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 	}
 	if config.ExecutionProfile != "browser" || config.BrowserSocket != "/browser/control.sock" ||
 		config.BrowserCredentialFile != "/browser/channel" || config.BrowserLeaseRoot != "/browser/leases" ||
-		config.BrowserBrokerRoot != "/browser/broker" {
+		config.BrowserBrokerRoot != "/browser/broker" ||
+		config.BrowserClientMode != "auto" ||
+		config.browserSelectedMode != "native" ||
+		config.BrowserNativePlugin != "/opt/openlinker/agent-runtime-plugin/codex" {
 		t.Fatalf("Browser environment overrides = %#v", config)
 	}
 }
@@ -124,6 +130,15 @@ func TestBrowserExecutionProfileIsExplicitAndSingleCapacity(t *testing.T) {
 	config.BrowserBrokerRoot = "/browser/broker"
 	if err := validateNonSecretConfig(config); err != nil {
 		t.Fatal(err)
+	}
+	config.BrowserClientMode = "auto"
+	if err := validateNonSecretConfig(config); err != nil {
+		t.Fatalf("persisted Browser auto mode was rejected: %v", err)
+	}
+	config.browserSelectedMode = "native"
+	config.BrowserNativePlugin = "/opt/openlinker/agent-runtime-plugin/codex"
+	if err := validateNonSecretConfig(config); err != nil {
+		t.Fatalf("resolved Browser auto mode was rejected: %v", err)
 	}
 	config.Capacity = 2
 	if err := validateNonSecretConfig(config); err == nil ||

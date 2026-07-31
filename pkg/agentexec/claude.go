@@ -51,10 +51,27 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 	sessionKey := conversationSessionKey(run)
 	sessionPath := sessionStorePath(config.SessionStore, "claude", workspace)
 	sessionID := ""
+	clientMode := providerSessionClientMode(config)
+	clientModeGeneration := uint64(1)
 	if config.SessionReuse && sessionKey != "" {
 		unlock := lockSession("claude", workspace, sessionKey)
 		defer unlock()
-		sessionID = loadSessionID(sessionPath, "claude", workspace, sessionKey)
+		var modeChanged bool
+		sessionID, clientModeGeneration, modeChanged = loadSessionForClientMode(
+			sessionPath,
+			"claude",
+			workspace,
+			sessionKey,
+			clientMode,
+		)
+		if modeChanged && run.Browser != nil && run.Browser.Rotate != nil {
+			if rotateErr := run.Browser.Rotate(); rotateErr != nil {
+				return openlinker.RuntimeResult{}, fmt.Errorf(
+					"rotate Browser attachment after Claude client-mode change: %w",
+					rotateErr,
+				)
+			}
+		}
 	}
 	resumed := sessionID != ""
 	recovered := false
@@ -70,7 +87,14 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 		}
 		allowlist := append([]string{"ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"}, config.EnvAllowlist...)
 		command.Env = sanitizedEnvironment(environment, allowlist)
-		command.Stdin = strings.NewReader(buildPrompt("Claude Code", run, sessionID == ""))
+		command.Stdin = strings.NewReader(
+			buildPrompt(
+				"Claude Code",
+				run,
+				sessionID == "",
+				browserProfileEnabled(config),
+			),
+		)
 		stdout := newLimitedOutputBuffer(cancel)
 		stderr := newLimitedOutputBuffer(cancel)
 		command.Stdout, command.Stderr = stdout, stderr
@@ -110,7 +134,15 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 		return openlinker.RuntimeResult{}, errors.New("Claude completed without a final result")
 	}
 	if config.SessionReuse && sessionKey != "" && strings.TrimSpace(response.SessionID) != "" {
-		if err := saveSessionID(sessionPath, "claude", workspace, sessionKey, response.SessionID); err != nil {
+		if err := saveSessionForClientMode(
+			sessionPath,
+			"claude",
+			workspace,
+			sessionKey,
+			response.SessionID,
+			clientMode,
+			clientModeGeneration,
+		); err != nil {
 			return openlinker.RuntimeResult{}, sessionPersistenceError("Claude", err)
 		}
 	}
@@ -124,6 +156,9 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 		result["claude_session_resumed"] = resumed
 		result["claude_session_recovered"] = recovered
 	}
+	if browserProfileEnabled(config) {
+		result["browser_client_mode_generation"] = clientModeGeneration
+	}
 	return openlinker.RuntimeResult{
 		Status: "success", Output: result,
 		Events: []openlinker.RuntimeEvent{{EventType: "run.message.delta", Payload: map[string]any{"text": summary}}},
@@ -132,8 +167,15 @@ func (provider ClaudeProvider) Run(ctx context.Context, run RunContext) (openlin
 
 func claudeArguments(config ProviderConfig, permission, sessionID string) []string {
 	args := []string{"--safe-mode", "--no-chrome", "--disable-slash-commands"}
-	if browserProfileEnabled(config) {
+	if directMCPBrowserClientEnabled(config) {
 		args = []string{"--bare", "--no-chrome", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", claudeBrowserMCPConfig(config)}
+	} else if nativeBrowserClientEnabled(config) {
+		args = []string{
+			"--bare",
+			"--no-chrome",
+			"--plugin-dir",
+			config.BrowserNativePlugin,
+		}
 	}
 	args = append(args, "-p", "--output-format", "json", "--permission-mode", permission)
 	if config.Model != "" {

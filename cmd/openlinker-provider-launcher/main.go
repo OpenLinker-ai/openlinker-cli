@@ -42,7 +42,8 @@ func main() {
 	}
 	argv := append([]string{target}, os.Args[1:]...)
 	environment := os.Environ()
-	if strings.EqualFold(strings.TrimSpace(fixedProvider), "codex") {
+	if strings.EqualFold(strings.TrimSpace(fixedProvider), "codex") &&
+		codexCommandNeedsAuthProxy(os.Args[1:]) {
 		var launch *codexProxyLaunch
 		launch, err = prepareCodexAuthProxy(argv, environment)
 		if err != nil {
@@ -58,6 +59,18 @@ func main() {
 	}
 	if err := syscall.Exec(target, argv, environment); err != nil {
 		fatal(errors.New("start fixed Provider binary"))
+	}
+}
+
+func codexCommandNeedsAuthProxy(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	switch strings.TrimSpace(args[0]) {
+	case "plugin", "mcp", "doctor", "features", "--version", "-V":
+		return false
+	default:
+		return true
 	}
 }
 

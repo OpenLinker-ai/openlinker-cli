@@ -5,7 +5,12 @@ import (
 	"strings"
 )
 
-func buildPrompt(provider string, run RunContext, includeHistory bool) string {
+func buildPrompt(
+	provider string,
+	run RunContext,
+	includeHistory bool,
+	browserEnabled bool,
+) string {
 	conversation := run.Conversation
 	if conversation != nil && !includeHistory {
 		copyValue := *conversation
@@ -31,11 +36,24 @@ func buildPrompt(provider string, run RunContext, includeHistory bool) string {
 	if conversation != nil && includeHistory {
 		lines = append(lines, "", "conversation.history_before_current contains Core-owned prior messages.", "The current user request is in input; do not ask the user to resend prior messages.")
 	}
+	if browserEnabled {
+		lines = append(
+			lines,
+			"",
+			"The isolated Browser tool is available for tasks that require webpage interaction.",
+			"Use it when needed and follow its safety contract.",
+		)
+	}
 	return strings.Join(lines, "\n")
 }
 
-func buildCodexPrompt(run RunContext, includeHistory, webSearch bool) string {
-	prompt := buildPrompt("Codex", run, includeHistory)
+func buildCodexPrompt(
+	run RunContext,
+	includeHistory,
+	webSearch,
+	browserEnabled bool,
+) string {
+	prompt := buildPrompt("Codex", run, includeHistory, browserEnabled)
 	if !webSearch {
 		return prompt
 	}
