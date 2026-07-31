@@ -34,11 +34,15 @@ type Config struct {
 	ClaudePermission      string   `json:"claude_permission,omitempty"`
 	AllowedTools          []string `json:"allowed_tools,omitempty"`
 	ExecutionProfile      string   `json:"execution_profile,omitempty"`
+	BrowserClientMode     string   `json:"browser_client_mode,omitempty"`
 	BrowserPluginBin      string   `json:"browser_plugin_bin,omitempty"`
+	BrowserNativePlugin   string   `json:"browser_native_plugin,omitempty"`
 	BrowserSocket         string   `json:"browser_socket,omitempty"`
 	BrowserCredentialFile string   `json:"browser_credential_file,omitempty"`
 	BrowserLeaseRoot      string   `json:"browser_lease_root,omitempty"`
 	BrowserBrokerRoot     string   `json:"browser_broker_root,omitempty"`
+	browserSelectedMode   string
+	browserFallbackReason string
 }
 
 func defaultConfig() Config {
@@ -239,11 +243,15 @@ func applyRuntimeEnvironment(config *Config, getenv func(string) string) error {
 	config.CodexApproval = firstNonEmpty(envValue(getenv, "OPENLINKER_CODEX_APPROVAL"), config.CodexApproval)
 	config.ClaudePermission = firstNonEmpty(envValue(getenv, "OPENLINKER_CLAUDE_PERMISSION"), config.ClaudePermission)
 	config.ExecutionProfile = firstNonEmpty(envValue(getenv, "OPENLINKER_AGENT_EXECUTION_PROFILE"), config.ExecutionProfile)
+	config.BrowserClientMode = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_CLIENT_MODE"), config.BrowserClientMode)
 	config.BrowserPluginBin = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_PLUGIN_BIN"), config.BrowserPluginBin)
+	config.BrowserNativePlugin = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH"), config.BrowserNativePlugin)
 	config.BrowserSocket = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_SOCKET"), config.BrowserSocket)
 	config.BrowserCredentialFile = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE"), config.BrowserCredentialFile)
 	config.BrowserLeaseRoot = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_LEASE_ROOT"), config.BrowserLeaseRoot)
 	config.BrowserBrokerRoot = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_BROKER_ROOT"), config.BrowserBrokerRoot)
+	config.browserSelectedMode = strings.TrimSpace(envValue(getenv, "OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE"))
+	config.browserFallbackReason = strings.TrimSpace(envValue(getenv, "OPENLINKER_BROWSER_CLIENT_FALLBACK_REASON"))
 	if value := strings.TrimSpace(envValue(getenv, "OPENLINKER_CLAUDE_ALLOWED_TOOLS")); value != "" {
 		config.AllowedTools = splitNonEmpty(value)
 	}

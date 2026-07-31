@@ -18,10 +18,12 @@ type sessionStore struct {
 }
 
 type sessionRecord struct {
-	SessionID      string `json:"session_id"`
-	SessionKeyHash string `json:"session_key_hash"`
-	Workspace      string `json:"workspace"`
-	UpdatedAt      string `json:"updated_at"`
+	SessionID            string `json:"session_id"`
+	SessionKeyHash       string `json:"session_key_hash"`
+	Workspace            string `json:"workspace"`
+	ClientMode           string `json:"client_mode,omitempty"`
+	ClientModeGeneration uint64 `json:"client_mode_generation,omitempty"`
+	UpdatedAt            string `json:"updated_at"`
 }
 
 var sessionStoreMu sync.Mutex
@@ -54,10 +56,72 @@ func loadSessionID(path, provider, workspace, sessionKey string) string {
 	return strings.TrimSpace(store.Sessions[sessionStoreKey(provider, workspace, sessionKey)].SessionID)
 }
 
-func saveSessionID(path, provider, workspace, sessionKey, sessionID string) error {
+func loadSessionForClientMode(
+	path,
+	provider,
+	workspace,
+	sessionKey,
+	clientMode string,
+) (sessionID string, generation uint64, modeChanged bool) {
+	sessionStoreMu.Lock()
+	defer sessionStoreMu.Unlock()
+	store := readSessionStore(path)
+	record, ok := store.Sessions[sessionStoreKey(provider, workspace, sessionKey)]
+	if !ok {
+		return "", 1, false
+	}
+	generation = record.ClientModeGeneration
+	if generation == 0 {
+		generation = 1
+	}
+	storedMode := strings.TrimSpace(record.ClientMode)
+	if storedMode == "" {
+		storedMode = "standard"
+		if strings.HasPrefix(clientMode, "browser_") {
+			// Browser sessions written before client-mode generations existed
+			// used only the direct Runtime-injected MCP surface.
+			storedMode = "browser_mcp"
+		}
+	}
+	if storedMode != clientMode {
+		return "", generation + 1, true
+	}
+	return strings.TrimSpace(record.SessionID), generation, false
+}
+
+func saveSessionID(
+	path,
+	provider,
+	workspace,
+	sessionKey,
+	sessionID string,
+) error {
+	return saveSessionForClientMode(
+		path,
+		provider,
+		workspace,
+		sessionKey,
+		sessionID,
+		"",
+		1,
+	)
+}
+
+func saveSessionForClientMode(
+	path,
+	provider,
+	workspace,
+	sessionKey,
+	sessionID,
+	clientMode string,
+	generation uint64,
+) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return nil
+	}
+	if generation == 0 {
+		generation = 1
 	}
 	sessionStoreMu.Lock()
 	defer sessionStoreMu.Unlock()
@@ -65,9 +129,20 @@ func saveSessionID(path, provider, workspace, sessionKey, sessionID string) erro
 	key := sessionStoreKey(provider, workspace, sessionKey)
 	store.Sessions[key] = sessionRecord{
 		SessionID: sessionID, SessionKeyHash: key[:24], Workspace: filepath.Clean(workspace),
+		ClientMode: strings.TrimSpace(clientMode), ClientModeGeneration: generation,
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	return writeSessionStore(path, store)
+}
+
+func providerSessionClientMode(config ProviderConfig) string {
+	if !browserProfileEnabled(config) {
+		return "standard"
+	}
+	if nativeBrowserClientEnabled(config) {
+		return "browser_native"
+	}
+	return "browser_mcp"
 }
 
 func deleteSessionID(path, provider, workspace, sessionKey string) error {

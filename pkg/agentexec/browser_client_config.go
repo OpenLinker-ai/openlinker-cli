@@ -2,12 +2,21 @@ package agentexec
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
 
 var browserEnvironmentNames = []string{
 	"OPENLINKER_BROWSER_TOOL_SOCKET",
+}
+
+var browserClientFallbackReasons = map[string]struct{}{
+	"native_bundle_unavailable":    {},
+	"native_bundle_invalid":        {},
+	"native_host_incompatible":     {},
+	"native_activation_failed":     {},
+	"native_tool_handshake_failed": {},
 }
 
 func providerConfigForBrowserRun(
@@ -32,8 +41,85 @@ func browserProfileEnabled(config ProviderConfig) bool {
 	return strings.EqualFold(strings.TrimSpace(config.ExecutionProfile), "browser")
 }
 
-func codexBrowserMCPArguments(config ProviderConfig) []string {
+func browserClientMode(config ProviderConfig) string {
 	if !browserProfileEnabled(config) {
+		return ""
+	}
+	switch strings.TrimSpace(config.BrowserClientMode) {
+	case "native":
+		return "native"
+	default:
+		return "mcp"
+	}
+}
+
+func nativeBrowserClientEnabled(config ProviderConfig) bool {
+	return browserClientMode(config) == "native"
+}
+
+func directMCPBrowserClientEnabled(config ProviderConfig) bool {
+	return browserClientMode(config) == "mcp"
+}
+
+func validateBrowserClientConfig(config ProviderConfig) error {
+	if !browserProfileEnabled(config) {
+		return nil
+	}
+	requested := strings.TrimSpace(config.BrowserClientModeRequested)
+	if requested == "" {
+		requested = "mcp"
+	}
+	switch requested {
+	case "auto", "native", "mcp":
+	default:
+		return errors.New("Browser client mode request must be auto, native, or mcp")
+	}
+	selected := strings.TrimSpace(config.BrowserClientMode)
+	if selected == "" {
+		selected = "mcp"
+	}
+	if selected != "native" && selected != "mcp" {
+		return errors.New("effective Browser client mode must be native or mcp")
+	}
+	if requested != "auto" && requested != selected {
+		return errors.New("strict Browser client mode cannot select another surface")
+	}
+	fallback := strings.TrimSpace(config.BrowserClientFallbackReason)
+	if fallback != "" {
+		if requested != "auto" || selected != "mcp" {
+			return errors.New("Browser fallback evidence requires auto to select mcp")
+		}
+		if _, ok := browserClientFallbackReasons[fallback]; !ok {
+			return errors.New("Browser fallback reason is invalid")
+		}
+	}
+	if selected == "native" && strings.TrimSpace(config.BrowserNativePlugin) == "" {
+		return errors.New("native Browser client mode requires a Runtime-owned Plugin path")
+	}
+	return nil
+}
+
+func browserClientEvidence(config ProviderConfig) map[string]any {
+	requested := strings.TrimSpace(config.BrowserClientModeRequested)
+	if requested == "" {
+		requested = "mcp"
+	}
+	selected := "direct_mcp"
+	if nativeBrowserClientEnabled(config) {
+		selected = "plugin_native"
+	}
+	evidence := map[string]any{
+		"browser_client_mode_requested": requested,
+		"browser_client_mode_selected":  selected,
+	}
+	if fallback := strings.TrimSpace(config.BrowserClientFallbackReason); fallback != "" {
+		evidence["browser_client_mode_fallback_reason"] = fallback
+	}
+	return evidence
+}
+
+func codexBrowserMCPArguments(config ProviderConfig) []string {
+	if !directMCPBrowserClientEnabled(config) {
 		return nil
 	}
 	command, _ := json.Marshal(config.BrowserPluginBin)
@@ -55,6 +141,9 @@ func codexBrowserMCPArguments(config ProviderConfig) []string {
 }
 
 func claudeBrowserMCPConfig(config ProviderConfig) string {
+	if !directMCPBrowserClientEnabled(config) {
+		return ""
+	}
 	environment := map[string]string{}
 	for _, item := range config.Env {
 		key, value, ok := strings.Cut(item, "=")

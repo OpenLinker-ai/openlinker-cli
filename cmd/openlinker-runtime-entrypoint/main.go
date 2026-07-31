@@ -131,6 +131,19 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 		}
 		return nil
 	}
+	browserProfile := strings.EqualFold(
+		strings.TrimSpace(os.Getenv("OPENLINKER_AGENT_EXECUTION_PROFILE")),
+		"browser",
+	)
+	if browserProfile {
+		if value, present := os.LookupEnv("OPENLINKER_USER_TOKEN"); present &&
+			strings.TrimSpace(value) != "" {
+			return errors.New(
+				"OPENLINKER_USER_TOKEN is not supported by packaged Browser Agents",
+			)
+		}
+	}
+
 	values := map[string]string{
 		"OPENLINKER_URL":                   platformURL,
 		"OPENLINKER_AGENT_ID":              agentID,
@@ -151,7 +164,7 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 		"no_proxy":                         "",
 		providerSecret:                     providerKey,
 	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("OPENLINKER_AGENT_EXECUTION_PROFILE")), "browser") {
+	if browserProfile {
 		values["OPENLINKER_AGENT_EXECUTION_PROFILE"] = "browser"
 		values["OPENLINKER_BROWSER_PLUGIN_BIN"] = "/usr/local/bin/openlinker"
 		values["OPENLINKER_BROWSER_SOCKET"] = filepath.Join(officialBrowserControlRoot, "openlinker.browser.sock")
@@ -177,9 +190,48 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 			return err
 		}
 	}
+	if browserProfile {
+		requested, present := os.LookupEnv("OPENLINKER_BROWSER_CLIENT_MODE")
+		if !present {
+			requested = "mcp"
+		} else if requested = strings.TrimSpace(requested); requested == "" {
+			return errors.New(
+				"OPENLINKER_BROWSER_CLIENT_MODE cannot be empty when explicitly set",
+			)
+		}
+		pluginPath := officialClaudeBrowserPlugin
+		if provider == "codex" {
+			pluginPath = officialCodexBrowserPlugin
+		}
+		if !requireMount {
+			pluginPath = strings.TrimSpace(
+				os.Getenv("OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH"),
+			)
+		}
+		selection, err := selectBrowserClientMode(
+			provider,
+			requested,
+			pluginPath,
+			requireMount,
+		)
+		if err != nil {
+			return err
+		}
+		for key, value := range map[string]string{
+			"OPENLINKER_BROWSER_CLIENT_MODE":            selection.Requested,
+			"OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE":  selection.Selected,
+			"OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH":     selection.PluginPath,
+			"OPENLINKER_BROWSER_CLIENT_FALLBACK_REASON": selection.FallbackReason,
+		} {
+			if err := setenv(key, value); err != nil {
+				return err
+			}
+		}
+	}
 	for _, key := range []string{"OPENLINKER_AGENT_TOKEN_FILE", "CODEX_API_KEY_FILE", "ANTHROPIC_API_KEY_FILE", "ALL_PROXY", "all_proxy"} {
 		_ = os.Unsetenv(key)
 	}
+	_ = os.Unsetenv("OPENLINKER_USER_TOKEN")
 	return nil
 }
 

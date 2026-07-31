@@ -94,6 +94,8 @@ func TestConfigureAgentModeSchemaIncludesProviderAndBrowserProfiles(t *testing.T
 		for _, field := range []string{
 			"codex_base_url",
 			"execution_profile",
+			"browser_client_mode",
+			"browser_native_plugin",
 			"browser_plugin_bin",
 			"browser_socket",
 			"browser_credential_file",

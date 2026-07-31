@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "repository": "OpenLinker-ai/openlinker-plugin",
+  "release": "v0.1.1",
+  "artifacts": {
+    "codex": {
+      "name": "openlinker-agent-runtime-codex-plugin-v0.1.1.tar.gz",
+      "sha256": "1e7de5a3ba95c80d8e7f38592e9873a51cc679ac4784d977fefe4dd7d3347b55"
+    },
+    "claude": {
+      "name": "openlinker-agent-runtime-claude-plugin-v0.1.1.tar.gz",
+      "sha256": "26c0c44936df573d082cbc9f450c917411bbcef8196b757511d3ac2694d4a9c8"
+    }
+  }
+}

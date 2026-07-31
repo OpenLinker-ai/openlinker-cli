@@ -213,6 +213,136 @@ func TestBrowserClientConfigurationIsOptInAndSecretFree(t *testing.T) {
 	}
 }
 
+func TestBrowserClientModesExposeExactlyOneProviderSurface(t *testing.T) {
+	run := &BrowserRunContext{
+		PluginBin:  "/usr/local/bin/openlinker",
+		ToolSocket: "/browser/tool.sock",
+	}
+	native := providerConfigForBrowserRun(ProviderConfig{
+		Provider:                   "codex",
+		ExecutionProfile:           "browser",
+		BrowserClientModeRequested: "native",
+		BrowserClientMode:          "native",
+		BrowserNativePlugin:        "/opt/openlinker/agent-runtime-plugin/codex",
+	}, run)
+	nativeCodex := strings.Join(
+		codexArguments(native, "/workspace", "read-only", "", true),
+		" ",
+	)
+	if strings.Contains(nativeCodex, "mcp_servers.openlinker_browser") ||
+		strings.Contains(nativeCodex, "--ignore-user-config") {
+		t.Fatalf("native Codex also exposed direct MCP: %s", nativeCodex)
+	}
+	nativeClaude := strings.Join(claudeArguments(native, "dontAsk", ""), " ")
+	if !strings.Contains(
+		nativeClaude,
+		"--plugin-dir /opt/openlinker/agent-runtime-plugin/codex",
+	) ||
+		strings.Contains(nativeClaude, "--strict-mcp-config") ||
+		strings.Contains(nativeClaude, "--disable-slash-commands") {
+		t.Fatalf("native Claude surface is not exclusive: %s", nativeClaude)
+	}
+
+	direct := native
+	direct.BrowserClientModeRequested = "mcp"
+	direct.BrowserClientMode = "mcp"
+	direct.BrowserNativePlugin = ""
+	directCodex := strings.Join(
+		codexArguments(direct, "/workspace", "read-only", "", true),
+		" ",
+	)
+	if !strings.Contains(directCodex, "mcp_servers.openlinker_browser") ||
+		!strings.Contains(directCodex, "--ignore-user-config") {
+		t.Fatalf("direct Codex MCP surface is incomplete: %s", directCodex)
+	}
+	directClaude := strings.Join(claudeArguments(direct, "dontAsk", ""), " ")
+	if !strings.Contains(directClaude, "--strict-mcp-config") ||
+		!strings.Contains(directClaude, "--disable-slash-commands") ||
+		strings.Contains(directClaude, "--plugin-dir") {
+		t.Fatalf("direct Claude MCP surface is not exclusive: %s", directClaude)
+	}
+}
+
+func TestBrowserClientConfigurationRejectsUnboundedFallback(t *testing.T) {
+	base := ProviderConfig{
+		Provider:              "codex",
+		ExecutionProfile:      "browser",
+		BrowserClientMode:     "mcp",
+		BrowserPluginBin:      "/usr/local/bin/openlinker",
+		BrowserSocket:         "/browser/control.sock",
+		BrowserCredentialFile: "/browser/channel",
+		BrowserLeaseRoot:      "/browser/leases",
+		BrowserBrokerRoot:     "/browser/broker",
+	}
+	for name, mutate := range map[string]func(*ProviderConfig){
+		"auto without effective selection": func(config *ProviderConfig) {
+			config.BrowserClientModeRequested = "auto"
+			config.BrowserClientMode = "auto"
+		},
+		"strict mode changed": func(config *ProviderConfig) {
+			config.BrowserClientModeRequested = "native"
+			config.BrowserClientMode = "mcp"
+		},
+		"policy failure used as fallback": func(config *ProviderConfig) {
+			config.BrowserClientModeRequested = "auto"
+			config.BrowserClientFallbackReason = "BROWSER_TARGET_BLOCKED"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := base
+			mutate(&config)
+			if err := validateBrowserClientConfig(config); err == nil {
+				t.Fatalf("invalid Browser client config was accepted: %#v", config)
+			}
+		})
+	}
+}
+
+func TestBrowserClientEvidenceIsBoundedAndUsesCanonicalNames(t *testing.T) {
+	evidence := browserClientEvidence(ProviderConfig{
+		ExecutionProfile:            "browser",
+		BrowserClientModeRequested:  "auto",
+		BrowserClientMode:           "mcp",
+		BrowserClientFallbackReason: "native_bundle_unavailable",
+	})
+	if len(evidence) != 3 ||
+		evidence["browser_client_mode_requested"] != "auto" ||
+		evidence["browser_client_mode_selected"] != "direct_mcp" ||
+		evidence["browser_client_mode_fallback_reason"] !=
+			"native_bundle_unavailable" {
+		t.Fatalf("direct-MCP evidence = %#v", evidence)
+	}
+	native := browserClientEvidence(ProviderConfig{
+		ExecutionProfile:           "browser",
+		BrowserClientModeRequested: "native",
+		BrowserClientMode:          "native",
+	})
+	if len(native) != 2 ||
+		native["browser_client_mode_selected"] != "plugin_native" {
+		t.Fatalf("native evidence = %#v", native)
+	}
+	for _, values := range []map[string]any{evidence, native} {
+		encoded, err := json.Marshal(values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{
+			"/opt/",
+			"OPENLINKER_",
+			"API_KEY",
+			"TOKEN",
+			"runtime_session",
+			"attachment",
+			"plugin_error",
+			"raw_error",
+		} {
+			if strings.Contains(string(encoded), forbidden) {
+				t.Fatalf("Browser client evidence leaked %q: %s", forbidden, encoded)
+			}
+		}
+	}
+}
+
 func TestBrowserLifecycleEventBudgetIsFixed(t *testing.T) {
 	root := shortBrowserTestRoot(t)
 	base := &browserCaptureProvider{root: root}

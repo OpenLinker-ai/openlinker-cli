@@ -80,6 +80,17 @@ API Key；官方生产镜像要求 Provider API Key。Agent Mode 配置文件从
 和 permission 变量。完整示例见
 [`deploy/.env.providers.example`](./deploy/.env.providers.example)。
 
+封装 Browser Profile 新增
+`OPENLINKER_BROWSER_CLIENT_MODE=auto|native|mcp`。通用 CLI 省略该配置时保留旧的
+`mcp` 行为；官方 Codex 与 Claude Browser Compose Overlay 显式使用 `auto`。
+`native` 只加载镜像内 Browser Plugin，`mcp` 使用 Runtime 直接注入的 MCP 配置。
+“原生”指 Provider 的 Plugin/Skill/Command 体验；工具传输仍是 MCP，两种模式使用
+同一个隔离 Browser Runtime。一个 Provider Session Generation 只暴露一个入口。
+
+封装 Browser Agent 需要 Agent Token 和 Provider API Key，但不需要 User Token。
+官方 Browser Entrypoint 会拒绝 `OPENLINKER_USER_TOKEN`，也不会把它转发给子
+Provider 或 Browser Runtime。
+
 Codex 使用 OpenAI-compatible 路由时，可设置非敏感变量
 `OPENLINKER_CODEX_BASE_URL`（例如 `https://router.example/v1`），或向
 `openlinker agent configure` 传入 `--codex-base-url`。该值必须是绝对 HTTP(S)
@@ -208,6 +219,10 @@ pkg/context
 pkg/buildinfo
 pkg/agent
 pkg/agentexec
+pkg/browserclient
+pkg/browserplugin
+pkg/browserprotocol
+pkg/browserruntime
 pkg/plugin
 pkg/pluginbridge
 pkg/run

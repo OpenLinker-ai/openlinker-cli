@@ -61,6 +61,8 @@ func toolDefinitions() []toolDefinition {
 			"codex_approval": stringProperty("Codex approval mode"), "claude_permission": stringProperty("Claude permission mode"),
 			"allowed_tools":           stringArray("Claude allowed tools"),
 			"execution_profile":       map[string]any{"type": "string", "enum": []string{"standard", "browser"}},
+			"browser_client_mode":     map[string]any{"type": "string", "enum": []string{"auto", "native", "mcp"}},
+			"browser_native_plugin":   stringProperty("Absolute Runtime-owned native Browser Plugin path"),
 			"browser_plugin_bin":      stringProperty("OpenLinker CLI binary used for the isolated Browser tool server"),
 			"browser_socket":          stringProperty("Private Browser Runtime Unix socket path"),
 			"browser_credential_file": stringProperty("Owner-only Browser channel credential file path; never the credential value"),

@@ -194,7 +194,7 @@ func TestBuildCodexPromptAdvertisesWebOnlyWhenEnabled(t *testing.T) {
 		RunID: "run-1",
 		Input: map[string]any{"text": "latest news"},
 	}
-	enabled := buildCodexPrompt(run, true, true)
+	enabled := buildCodexPrompt(run, true, true, false)
 	for _, expected := range []string{
 		"Live public-web access is enabled",
 		"use web search or a permitted public HTTP tool before answering",
@@ -206,7 +206,7 @@ func TestBuildCodexPromptAdvertisesWebOnlyWhenEnabled(t *testing.T) {
 			t.Fatalf("enabled prompt missing %q: %s", expected, enabled)
 		}
 	}
-	disabled := buildCodexPrompt(run, true, false)
+	disabled := buildCodexPrompt(run, true, false, false)
 	if strings.Contains(disabled, "Live public-web access") ||
 		strings.Contains(disabled, "use web search or a permitted public HTTP tool") {
 		t.Fatalf("disabled prompt advertised web access: %s", disabled)

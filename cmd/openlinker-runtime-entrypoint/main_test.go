@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,6 +96,36 @@ func TestAgentStageEnvironmentResolvesOnlySelectedProviderSecrets(t *testing.T) 
 	}
 }
 
+func TestBrowserPluginHostPreparationReceivesNoCredential(t *testing.T) {
+	environment := browserClientHostEnvironment([]string{
+		"HOME=/provider",
+		"CODEX_HOME=/provider",
+		"OPENLINKER_AGENT_TOKEN=agent-secret",
+		"OPENLINKER_USER_TOKEN=user-secret",
+		"CODEX_API_KEY=codex-secret",
+		"ANTHROPIC_API_KEY=claude-secret",
+	})
+	joined := strings.Join(environment, "\n")
+	for _, expected := range []string{"HOME=/provider", "CODEX_HOME=/provider"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("Plugin preparation environment omitted %s: %s", expected, joined)
+		}
+	}
+	for _, forbidden := range []string{
+		"agent-secret",
+		"user-secret",
+		"codex-secret",
+		"claude-secret",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf(
+				"Plugin preparation environment retained a credential: %s",
+				joined,
+			)
+		}
+	}
+}
+
 func TestConfigureCodexUsesFixedRuntimeBoundaries(t *testing.T) {
 	runtimeDir := t.TempDir()
 	workspace := t.TempDir()
@@ -180,4 +211,205 @@ func TestGatewayProxyValidationRejectsCredentialsAndPaths(t *testing.T) {
 	if got, err := validateGatewayProxy("http://gateway:3128"); err != nil || got != "http://gateway:3128" {
 		t.Fatalf("gateway proxy = %q, %v", got, err)
 	}
+}
+
+func TestBrowserClientModeSelectionIsStrictAndBounded(t *testing.T) {
+	mcp, err := selectBrowserClientMode("codex", "mcp", "/missing", false)
+	if err != nil || mcp.Selected != "mcp" || mcp.PluginPath != "" {
+		t.Fatalf("mcp selection = %#v, %v", mcp, err)
+	}
+	auto, err := selectBrowserClientMode("codex", "auto", "/missing", false)
+	if err != nil ||
+		auto.Selected != "mcp" ||
+		auto.FallbackReason != "native_bundle_unavailable" {
+		t.Fatalf("auto fallback = %#v, %v", auto, err)
+	}
+	if _, err := selectBrowserClientMode("codex", "native", "/missing", false); err == nil ||
+		!strings.Contains(err.Error(), "native_bundle_unavailable") {
+		t.Fatalf("strict native error = %v", err)
+	}
+	if _, err := selectBrowserClientMode("codex", "AUTO", "/missing", false); err == nil {
+		t.Fatal("case-confused Browser client mode was accepted")
+	}
+}
+
+func TestCodexNativeBrowserPluginActivationRequiresExactHostList(t *testing.T) {
+	root := writeTestAgentRuntimePlugin(t, "codex")
+	original := runBrowserClientHostCommand
+	t.Cleanup(func() { runBrowserClientHostCommand = original })
+	var calls [][]string
+	runBrowserClientHostCommand = func(args ...string) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if len(args) >= 2 && args[0] == "plugin" && args[1] == "list" {
+			return json.Marshal(map[string]any{
+				"installed": []any{map[string]any{
+					"pluginId":        "openlinker@openlinker-agent-runtime",
+					"name":            "openlinker",
+					"marketplaceName": "openlinker-agent-runtime",
+					"version":         "0.1.0+agent-runtime.codex",
+					"installed":       true,
+					"enabled":         true,
+					"source": map[string]any{
+						"source": "local",
+						"path":   filepath.Join(root, "plugins", "openlinker"),
+					},
+					"marketplaceSource": map[string]any{
+						"sourceType": "local",
+						"source":     root,
+					},
+					"installPolicy": "AVAILABLE",
+					"authPolicy":    "ON_INSTALL",
+				}},
+				"available": []any{},
+			})
+		}
+		return []byte(`{}`), nil
+	}
+	selection, err := selectBrowserClientMode("codex", "native", root, false)
+	if err != nil || selection.Selected != "native" || len(calls) != 3 {
+		t.Fatalf("Codex native selection = %#v, calls=%#v, %v", selection, calls, err)
+	}
+
+	runBrowserClientHostCommand = func(args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "plugin" && args[1] == "list" {
+			return []byte(`{"installed":[],"available":[]}`), nil
+		}
+		return []byte(`{}`), nil
+	}
+	fallback, err := selectBrowserClientMode("codex", "auto", root, false)
+	if err != nil ||
+		fallback.Selected != "mcp" ||
+		fallback.FallbackReason != "native_tool_handshake_failed" {
+		t.Fatalf("Codex host-list fallback = %#v, %v", fallback, err)
+	}
+}
+
+func TestClaudeNativeBrowserPluginUsesStrictHostValidation(t *testing.T) {
+	root := writeTestAgentRuntimePlugin(t, "claude")
+	original := runBrowserClientHostCommand
+	t.Cleanup(func() { runBrowserClientHostCommand = original })
+	var call []string
+	runBrowserClientHostCommand = func(args ...string) ([]byte, error) {
+		call = append([]string(nil), args...)
+		return []byte("validation passed"), nil
+	}
+	selection, err := selectBrowserClientMode("claude", "native", root, false)
+	if err != nil || selection.Selected != "native" {
+		t.Fatalf("Claude native selection = %#v, %v", selection, err)
+	}
+	want := []string{"plugin", "validate", "--strict", root}
+	if strings.Join(call, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("Claude validation call = %#v, want %#v", call, want)
+	}
+}
+
+func TestConfigureBrowserAgentRejectsUserTokenAndDefaultsToMCP(t *testing.T) {
+	runtimeDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.Chmod(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		"OPENLINKER_URL":                     "https://openlinker.example",
+		"OPENLINKER_AGENT_ID":                "11111111-1111-4111-8111-111111111111",
+		"OPENLINKER_AGENT_TOKEN":             "ol_agent_test",
+		"CODEX_API_KEY":                      "codex-test",
+		"OPENLINKER_NODE_ID":                 "",
+		"OPENLINKER_BLOCK_PRIVATE_NETWORK":   "true",
+		"OPENLINKER_EGRESS_PROXY_URL":        "http://gateway:3128",
+		"OPENLINKER_AGENT_EXECUTION_PROFILE": "browser",
+	} {
+		t.Setenv(key, value)
+	}
+	if err := configure("codex", runtimeDir, workspace, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if runtimeLock != nil {
+			_ = runtimeLock.Close()
+			runtimeLock = nil
+		}
+	})
+	if got := os.Getenv("OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE"); got != "mcp" {
+		t.Fatalf("default effective Browser client mode = %q", got)
+	}
+
+	_ = runtimeLock.Close()
+	runtimeLock = nil
+	t.Setenv("OPENLINKER_USER_TOKEN", "ol_user_forbidden")
+	if err := configure("codex", runtimeDir, workspace, false); err == nil ||
+		!strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("User Token rejection = %v", err)
+	}
+}
+
+func writeTestAgentRuntimePlugin(t *testing.T, provider string) string {
+	t.Helper()
+	root := t.TempDir()
+	var files map[string]string
+	if provider == "codex" {
+		files = map[string]string{
+			".agents/plugins/marketplace.json": `{"name":"openlinker-agent-runtime"}`,
+			"plugins/openlinker/.codex-plugin/plugin.json": `{
+					"name":"openlinker",
+					"skills":"./skills/",
+					"mcpServers":"./.mcp.json",
+					"interface":{
+						"displayName":"OpenLinker Isolated Browser",
+						"shortDescription":"Use the isolated Browser.",
+						"longDescription":"Use the Runtime-authorized isolated Browser.",
+						"developerName":"OpenLinker",
+						"category":"Productivity",
+						"capabilities":["Browser automation"],
+						"defaultPrompt":["Use the isolated Browser."]
+					}
+				}`,
+			"plugins/openlinker/.mcp.json": `{
+				"mcpServers":{
+					"openlinker_browser":{
+						"command":"/usr/local/bin/openlinker",
+						"args":["plugin","browser-proxy","--host","codex"],
+						"cwd":"/workspace",
+						"env_vars":["OPENLINKER_BROWSER_TOOL_SOCKET"]
+					}
+				}
+			}`,
+			"plugins/openlinker/LICENSE":                                        "Apache-2.0",
+			"plugins/openlinker/skills/use-isolated-browser/SKILL.md":           "Browser skill",
+			"plugins/openlinker/skills/use-isolated-browser/agents/openai.yaml": "interface: {}",
+		}
+	} else {
+		files = map[string]string{
+			".claude-plugin/plugin.json": `{
+				"name":"openlinker",
+				"skills":"./skills/",
+				"commands":"./commands/"
+			}`,
+			".mcp.json": `{
+				"mcpServers":{
+					"openlinker_browser":{
+						"command":"/usr/local/bin/openlinker",
+						"args":["plugin","browser-proxy","--host","claude"],
+						"env":{"OPENLINKER_BROWSER_TOOL_SOCKET":"${OPENLINKER_BROWSER_TOOL_SOCKET}"}
+					}
+				}
+			}`,
+			"LICENSE":                              "Apache-2.0",
+			"commands/use-isolated-browser.md":     "Browser command",
+			"skills/use-isolated-browser/SKILL.md": "Browser skill",
+		}
+	}
+	for relative, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }

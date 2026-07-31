@@ -9,7 +9,7 @@ RUN go mod download && go mod verify
 COPY . .
 
 FROM go-source AS go-build
-RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/netpolicy ./pkg/pluginbridge
+RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserclientmode ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/netpolicy ./pkg/pluginbridge
 ARG TARGETOS
 ARG TARGETARCH
 ARG OPENLINKER_VERSION=container
@@ -55,6 +55,35 @@ WORKDIR /workspace
 USER 0:0
 STOPSIGNAL SIGTERM
 
+FROM provider-base AS agent-runtime-plugin
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=root:root --chmod=0444 deploy/agent-runtime-plugin.lock.json /tmp/agent-runtime-plugin.lock.json
+RUN set -eu; \
+    repository="$(node -p "require('/tmp/agent-runtime-plugin.lock.json').repository")"; \
+    release="$(node -p "require('/tmp/agent-runtime-plugin.lock.json').release")"; \
+    mkdir -p /out/codex /out/claude; \
+    for host in codex claude; do \
+      name="$(node -p "require('/tmp/agent-runtime-plugin.lock.json').artifacts['${host}'].name")"; \
+      expected="$(node -p "require('/tmp/agent-runtime-plugin.lock.json').artifacts['${host}'].sha256")"; \
+      curl --fail --show-error --silent --location \
+        "https://github.com/${repository}/releases/download/${release}/${name}" \
+        --output "/tmp/${name}"; \
+      printf '%s  %s\n' "${expected}" "/tmp/${name}" | sha256sum --check --strict; \
+      if [ "${host}" = claude ]; then \
+        tar -xzf "/tmp/${name}" -C /out/claude --strip-components=1; \
+      else \
+        tar -xzf "/tmp/${name}" -C /out/codex; \
+      fi; \
+    done; \
+    find /out -type d -exec chmod 0555 {} +; \
+    find /out -type f -exec chmod 0444 {} +; \
+    test -f /out/codex/.agents/plugins/marketplace.json; \
+    test -f /out/claude/.claude-plugin/plugin.json; \
+    test -f /out/codex/plugins/openlinker/.mcp.json; \
+    test -f /out/claude/.mcp.json
+
 FROM provider-base AS codex
 ARG CODEX_CLI_VERSION=0.145.0-alpha.27
 ARG CODEX_CLI_INTEGRITY=sha512-CqQmtU0avLks+u0xrh5AaLTXy90XAW+g9jWZ2W3NPMgBxjUbcsRiqANR/Ai0FHa7JIKD8qZwkfRWWrUAxIGt2w==
@@ -68,6 +97,19 @@ RUN test "$(npm view "@openai/codex@${CODEX_CLI_VERSION}" dist.integrity)" = "${
  && npm cache clean --force
 COPY --from=go-build /out/openlinker-runtime-entrypoint-codex /usr/local/bin/openlinker-runtime-entrypoint
 COPY --from=go-build /out/openlinker-provider-launcher-codex /usr/local/bin/openlinker-provider-launcher
+COPY --from=agent-runtime-plugin /out/codex /opt/openlinker/agent-runtime-plugin/codex
+RUN set -eu; \
+    chmod 0555 /opt/openlinker/agent-runtime-plugin/codex; \
+    test "$(stat -c '%U:%G %a' /opt/openlinker/agent-runtime-plugin/codex)" = "root:root 555"; \
+    validation_home="$(mktemp -d)"; \
+    HOME="${validation_home}" CODEX_HOME="${validation_home}" \
+      codex plugin marketplace add /opt/openlinker/agent-runtime-plugin/codex --json >/tmp/codex-marketplace.json; \
+    HOME="${validation_home}" CODEX_HOME="${validation_home}" \
+      codex plugin add openlinker@openlinker-agent-runtime --json >/tmp/codex-plugin-add.json; \
+    HOME="${validation_home}" CODEX_HOME="${validation_home}" \
+      codex plugin list --json >/tmp/codex-plugin-list.json; \
+    node -e "const value=require('/tmp/codex-plugin-list.json'); if(value.installed.length !== 1 || value.available.length !== 0 || value.installed[0].pluginId !== 'openlinker@openlinker-agent-runtime' || !value.installed[0].enabled) process.exit(1)"; \
+    rm -rf "${validation_home}" /tmp/codex-marketplace.json /tmp/codex-plugin-add.json /tmp/codex-plugin-list.json
 ENV OPENLINKER_CODEX_BIN=/usr/local/bin/openlinker-provider-launcher \
     OPENLINKER_CODEX_SANDBOX=read-only \
     OPENLINKER_CODEX_APPROVAL=never \
@@ -87,6 +129,10 @@ RUN test "$(npm view "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" dist.int
  && npm cache clean --force
 COPY --from=go-build /out/openlinker-runtime-entrypoint-claude /usr/local/bin/openlinker-runtime-entrypoint
 COPY --from=go-build /out/openlinker-provider-launcher-claude /usr/local/bin/openlinker-provider-launcher
+COPY --from=agent-runtime-plugin /out/claude /opt/openlinker/agent-runtime-plugin/claude
+RUN chmod 0555 /opt/openlinker/agent-runtime-plugin/claude \
+ && test "$(stat -c '%U:%G %a' /opt/openlinker/agent-runtime-plugin/claude)" = "root:root 555" \
+ && claude plugin validate --strict /opt/openlinker/agent-runtime-plugin/claude
 ENV OPENLINKER_CLAUDE_BIN=/usr/local/bin/openlinker-provider-launcher \
     OPENLINKER_CLAUDE_PERMISSION=dontAsk \
     OPENLINKER_CLAUDE_WEB_SEARCH=false

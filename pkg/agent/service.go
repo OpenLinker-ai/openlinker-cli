@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agentexec"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclientmode"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo"
 	openlinker "github.com/OpenLinker-ai/openlinker-go"
@@ -87,6 +89,7 @@ type Status struct {
 	ConfigPath         string `json:"config_path,omitempty"`
 	StateDir           string `json:"state_dir,omitempty"`
 	ExecutionProfile   string `json:"execution_profile,omitempty"`
+	BrowserClientMode  string `json:"browser_client_mode,omitempty"`
 	Message            string `json:"message,omitempty"`
 	UpdatedAt          string `json:"updated_at"`
 }
@@ -201,6 +204,10 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 				ProviderAuthSource: resolved.providerAuthSource, ConfigPath: resolved.configPath,
 				StateDir: resolved.stateDir, UpdatedAt: nowText(),
 				ExecutionProfile: resolved.config.ExecutionProfile,
+				BrowserClientMode: firstNonEmpty(
+					resolved.config.browserSelectedMode,
+					resolved.config.BrowserClientMode,
+				),
 			})
 			readyOnce.Do(func() { close(ready) })
 		},
@@ -219,6 +226,10 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 		AgentTokenSource: resolved.agentTokenSource, ProviderAuthSource: resolved.providerAuthSource,
 		ConfigPath: resolved.configPath, StateDir: resolved.stateDir, UpdatedAt: nowText(),
 		ExecutionProfile: resolved.config.ExecutionProfile,
+		BrowserClientMode: firstNonEmpty(
+			resolved.config.browserSelectedMode,
+			resolved.config.BrowserClientMode,
+		),
 	}
 	service.persistStatusLocked()
 	service.mu.Unlock()
@@ -396,6 +407,40 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	if _, err := exec.LookPath(providerBin); err != nil {
 		return resolvedRuntime{}, fmt.Errorf("%s provider CLI was not found: %w", config.Provider, err)
 	}
+	if config.ExecutionProfile == "browser" &&
+		config.browserSelectedMode == "" &&
+		(config.BrowserClientMode == "auto" ||
+			config.BrowserClientMode == "native") {
+		selection, selectErr := browserclientmode.Select(
+			browserclientmode.Options{
+				Provider:   config.Provider,
+				Requested:  config.BrowserClientMode,
+				PluginPath: config.BrowserNativePlugin,
+				RunHostCommand: browserClientModeHostRunner(
+					providerBin,
+					removeEnvironmentKeys(
+						os.Environ(),
+						"OPENLINKER_AGENT_TOKEN",
+						"OPENLINKER_AGENT_TOKEN_FILE",
+						"OPENLINKER_USER_TOKEN",
+						"CODEX_API_KEY",
+						"CODEX_API_KEY_FILE",
+						"ANTHROPIC_API_KEY",
+						"ANTHROPIC_API_KEY_FILE",
+					),
+				),
+			},
+		)
+		if selectErr != nil {
+			return resolvedRuntime{}, selectErr
+		}
+		config.browserSelectedMode = selection.Selected
+		config.browserFallbackReason = selection.FallbackReason
+		config.BrowserNativePlugin = selection.PluginPath
+		if err := validateExecutionProfile(config); err != nil {
+			return resolvedRuntime{}, err
+		}
+	}
 	browserPluginBin := ""
 	if config.ExecutionProfile == "browser" {
 		if _, err := readPrivateSecret(config.BrowserCredentialFile); err != nil {
@@ -420,12 +465,23 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 		SessionReuse: config.SessionReuse,
 		SessionStore: filepath.Join(dir, "session-map", config.Provider+".json"),
 		WebSearch:    config.WebSearch, Env: environment,
-		ExecutionProfile:      config.ExecutionProfile,
-		BrowserPluginBin:      browserPluginBin,
-		BrowserSocket:         config.BrowserSocket,
-		BrowserCredentialFile: config.BrowserCredentialFile,
-		BrowserLeaseRoot:      config.BrowserLeaseRoot,
-		BrowserBrokerRoot:     config.BrowserBrokerRoot,
+		ExecutionProfile: config.ExecutionProfile,
+		BrowserClientModeRequested: firstNonEmpty(
+			config.BrowserClientMode,
+			"mcp",
+		),
+		BrowserClientMode: firstNonEmpty(
+			config.browserSelectedMode,
+			config.BrowserClientMode,
+			"mcp",
+		),
+		BrowserClientFallbackReason: config.browserFallbackReason,
+		BrowserPluginBin:            browserPluginBin,
+		BrowserNativePlugin:         config.BrowserNativePlugin,
+		BrowserSocket:               config.BrowserSocket,
+		BrowserCredentialFile:       config.BrowserCredentialFile,
+		BrowserLeaseRoot:            config.BrowserLeaseRoot,
+		BrowserBrokerRoot:           config.BrowserBrokerRoot,
 	})
 	if err != nil {
 		return resolvedRuntime{}, err
@@ -438,6 +494,28 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	}
 	keepLock = true
 	return resolved, nil
+}
+
+func browserClientModeHostRunner(
+	providerBin string,
+	environment []string,
+) browserclientmode.RunHostCommand {
+	return func(args ...string) ([]byte, error) {
+		command := exec.Command(providerBin, args...) // #nosec G204 -- validated operator Provider binary and internally constructed arguments.
+		command.Env = append([]string(nil), environment...)
+		var stdout bytes.Buffer
+		command.Stdout = &stdout
+		command.Stderr = &bytes.Buffer{}
+		if err := command.Run(); err != nil {
+			return nil, err
+		}
+		if stdout.Len() > 1<<20 {
+			return nil, errors.New(
+				"Provider Plugin command output exceeded the limit",
+			)
+		}
+		return stdout.Bytes(), nil
+	}
 }
 
 func removeEnvironmentKeys(environment []string, keys ...string) []string {

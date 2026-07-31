@@ -29,7 +29,7 @@ func New(ioStreams shared.IO, service *Service) *cobra.Command {
 
 func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	var provider, agentID, workspace, platformURL, state, bin, model, transport, codexBaseURL, sandbox, approval, permission string
-	var executionProfile, browserPluginBin, browserSocket, browserCredentialFile, browserLeaseRoot, browserBrokerRoot string
+	var executionProfile, browserClientMode, browserPluginBin, browserNativePlugin, browserSocket, browserCredentialFile, browserLeaseRoot, browserBrokerRoot string
 	var capacity int64
 	var timeout int
 	var webSearch, sessionReuse, enabled bool
@@ -102,8 +102,17 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 			if command.Flags().Changed("execution-profile") {
 				config.ExecutionProfile = strings.ToLower(strings.TrimSpace(executionProfile))
 			}
+			if command.Flags().Changed("browser-client-mode") {
+				config.BrowserClientMode = strings.ToLower(strings.TrimSpace(browserClientMode))
+			}
 			if command.Flags().Changed("browser-plugin-bin") {
 				config.BrowserPluginBin = strings.TrimSpace(browserPluginBin)
+			}
+			if command.Flags().Changed("browser-native-plugin") {
+				config.BrowserNativePlugin, err = filepath.Abs(strings.TrimSpace(browserNativePlugin))
+				if err != nil {
+					return err
+				}
 			}
 			if command.Flags().Changed("browser-socket") {
 				config.BrowserSocket, err = filepath.Abs(strings.TrimSpace(browserSocket))
@@ -163,7 +172,9 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().StringVar(&permission, "claude-permission", "dontAsk", "Claude permission mode")
 	command.Flags().Var(&allowedTools, "allowed-tool", "Claude allowed tool; repeatable")
 	command.Flags().StringVar(&executionProfile, "execution-profile", "standard", "Agent execution profile: standard or browser")
+	command.Flags().StringVar(&browserClientMode, "browser-client-mode", "mcp", "Browser client mode: auto, native, or mcp")
 	command.Flags().StringVar(&browserPluginBin, "browser-plugin-bin", "", "OpenLinker CLI binary used for the Browser-only tool server")
+	command.Flags().StringVar(&browserNativePlugin, "browser-native-plugin", "", "absolute Runtime-owned native Browser Plugin path")
 	command.Flags().StringVar(&browserSocket, "browser-socket", "", "private Browser Runtime Unix socket")
 	command.Flags().StringVar(&browserCredentialFile, "browser-credential-file", "", "owner-only Browser channel credential file")
 	command.Flags().StringVar(&browserLeaseRoot, "browser-lease-root", "", "private shared Browser lease directory")
@@ -257,6 +268,14 @@ func Diagnose(getenv func(string) string, providerOverride string) Diagnostic {
 	check("openlinker_url", config.OpenLinkerURL != "", "present", "missing")
 	check("runtime_options", runtimeOptionsErr == nil, "valid", "invalid")
 	check("execution_profile", config.ExecutionProfile == "standard" || config.ExecutionProfile == "browser", config.ExecutionProfile, "invalid")
+	if config.ExecutionProfile == "browser" {
+		check(
+			"browser_client_mode",
+			validBrowserClientMode(config.BrowserClientMode),
+			firstNonEmpty(config.browserSelectedMode, config.BrowserClientMode, "mcp"),
+			"invalid",
+		)
+	}
 	workspaceInfo, workspaceErr := os.Stat(config.Workspace)
 	check("workspace", workspaceErr == nil && workspaceInfo.IsDir(), "directory", "missing_or_invalid")
 	_, tokenSource, tokenErr := resolveSecret(getenv, "OPENLINKER_AGENT_TOKEN", "OPENLINKER_AGENT_TOKEN_FILE", true)
@@ -280,6 +299,15 @@ func Diagnose(getenv func(string) string, providerOverride string) Diagnostic {
 		check("browser_credential", credentialErr == nil, "owner_only_file", "missing_or_invalid")
 		_, pluginErr := exec.LookPath(firstNonEmpty(config.BrowserPluginBin, currentExecutable()))
 		check("browser_plugin", pluginErr == nil, "present", "missing")
+		if firstNonEmpty(config.browserSelectedMode, config.BrowserClientMode, "mcp") == "native" {
+			nativeInfo, nativeErr := os.Stat(config.BrowserNativePlugin)
+			check(
+				"browser_native_plugin",
+				nativeErr == nil && nativeInfo.IsDir() && filepath.IsAbs(config.BrowserNativePlugin),
+				"present",
+				"missing_or_invalid",
+			)
+		}
 	}
 	result.Checks["runtime_security"] = "token_only"
 	return result
@@ -327,6 +355,25 @@ func validateExecutionProfile(config Config) error {
 	if !config.SessionReuse {
 		return errors.New("Browser execution profile requires --session-reuse")
 	}
+	if !validBrowserClientMode(config.BrowserClientMode) {
+		return errors.New("--browser-client-mode must be auto, native, or mcp")
+	}
+	selected := config.browserSelectedMode
+	if selected == "" && config.BrowserClientMode != "auto" {
+		selected = config.BrowserClientMode
+	}
+	selected = firstNonEmpty(selected, "mcp")
+	if selected != "native" && selected != "mcp" {
+		return errors.New("effective Browser client mode must be native or mcp")
+	}
+	if config.browserFallbackReason != "" && config.BrowserClientMode != "auto" {
+		return errors.New("Browser fallback evidence requires auto mode")
+	}
+	if selected == "native" &&
+		(strings.TrimSpace(config.BrowserNativePlugin) == "" ||
+			!filepath.IsAbs(config.BrowserNativePlugin)) {
+		return errors.New("--browser-native-plugin must be an absolute path in native mode")
+	}
 	for label, value := range map[string]string{
 		"--browser-socket":          config.BrowserSocket,
 		"--browser-credential-file": config.BrowserCredentialFile,
@@ -338,6 +385,15 @@ func validateExecutionProfile(config Config) error {
 		}
 	}
 	return nil
+}
+
+func validBrowserClientMode(value string) bool {
+	switch firstNonEmpty(strings.TrimSpace(value), "mcp") {
+	case "auto", "native", "mcp":
+		return true
+	default:
+		return false
+	}
 }
 
 func currentExecutable() string {
