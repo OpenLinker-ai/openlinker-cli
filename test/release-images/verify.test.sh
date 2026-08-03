@@ -24,8 +24,10 @@ require_workflow_value '      - "cmd/**"' 1
 require_workflow_value '      - "pkg/**"' 1
 require_workflow_value "live_provider: true" 1
 require_workflow_value "live_provider: false" 1
-require_workflow_value 'DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}' 1
+require_workflow_value '          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}' 1
 require_workflow_value "docker/setup-qemu-action@v3" 2
+require_workflow_value "docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0" 2
+require_workflow_value "platforms: arm64" 2
 require_workflow_value "matrix.live_provider == false" 1
 require_workflow_value "&& matrix.live_provider" 4
 
