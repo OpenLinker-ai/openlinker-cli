@@ -6,31 +6,32 @@ import (
 )
 
 type ConfigureOptions struct {
-	Provider              string
-	AgentID               string
-	Workspace             string
-	OpenLinkerURL         string
-	StateDir              string
-	ProviderBin           string
-	Model                 string
-	Transport             string
-	Capacity              int64
-	TimeoutSeconds        int
-	SessionReuse          *bool
-	WebSearch             *bool
-	CodexBaseURL          string
-	CodexSandbox          string
-	CodexApproval         string
-	ClaudePermission      string
-	AllowedTools          []string
-	ExecutionProfile      string
-	BrowserClientMode     string
-	BrowserPluginBin      string
-	BrowserNativePlugin   string
-	BrowserSocket         string
-	BrowserCredentialFile string
-	BrowserLeaseRoot      string
-	BrowserBrokerRoot     string
+	Provider                 string
+	AgentID                  string
+	Workspace                string
+	OpenLinkerURL            string
+	StateDir                 string
+	ProviderBin              string
+	Model                    string
+	Transport                string
+	Capacity                 int64
+	TimeoutSeconds           int
+	SessionReuse             *bool
+	WebSearch                *bool
+	CodexBaseURL             string
+	CodexSandbox             string
+	CodexApproval            string
+	ClaudePermission         string
+	AllowedTools             []string
+	ExecutionProfile         string
+	BrowserInteractionPolicy string
+	BrowserClientMode        string
+	BrowserPluginBin         string
+	BrowserNativePlugin      string
+	BrowserSocket            string
+	BrowserCredentialFile    string
+	BrowserLeaseRoot         string
+	BrowserBrokerRoot        string
 }
 
 func ConfigureNonSecret(getenv func(string) string, options ConfigureOptions) (Config, string, error) {
@@ -97,6 +98,9 @@ func ConfigureNonSecret(getenv func(string) string, options ConfigureOptions) (C
 	}
 	if value := strings.TrimSpace(options.ExecutionProfile); value != "" {
 		config.ExecutionProfile = strings.ToLower(value)
+	}
+	if value := strings.TrimSpace(options.BrowserInteractionPolicy); value != "" {
+		config.BrowserInteractionPolicy = strings.ToLower(value)
 	}
 	if value := strings.TrimSpace(options.BrowserClientMode); value != "" {
 		config.BrowserClientMode = strings.ToLower(value)

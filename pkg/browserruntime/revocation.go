@@ -308,14 +308,21 @@ func browserIdentityHash(identity browserprotocol.Identity) string {
 		identity.PrincipalScopeID,
 		identity.BrowserSessionID,
 		identity.AttachmentID,
+		identity.BrowserInteractionPolicy,
+		identity.BrowserMutationOriginsSHA256,
 	} {
 		_, _ = digest.Write([]byte(value))
 		_, _ = digest.Write([]byte{0})
 	}
 	_, _ = digest.Write([]byte(
 		strconv.FormatUint(identity.SessionEpoch, 10) + "\x00" +
-			strconv.FormatUint(identity.ControlEpoch, 10),
+			strconv.FormatUint(identity.ControlEpoch, 10) + "\x00" +
+			strconv.FormatInt(identity.BrowserInteractionPolicyGeneration, 10),
 	))
+	for _, origin := range identity.BrowserMutationOrigins {
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write([]byte(origin))
+	}
 	return hex.EncodeToString(digest.Sum(nil))
 }
 

@@ -8,7 +8,9 @@ import (
 	"syscall"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclient"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserplugin"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/pluginbridge"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 	"github.com/spf13/cobra"
@@ -100,7 +102,13 @@ func newBrowserServeCommand(ioStreams shared.IO) *cobra.Command {
 				syscall.SIGTERM,
 			)
 			defer stop()
-			server := &browserplugin.Server{Host: host, IO: ioStreams}
+			server := &browserplugin.Server{
+				Host: host,
+				IO:   ioStreams,
+				IdentitySupplier: func() (browserprotocol.Identity, error) {
+					return browserclient.LoadLeaseIdentityFromEnv(ioStreams.Getenv)
+				},
+			}
 			return server.Serve(ctx, ioStreams.Stdin, ioStreams.Stdout)
 		},
 	}

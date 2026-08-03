@@ -24,18 +24,23 @@ import (
 const (
 	shutdownTimeout                = 15 * time.Second
 	browserExecutionProfileFeature = "browser_execution_profile.v1"
+	browserFullInteractionFeature  = "browser_full_interaction.v1"
 	browserHumanControlFeature     = "browser_human_control.v1"
 	browserHumanControlEnvironment = "OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED"
 )
 
 func runtimeOptionalFeatures(
 	executionProfile string,
+	interactionPolicy string,
 	humanControlEnabled bool,
 ) []string {
 	if strings.TrimSpace(executionProfile) != "browser" {
 		return nil
 	}
 	features := []string{browserExecutionProfileFeature}
+	if strings.TrimSpace(interactionPolicy) == "full" {
+		features = append(features, browserFullInteractionFeature)
+	}
 	if humanControlEnabled {
 		features = append(features, browserHumanControlFeature)
 	}
@@ -77,21 +82,22 @@ func runtimeHumanControlEnabled(
 }
 
 type Status struct {
-	State              string `json:"state"`
-	Enabled            bool   `json:"enabled"`
-	Provider           string `json:"provider,omitempty"`
-	AgentID            string `json:"agent_id,omitempty"`
-	NodeID             string `json:"node_id,omitempty"`
-	Workspace          string `json:"workspace,omitempty"`
-	Transport          string `json:"transport,omitempty"`
-	AgentTokenSource   string `json:"agent_token_source,omitempty"`
-	ProviderAuthSource string `json:"provider_auth_source,omitempty"`
-	ConfigPath         string `json:"config_path,omitempty"`
-	StateDir           string `json:"state_dir,omitempty"`
-	ExecutionProfile   string `json:"execution_profile,omitempty"`
-	BrowserClientMode  string `json:"browser_client_mode,omitempty"`
-	Message            string `json:"message,omitempty"`
-	UpdatedAt          string `json:"updated_at"`
+	State                    string `json:"state"`
+	Enabled                  bool   `json:"enabled"`
+	Provider                 string `json:"provider,omitempty"`
+	AgentID                  string `json:"agent_id,omitempty"`
+	NodeID                   string `json:"node_id,omitempty"`
+	Workspace                string `json:"workspace,omitempty"`
+	Transport                string `json:"transport,omitempty"`
+	AgentTokenSource         string `json:"agent_token_source,omitempty"`
+	ProviderAuthSource       string `json:"provider_auth_source,omitempty"`
+	ConfigPath               string `json:"config_path,omitempty"`
+	StateDir                 string `json:"state_dir,omitempty"`
+	ExecutionProfile         string `json:"execution_profile,omitempty"`
+	BrowserInteractionPolicy string `json:"browser_interaction_policy,omitempty"`
+	BrowserClientMode        string `json:"browser_client_mode,omitempty"`
+	Message                  string `json:"message,omitempty"`
+	UpdatedAt                string `json:"updated_at"`
 }
 
 type resolvedRuntime struct {
@@ -190,6 +196,7 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 		Handler: resolved.handler, Logger: service.logger,
 		OptionalFeatures: runtimeOptionalFeatures(
 			resolved.config.ExecutionProfile,
+			resolved.config.BrowserInteractionPolicy,
 			humanControlEnabled,
 		),
 		ExtensionRoutes: runtimeExtensionRoutes(
@@ -203,7 +210,8 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 				Transport: resolved.config.Transport, AgentTokenSource: resolved.agentTokenSource,
 				ProviderAuthSource: resolved.providerAuthSource, ConfigPath: resolved.configPath,
 				StateDir: resolved.stateDir, UpdatedAt: nowText(),
-				ExecutionProfile: resolved.config.ExecutionProfile,
+				ExecutionProfile:         resolved.config.ExecutionProfile,
+				BrowserInteractionPolicy: resolved.config.BrowserInteractionPolicy,
 				BrowserClientMode: firstNonEmpty(
 					resolved.config.browserSelectedMode,
 					resolved.config.BrowserClientMode,
@@ -225,7 +233,8 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 		NodeID: resolved.nodeID, Workspace: resolved.config.Workspace, Transport: resolved.config.Transport,
 		AgentTokenSource: resolved.agentTokenSource, ProviderAuthSource: resolved.providerAuthSource,
 		ConfigPath: resolved.configPath, StateDir: resolved.stateDir, UpdatedAt: nowText(),
-		ExecutionProfile: resolved.config.ExecutionProfile,
+		ExecutionProfile:         resolved.config.ExecutionProfile,
+		BrowserInteractionPolicy: resolved.config.BrowserInteractionPolicy,
 		BrowserClientMode: firstNonEmpty(
 			resolved.config.browserSelectedMode,
 			resolved.config.BrowserClientMode,
@@ -465,7 +474,8 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 		SessionReuse: config.SessionReuse,
 		SessionStore: filepath.Join(dir, "session-map", config.Provider+".json"),
 		WebSearch:    config.WebSearch, Env: environment,
-		ExecutionProfile: config.ExecutionProfile,
+		ExecutionProfile:         config.ExecutionProfile,
+		BrowserInteractionPolicy: config.BrowserInteractionPolicy,
 		BrowserClientModeRequested: firstNonEmpty(
 			config.BrowserClientMode,
 			"mcp",

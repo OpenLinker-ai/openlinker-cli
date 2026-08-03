@@ -14,41 +14,42 @@ import (
 const configVersion = 1
 
 type Config struct {
-	Version               int      `json:"version"`
-	Enabled               bool     `json:"enabled"`
-	Provider              string   `json:"provider"`
-	OpenLinkerURL         string   `json:"openlinker_url,omitempty"`
-	AgentID               string   `json:"agent_id"`
-	Workspace             string   `json:"workspace"`
-	StateDir              string   `json:"state_dir,omitempty"`
-	ProviderBin           string   `json:"provider_bin,omitempty"`
-	Model                 string   `json:"model,omitempty"`
-	Transport             string   `json:"transport,omitempty"`
-	Capacity              int64    `json:"capacity"`
-	TimeoutSeconds        int      `json:"timeout_seconds"`
-	SessionReuse          bool     `json:"session_reuse"`
-	WebSearch             bool     `json:"web_search"`
-	CodexBaseURL          string   `json:"codex_base_url,omitempty"`
-	CodexSandbox          string   `json:"codex_sandbox,omitempty"`
-	CodexApproval         string   `json:"codex_approval,omitempty"`
-	ClaudePermission      string   `json:"claude_permission,omitempty"`
-	AllowedTools          []string `json:"allowed_tools,omitempty"`
-	ExecutionProfile      string   `json:"execution_profile,omitempty"`
-	BrowserClientMode     string   `json:"browser_client_mode,omitempty"`
-	BrowserPluginBin      string   `json:"browser_plugin_bin,omitempty"`
-	BrowserNativePlugin   string   `json:"browser_native_plugin,omitempty"`
-	BrowserSocket         string   `json:"browser_socket,omitempty"`
-	BrowserCredentialFile string   `json:"browser_credential_file,omitempty"`
-	BrowserLeaseRoot      string   `json:"browser_lease_root,omitempty"`
-	BrowserBrokerRoot     string   `json:"browser_broker_root,omitempty"`
-	browserSelectedMode   string
-	browserFallbackReason string
+	Version                  int      `json:"version"`
+	Enabled                  bool     `json:"enabled"`
+	Provider                 string   `json:"provider"`
+	OpenLinkerURL            string   `json:"openlinker_url,omitempty"`
+	AgentID                  string   `json:"agent_id"`
+	Workspace                string   `json:"workspace"`
+	StateDir                 string   `json:"state_dir,omitempty"`
+	ProviderBin              string   `json:"provider_bin,omitempty"`
+	Model                    string   `json:"model,omitempty"`
+	Transport                string   `json:"transport,omitempty"`
+	Capacity                 int64    `json:"capacity"`
+	TimeoutSeconds           int      `json:"timeout_seconds"`
+	SessionReuse             bool     `json:"session_reuse"`
+	WebSearch                bool     `json:"web_search"`
+	CodexBaseURL             string   `json:"codex_base_url,omitempty"`
+	CodexSandbox             string   `json:"codex_sandbox,omitempty"`
+	CodexApproval            string   `json:"codex_approval,omitempty"`
+	ClaudePermission         string   `json:"claude_permission,omitempty"`
+	AllowedTools             []string `json:"allowed_tools,omitempty"`
+	ExecutionProfile         string   `json:"execution_profile,omitempty"`
+	BrowserInteractionPolicy string   `json:"browser_interaction_policy,omitempty"`
+	BrowserClientMode        string   `json:"browser_client_mode,omitempty"`
+	BrowserPluginBin         string   `json:"browser_plugin_bin,omitempty"`
+	BrowserNativePlugin      string   `json:"browser_native_plugin,omitempty"`
+	BrowserSocket            string   `json:"browser_socket,omitempty"`
+	BrowserCredentialFile    string   `json:"browser_credential_file,omitempty"`
+	BrowserLeaseRoot         string   `json:"browser_lease_root,omitempty"`
+	BrowserBrokerRoot        string   `json:"browser_broker_root,omitempty"`
+	browserSelectedMode      string
+	browserFallbackReason    string
 }
 
 func defaultConfig() Config {
 	return Config{
 		Version: configVersion, Capacity: 1, TimeoutSeconds: 1800, SessionReuse: true,
-		Transport: "auto", ExecutionProfile: "standard", CodexSandbox: "read-only", CodexApproval: "never", ClaudePermission: "dontAsk",
+		Transport: "auto", ExecutionProfile: "standard", BrowserInteractionPolicy: "restricted", CodexSandbox: "read-only", CodexApproval: "never", ClaudePermission: "dontAsk",
 	}
 }
 
@@ -243,6 +244,10 @@ func applyRuntimeEnvironment(config *Config, getenv func(string) string) error {
 	config.CodexApproval = firstNonEmpty(envValue(getenv, "OPENLINKER_CODEX_APPROVAL"), config.CodexApproval)
 	config.ClaudePermission = firstNonEmpty(envValue(getenv, "OPENLINKER_CLAUDE_PERMISSION"), config.ClaudePermission)
 	config.ExecutionProfile = firstNonEmpty(envValue(getenv, "OPENLINKER_AGENT_EXECUTION_PROFILE"), config.ExecutionProfile)
+	config.BrowserInteractionPolicy = firstNonEmpty(
+		envValue(getenv, "OPENLINKER_BROWSER_INTERACTION_POLICY"),
+		config.BrowserInteractionPolicy,
+	)
 	config.BrowserClientMode = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_CLIENT_MODE"), config.BrowserClientMode)
 	config.BrowserPluginBin = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_PLUGIN_BIN"), config.BrowserPluginBin)
 	config.BrowserNativePlugin = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH"), config.BrowserNativePlugin)

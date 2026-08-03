@@ -37,7 +37,11 @@ func (lease StaticLease) Validate(identity browserprotocol.Identity) *browserpro
 		identity.PrincipalScopeID != expected.PrincipalScopeID ||
 		identity.BrowserSessionID != expected.BrowserSessionID ||
 		identity.SessionEpoch != expected.SessionEpoch ||
-		identity.AttachmentID != expected.AttachmentID {
+		identity.AttachmentID != expected.AttachmentID ||
+		identity.BrowserInteractionPolicy != expected.BrowserInteractionPolicy ||
+		identity.BrowserInteractionPolicyGeneration != expected.BrowserInteractionPolicyGeneration ||
+		identity.BrowserMutationOriginsSHA256 != expected.BrowserMutationOriginsSHA256 ||
+		!sameStrings(identity.BrowserMutationOrigins, expected.BrowserMutationOrigins) {
 		return browserprotocol.NewFailure(
 			browserprotocol.ErrorIdentityMismatch,
 			"browser attachment identity does not match the active lease",
@@ -59,6 +63,18 @@ func (lease StaticLease) Validate(identity browserprotocol.Identity) *browserpro
 		)
 	}
 	return nil
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 type FileLease struct {

@@ -61,6 +61,53 @@ func TestProcessEngineSuccessFailureAndProtocolReset(t *testing.T) {
 	}
 }
 
+func TestProcessEnginePreservesBoundedMutationFailureEvidence(t *testing.T) {
+	t.Parallel()
+	engine := testProcessEngine(t)
+	identity := validRuntimeRequest().Identity
+
+	_, failure := engine.Execute(
+		testActionContext(t),
+		identity,
+		browserprotocol.Action{
+			Kind: browserprotocol.ActionNavigate,
+			URL:  "https://mutation-blocked.example",
+		},
+	)
+	if failure == nil ||
+		failure.Code != browserprotocol.ErrorMutationOriginBlocked ||
+		failure.RetrySameAction == nil || *failure.RetrySameAction ||
+		failure.AttachmentUsable == nil || !*failure.AttachmentUsable ||
+		failure.FreshObservationRequired == nil || *failure.FreshObservationRequired ||
+		failure.ObservedOrigin != "https://mutation-blocked.example" ||
+		len(failure.BrowserMutationOrigins) != 1 ||
+		failure.BrowserMutationOrigins[0] != "https://allowed.example" {
+		t.Fatalf("mutation-origin failure = %#v", failure)
+	}
+
+	_, failure = engine.Execute(
+		testActionContext(t),
+		identity,
+		browserprotocol.Action{
+			Kind: browserprotocol.ActionNavigate,
+			URL:  "https://mutation-unknown.example",
+		},
+	)
+	if failure == nil ||
+		failure.Code != browserprotocol.ErrorMutationOutcomeUnknown ||
+		failure.MutationOutcomeReason != "fixture_dispatch_uncertain" ||
+		failure.RetrySameAction == nil || *failure.RetrySameAction ||
+		failure.AttachmentUsable == nil || !*failure.AttachmentUsable ||
+		failure.FreshObservationRequired == nil || !*failure.FreshObservationRequired ||
+		failure.AttemptedUnits == nil || *failure.AttemptedUnits != 1 ||
+		failure.UndispatchedUnits == nil || *failure.UndispatchedUnits != 2 ||
+		failure.ActionIndex == nil || *failure.ActionIndex != 1 ||
+		failure.CompletedActions == nil || *failure.CompletedActions != 1 ||
+		failure.MutationRequestsObserved != 1 {
+		t.Fatalf("mutation-unknown failure = %#v", failure)
+	}
+}
+
 func TestEngineDiagnosticsAreLocalBoundedAndRedacted(t *testing.T) {
 	var output strings.Builder
 	writer := newEngineDiagnosticWriter(&output)
@@ -161,6 +208,44 @@ func TestProcessEngineHelper(t *testing.T) {
 			})
 		case "https://malformed.example":
 			fmt.Println("{")
+		case "https://mutation-blocked.example":
+			failure := browserprotocol.NewFailure(
+				browserprotocol.ErrorMutationOriginBlocked,
+				"fixture mutation origin is blocked",
+				false,
+			)
+			failure.RetrySameAction = processBoolPointer(false)
+			failure.AttachmentUsable = processBoolPointer(true)
+			failure.FreshObservationRequired = processBoolPointer(false)
+			failure.ObservedOrigin = "https://mutation-blocked.example"
+			failure.BrowserMutationOrigins = []string{"https://allowed.example"}
+			writeHelperResponse(engineResponse{
+				ContractID: engineContractID,
+				ActionID:   request.ActionID,
+				Status:     "error",
+				Error:      failure,
+			})
+		case "https://mutation-unknown.example":
+			failure := browserprotocol.NewFailure(
+				browserprotocol.ErrorMutationOutcomeUnknown,
+				"fixture mutation outcome is unknown",
+				false,
+			)
+			failure.RetrySameAction = processBoolPointer(false)
+			failure.AttachmentUsable = processBoolPointer(true)
+			failure.FreshObservationRequired = processBoolPointer(true)
+			failure.MutationOutcomeReason = "fixture_dispatch_uncertain"
+			failure.AttemptedUnits = processIntPointer(1)
+			failure.UndispatchedUnits = processIntPointer(2)
+			failure.ActionIndex = processIntPointer(1)
+			failure.CompletedActions = processIntPointer(1)
+			failure.MutationRequestsObserved = 1
+			writeHelperResponse(engineResponse{
+				ContractID: engineContractID,
+				ActionID:   request.ActionID,
+				Status:     "error",
+				Error:      failure,
+			})
 		default:
 			if request.Action.Kind == browserprotocol.ActionWait {
 				time.Sleep(5 * time.Second)
@@ -220,5 +305,9 @@ func testActionContext(t *testing.T) context.Context {
 }
 
 func processIntPointer(value int) *int {
+	return &value
+}
+
+func processBoolPointer(value bool) *bool {
 	return &value
 }

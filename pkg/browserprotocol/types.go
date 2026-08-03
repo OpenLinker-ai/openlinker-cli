@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	ContractID = "openlinker.browser.v1"
+	ContractID = "openlinker.browser.v2"
 
 	MaxRequestBytes     = 256 << 10
 	MaxResponseBytes    = 8 << 20
@@ -75,6 +75,8 @@ const (
 	ErrorProfileEngineUpgrade       ErrorCode = "BROWSER_PROFILE_ENGINE_UPGRADE_FAILED"
 	ErrorUserActionRequired         ErrorCode = "BROWSER_USER_ACTION_REQUIRED"
 	ErrorHighImpactActionBlocked    ErrorCode = "BROWSER_HIGH_IMPACT_ACTION_BLOCKED"
+	ErrorMutationOriginBlocked      ErrorCode = "BROWSER_MUTATION_ORIGIN_BLOCKED"
+	ErrorMutationOutcomeUnknown     ErrorCode = "BROWSER_MUTATION_OUTCOME_UNKNOWN"
 	ErrorAccessDenied               ErrorCode = "BROWSER_ACCESS_DENIED"
 	ErrorRateLimited                ErrorCode = "BROWSER_RATE_LIMITED"
 	ErrorChallengeSuspected         ErrorCode = "BROWSER_CHALLENGE_SUSPECTED"
@@ -111,14 +113,18 @@ const (
 )
 
 type Identity struct {
-	RunID            string     `json:"run_id"`
-	AgentID          string     `json:"agent_id"`
-	PrincipalScopeID string     `json:"principal_scope_id"`
-	BrowserSessionID string     `json:"browser_session_id"`
-	SessionEpoch     uint64     `json:"session_epoch"`
-	AttachmentID     string     `json:"attachment_id"`
-	ControlEpoch     uint64     `json:"control_epoch"`
-	Controller       Controller `json:"controller"`
+	RunID                              string     `json:"run_id"`
+	AgentID                            string     `json:"agent_id"`
+	PrincipalScopeID                   string     `json:"principal_scope_id"`
+	BrowserSessionID                   string     `json:"browser_session_id"`
+	SessionEpoch                       uint64     `json:"session_epoch"`
+	AttachmentID                       string     `json:"attachment_id"`
+	ControlEpoch                       uint64     `json:"control_epoch"`
+	Controller                         Controller `json:"controller"`
+	BrowserInteractionPolicy           string     `json:"browser_interaction_policy"`
+	BrowserInteractionPolicyGeneration int64      `json:"browser_interaction_policy_generation"`
+	BrowserMutationOrigins             []string   `json:"browser_mutation_origins"`
+	BrowserMutationOriginsSHA256       string     `json:"browser_mutation_origins_sha256"`
 }
 
 type Request struct {
@@ -185,6 +191,8 @@ type Observation struct {
 	SiteOutcome                 ErrorCode            `json:"site_outcome,omitempty"`
 	ClassifierRulesVersion      string               `json:"classifier_rules_version,omitempty"`
 	ChallengeReleaseUnavailable bool                 `json:"challenge_release_unavailable,omitempty"`
+	BlockedMutationRequests     int                  `json:"blocked_mutation_requests,omitempty"`
+	MutationRequestsObserved    int                  `json:"mutation_requests_observed,omitempty"`
 
 	// EngineInstanceID is Runtime-owned process metadata. It never crosses the
 	// Browser wire contract and cannot be supplied by Chromium or page content.
@@ -207,6 +215,16 @@ type Failure struct {
 	ConsecutiveAccessDenials                *int           `json:"consecutive_access_denials,omitempty"`
 	OriginBlockedForAttachment              bool           `json:"origin_blocked_for_attachment,omitempty"`
 	ChallengeReleaseUnavailable             bool           `json:"challenge_release_unavailable,omitempty"`
+	RetrySameAction                         *bool          `json:"retry_same_action,omitempty"`
+	AttachmentUsable                        *bool          `json:"attachment_usable,omitempty"`
+	FreshObservationRequired                *bool          `json:"fresh_observation_required,omitempty"`
+	MutationOutcomeReason                   string         `json:"mutation_outcome_reason,omitempty"`
+	AttemptedUnits                          *int           `json:"attempted_units,omitempty"`
+	UndispatchedUnits                       *int           `json:"undispatched_units,omitempty"`
+	CompletedActions                        *int           `json:"completed_actions,omitempty"`
+	MutationRequestsObserved                int            `json:"mutation_requests_observed,omitempty"`
+	ObservedOrigin                          string         `json:"observed_origin,omitempty"`
+	BrowserMutationOrigins                  []string       `json:"browser_mutation_origins,omitempty"`
 	HumanControlAvailable                   bool           `json:"human_control_available,omitempty"`
 
 	// EngineInstanceID is populated by the trusted Go ProcessEngine after it

@@ -31,6 +31,7 @@ func startBrowserToolBroker(
 	root string,
 	lease *browserRunLease,
 	clientFactory func() (browserplugin.Executor, error),
+	journal *browserMutationJournal,
 ) (*browserToolBroker, error) {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host != "codex" && host != "claude" {
@@ -103,7 +104,7 @@ func startBrowserToolBroker(
 		done:       make(chan struct{}),
 		info:       info,
 	}
-	go broker.serve(ctx, host, lease, clientFactory)
+	go broker.serve(ctx, host, lease, clientFactory, journal)
 	return broker, nil
 }
 
@@ -112,6 +113,7 @@ func (broker *browserToolBroker) serve(
 	host string,
 	lease *browserRunLease,
 	clientFactory func() (browserplugin.Executor, error),
+	journal *browserMutationJournal,
 ) {
 	defer close(broker.done)
 	for {
@@ -124,7 +126,13 @@ func (broker *browserToolBroker) serve(
 			IO: shared.IO{
 				Getenv: func(string) string { return "" },
 			},
-			ClientFactory:    clientFactory,
+			ClientFactory: func() (browserplugin.Executor, error) {
+				executor, err := clientFactory()
+				if err != nil || journal == nil {
+					return executor, err
+				}
+				return journal.wrap(executor), nil
+			},
 			EvidenceSupplier: lease.browserEvidenceSnapshot,
 		}
 		_ = server.Serve(ctx, connection, connection)

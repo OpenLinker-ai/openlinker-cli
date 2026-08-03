@@ -5,21 +5,13 @@ on:
     paths:
       - "Dockerfile.providers"
       - "Dockerfile.browser"
+      - "Dockerfile.browser.chrome"
       - "browser-engine/**"
       - "deploy/**"
-      - "cmd/openlinker-egress-gateway/**"
-      - "cmd/openlinker-browser-runtime/**"
-      - "cmd/openlinker-provider-launcher/**"
-      - "cmd/openlinker-runtime-entrypoint/**"
-      - "pkg/agent/**"
-      - "pkg/agentexec/**"
-      - "pkg/browserprotocol/**"
-      - "pkg/browserclientmode/**"
-      - "pkg/browserprofile/**"
-      - "pkg/browserruntime/**"
-      - "pkg/egressgateway/**"
-      - "pkg/netpolicy/**"
+      - "cmd/**"
+      - "pkg/**"
       - "test/browser-image/**"
+      - "test/browser-provider-live/**"
       - "test/release-images/**"
       - "deploy/agent-runtime-plugin.lock.json"
       - "go.mod"
@@ -38,15 +30,66 @@ permissions:
 
 jobs:
   browser-acceptance:
-    name: Real Chromium no-bypass acceptance
+    name: Real Chromium no-bypass acceptance (${{ matrix.platform }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            live_provider: true
+          - platform: linux/arm64
+            live_provider: false
+    env:
+      DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
       - name: Self-test release evidence rejection
         run: ./test/release-images/verify.test.sh
-      - name: Run production Browser and Egress images
+      - name: Self-test credential-backed matrix verifier
+        run: |
+          sh -n ./test/browser-provider-live/run.sh
+          sh -n ./test/browser-provider-live/matrix.sh
+          node --test ./test/browser-provider-live/verify-results.test.mjs
+      - name: Run deterministic production Browser and Egress images
+        if: (github.ref_type != 'tag' && github.event_name != 'workflow_dispatch') || matrix.live_provider == false
         run: ./test/browser-image/run.sh
+      - name: Prepare credential-backed Provider gate
+        if: (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && matrix.live_provider
+        env:
+          LIVE_CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          LIVE_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -eu
+          test -n "$LIVE_CODEX_API_KEY" || { echo "CODEX_API_KEY secret is required" >&2; exit 1; }
+          test -n "$LIVE_ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY secret is required" >&2; exit 1; }
+          umask 077
+          printf '%s\n' "$LIVE_CODEX_API_KEY" >"$RUNNER_TEMP/openlinker-codex-api-key"
+          printf '%s\n' "$LIVE_ANTHROPIC_API_KEY" >"$RUNNER_TEMP/openlinker-anthropic-api-key"
+      - name: Run credential-backed Codex and Claude Browser matrix
+        if: (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && matrix.live_provider
+        env:
+          OPENLINKER_BROWSER_LIVE_CODEX_API_KEY_FILE: ${{ runner.temp }}/openlinker-codex-api-key
+          OPENLINKER_BROWSER_LIVE_ANTHROPIC_API_KEY_FILE: ${{ runner.temp }}/openlinker-anthropic-api-key
+          OPENLINKER_BROWSER_LIVE_EVIDENCE_FILE: ${{ runner.temp }}/browser-provider-live-evidence.jsonl
+          OPENLINKER_CODEX_BASE_URL: ${{ vars.OPENLINKER_CODEX_BASE_URL }}
+          OPENLINKER_CODEX_MODEL: ${{ vars.OPENLINKER_CODEX_MODEL }}
+          OPENLINKER_CLAUDE_MODEL: ${{ vars.OPENLINKER_CLAUDE_MODEL }}
+        run: ./test/browser-provider-live/run.sh
+      - name: Upload redacted Browser Provider evidence
+        if: (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && matrix.live_provider && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-provider-live-evidence-${{ github.ref_name || github.run_id }}
+          path: ${{ runner.temp }}/browser-provider-live-evidence.jsonl
+          if-no-files-found: error
+          retention-days: 90
+      - name: Remove Provider credential files
+        if: (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch') && matrix.live_provider && always()
+        run: |
+          rm -f "$RUNNER_TEMP/openlinker-codex-api-key" "$RUNNER_TEMP/openlinker-anthropic-api-key"
 
   images:
     needs: browser-acceptance

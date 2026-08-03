@@ -3,6 +3,10 @@ package browserprotocol
 import "github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol/internal/browsercontract"
 
 func (action Action) Validate() *Failure {
+	return action.ValidateForPolicy("restricted")
+}
+
+func (action Action) ValidateForPolicy(policy string) *Failure {
 	if failure := action.Observation.Validate(); failure != nil {
 		return failure
 	}
@@ -47,13 +51,25 @@ func (action Action) Validate() *Failure {
 		if !allowedKey(action.Key) {
 			return NewFailure(ErrorProtocolInvalid, "keypress key is not allowed", false)
 		}
+		if action.Key == "Space" && policy != "full" {
+			return NewFailure(ErrorProtocolInvalid, "restricted policy does not allow Space", false)
+		}
 		return nil
 	case ActionSelect:
-		return NewFailure(
-			ErrorActionRejected,
-			"Phase 1 does not allow select controls",
-			false,
-		)
+		if policy != "full" {
+			return NewFailure(
+				ErrorActionRejected,
+				"Phase 1 does not allow select controls",
+				false,
+			)
+		}
+		if failure := action.requireOnly("value"); failure != nil {
+			return failure
+		}
+		if action.Value == "" || len(action.Value) > 2048 {
+			return NewFailure(ErrorProtocolInvalid, "select value is empty or too large", false)
+		}
+		return nil
 	case ActionWait:
 		if failure := action.requireOnly("duration_ms"); failure != nil {
 			return failure
@@ -76,12 +92,18 @@ func (action Action) Validate() *Failure {
 			if nested.Observation != ObservationDefault {
 				return NewFailure(ErrorProtocolInvalid, "browser batch controls the final observation", false)
 			}
-			switch nested.Kind {
-			case ActionScroll, ActionWait, ActionScreenshot:
-			default:
+			if nested.Kind == ActionBatch || nested.Kind == ActionClose ||
+				nested.Kind == ActionCheckpoint || nested.Kind == ActionPreflight {
 				return NewFailure(ErrorProtocolInvalid, "browser batch contains a disallowed action", false)
 			}
-			if failure := nested.Validate(); failure != nil {
+			if policy != "full" {
+				switch nested.Kind {
+				case ActionScroll, ActionWait, ActionScreenshot:
+				default:
+					return NewFailure(ErrorProtocolInvalid, "browser batch contains a disallowed action", false)
+				}
+			}
+			if failure := nested.ValidateForPolicy(policy); failure != nil {
 				return failure
 			}
 		}
@@ -146,7 +168,7 @@ func validateCoordinates(x, y *int) *Failure {
 
 func allowedKey(value string) bool {
 	switch value {
-	case "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+	case "Enter", "Space", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
 		"PageUp", "PageDown", "Home", "End", "Backspace", "Delete":
 		return true
 	default:

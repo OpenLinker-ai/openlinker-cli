@@ -4,6 +4,31 @@ CDPATH=
 export CDPATH
 
 test_root=$(cd -- "$(dirname -- "$0")" && pwd)
+repository_root=$(cd -- "$test_root/../.." && pwd)
+workflow="$repository_root/.github/workflows/images.yml"
+
+require_workflow_value() {
+  value=$1
+  expected_count=$2
+  actual_count=$(grep -F -c -- "$value" "$workflow" || true)
+  if [ "$actual_count" != "$expected_count" ]; then
+    echo "Provider image workflow contains $actual_count copies of '$value', want $expected_count" >&2
+    exit 1
+  fi
+}
+
+require_workflow_value "platform: linux/amd64" 1
+require_workflow_value "platform: linux/arm64" 1
+require_workflow_value '      - "Dockerfile.browser.chrome"' 1
+require_workflow_value '      - "cmd/**"' 1
+require_workflow_value '      - "pkg/**"' 1
+require_workflow_value "live_provider: true" 1
+require_workflow_value "live_provider: false" 1
+require_workflow_value 'DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}' 1
+require_workflow_value "docker/setup-qemu-action@v3" 2
+require_workflow_value "matrix.live_provider == false" 1
+require_workflow_value "&& matrix.live_provider" 4
+
 temporary_root=$(mktemp -d "${TMPDIR:-/tmp}/openlinker-release-images.XXXXXX")
 cleanup() {
   rm -rf -- "$temporary_root"

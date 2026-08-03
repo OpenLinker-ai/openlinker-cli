@@ -94,6 +94,7 @@ func TestConfigureAgentModeSchemaIncludesProviderAndBrowserProfiles(t *testing.T
 		for _, field := range []string{
 			"codex_base_url",
 			"execution_profile",
+			"browser_interaction_policy",
 			"browser_client_mode",
 			"browser_native_plugin",
 			"browser_plugin_bin",
@@ -109,6 +110,52 @@ func TestConfigureAgentModeSchemaIncludesProviderAndBrowserProfiles(t *testing.T
 		return
 	}
 	t.Fatal("configure_agent_mode tool is missing")
+}
+
+func TestConfigureAgentModePersistsBrowserInteractionPolicy(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.json")
+	getenv := func(key string) string {
+		if key == "OPENLINKER_AGENT_CONFIG" {
+			return configPath
+		}
+		return ""
+	}
+	server := &Server{
+		Host:  "codex",
+		IO:    shared.IO{Getenv: getenv},
+		Agent: agent.NewService(getenv, nil),
+	}
+	result, err := server.configureAgent(map[string]any{
+		"provider":                   "codex",
+		"agent_id":                   "11111111-1111-4111-8111-111111111111",
+		"workspace":                  dir,
+		"execution_profile":          "browser",
+		"browser_interaction_policy": "full",
+		"browser_client_mode":        "mcp",
+		"browser_socket":             filepath.Join(dir, "control.sock"),
+		"browser_credential_file":    filepath.Join(dir, "channel"),
+		"browser_lease_root":         filepath.Join(dir, "leases"),
+		"browser_broker_root":        filepath.Join(dir, "broker"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured := result.StructuredContent.(map[string]any)
+	if structured["browser_interaction_policy"] != "full" {
+		t.Fatalf("configure result = %#v", structured)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved["browser_interaction_policy"] != "full" {
+		t.Fatalf("saved Agent config = %#v", saved)
+	}
 }
 
 func TestServerCancellationDoesNotWaitForStdinEOF(t *testing.T) {

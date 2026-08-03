@@ -1,11 +1,12 @@
 import { isIP } from "node:net";
+import { createHash } from "node:crypto";
 
 import {
   BROWSER_VIEWPORT_HEIGHT,
   BROWSER_VIEWPORT_WIDTH,
 } from "./browser-contract.generated.js";
 
-export const ENGINE_CONTRACT_ID = "openlinker.browser.engine.v1";
+export const ENGINE_CONTRACT_ID = "openlinker.browser.engine.v2";
 export const ENGINE_VIEWER_CONTRACT_ID =
   "openlinker.browser.engine.viewer.v1";
 
@@ -47,6 +48,10 @@ export interface Identity {
   attachment_id: string;
   control_epoch: number;
   controller: Controller;
+  browser_interaction_policy: "restricted" | "full";
+  browser_interaction_policy_generation: number;
+  browser_mutation_origins: string[];
+  browser_mutation_origins_sha256: string;
 }
 
 export interface BrowserAction {
@@ -117,6 +122,8 @@ export type BrowserErrorCode =
   | "BROWSER_PROFILE_ENGINE_UPGRADE_FAILED"
   | "BROWSER_USER_ACTION_REQUIRED"
   | "BROWSER_HIGH_IMPACT_ACTION_BLOCKED"
+  | "BROWSER_MUTATION_ORIGIN_BLOCKED"
+  | "BROWSER_MUTATION_OUTCOME_UNKNOWN"
   | "BROWSER_ACCESS_DENIED"
   | "BROWSER_RATE_LIMITED"
   | "BROWSER_CHALLENGE_SUSPECTED"
@@ -156,6 +163,16 @@ export interface EngineFailure {
   consecutive_access_denials?: number;
   origin_blocked_for_attachment?: boolean;
   challenge_release_unavailable?: boolean;
+  retry_same_action?: boolean;
+  attachment_usable?: boolean;
+  fresh_observation_required?: boolean;
+  mutation_outcome_reason?: string;
+  attempted_units?: number;
+  undispatched_units?: number;
+  completed_actions?: number;
+  mutation_requests_observed?: number;
+  observed_origin?: string;
+  browser_mutation_origins?: string[];
 }
 
 export type SiteOutcome =
@@ -199,11 +216,13 @@ export interface Observation {
   origin?: string;
   title?: string;
   click_effect?: ClickEffect;
-  target_category?: "link" | "text_input";
+  target_category?: "link" | "text_input" | "button" | "custom" | "other";
   environment?: EnvironmentEvidence;
   site_outcome?: SiteOutcome;
   classifier_rules_version?: string;
   challenge_release_unavailable?: boolean;
+  blocked_mutation_requests?: number;
+  mutation_requests_observed?: number;
 }
 
 export type EngineResponse =
@@ -255,6 +274,10 @@ const IDENTITY_FIELDS = new Set([
   "attachment_id",
   "control_epoch",
   "controller",
+  "browser_interaction_policy",
+  "browser_interaction_policy_generation",
+  "browser_mutation_origins",
+  "browser_mutation_origins_sha256",
 ]);
 const VIEWER_REQUEST_FIELDS = new Set([
   "contract_id",
@@ -311,12 +334,14 @@ export function parseRequest(line: string, now = Date.now()): EngineRequest {
   if (identity.controller !== "agent") {
     throw new Error("browser action does not hold agent control");
   }
+  const action = parseAction(request.action);
+  validateActionPolicy(action, identity.browser_interaction_policy);
   return {
     contract_id: ENGINE_CONTRACT_ID,
     action_id: actionID,
     deadline,
     identity,
-    action: parseAction(request.action),
+    action,
   };
 }
 
@@ -385,8 +410,115 @@ function parseIdentity(value: unknown): Identity {
     attachment_id: requireUUID(identity.attachment_id, "attachment_id"),
     control_epoch: requirePositiveInteger(identity.control_epoch, "control_epoch"),
     controller: requireController(identity.controller),
+    browser_interaction_policy: requireInteractionPolicy(
+      identity.browser_interaction_policy,
+    ),
+    browser_interaction_policy_generation: requirePositiveInteger(
+      identity.browser_interaction_policy_generation,
+      "browser_interaction_policy_generation",
+    ),
+    browser_mutation_origins: requireMutationOrigins(
+      identity.browser_mutation_origins,
+      identity.browser_mutation_origins_sha256,
+      identity.browser_interaction_policy,
+    ),
+    browser_mutation_origins_sha256: requireSHA256(
+      identity.browser_mutation_origins_sha256,
+      "browser_mutation_origins_sha256",
+    ),
   };
   return parsed;
+}
+
+function requireInteractionPolicy(value: unknown): "restricted" | "full" {
+  if (value !== "restricted" && value !== "full") {
+    throw new Error("browser_interaction_policy is invalid");
+  }
+  return value;
+}
+
+function requireMutationOrigins(
+  value: unknown,
+  digestValue: unknown,
+  policyValue: unknown,
+): string[] {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new Error("browser_mutation_origins is invalid");
+  }
+  const origins = value.map((entry) =>
+    requireString(entry, "browser_mutation_origins entry", 9, 512),
+  );
+  if (
+    (policyValue === "restricted" && origins.length !== 0) ||
+    (policyValue === "full" && origins.length === 0)
+  ) {
+    throw new Error("browser_mutation_origins does not match the policy");
+  }
+  let previous = "";
+  for (const origin of origins) {
+    if (canonicalHTTPSOrigin(origin) !== origin || origin <= previous) {
+      throw new Error("browser_mutation_origins is not canonical");
+    }
+    previous = origin;
+  }
+  const digest = createHash("sha256")
+    .update(JSON.stringify(origins), "utf8")
+    .digest("hex");
+  if (digestValue !== digest) {
+    throw new Error("browser_mutation_origins_sha256 does not match");
+  }
+  return origins;
+}
+
+export function canonicalHTTPSOrigin(raw: string): string {
+  if (
+    raw.trim() !== raw ||
+    raw.includes("%") ||
+    !/^https:\/\/[^/?#]+$/u.test(raw)
+  ) {
+    return "";
+  }
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.hostname.endsWith(".") ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      return "";
+    }
+    if (!canonicalURLHostnameAllowed(url.hostname)) {
+      return "";
+    }
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
+
+function canonicalURLHostnameAllowed(hostname: string): boolean {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    // WHATWG rewrites every IPv4-mapped IPv6 spelling to this form, while
+    // Go's netip canonical form retains dotted IPv4 bytes. Reject the
+    // ambiguous family instead of binding different strings to one endpoint.
+    return !/^\[::ffff:[0-9a-f]{1,4}:[0-9a-f]{1,4}\]$/u.test(hostname);
+  }
+  if (/^[0-9]+(?:\.[0-9]+){3}$/u.test(hostname)) {
+    return true;
+  }
+  if (hostname.length === 0 || hostname.length > 253) {
+    return false;
+  }
+  return hostname.split(".").every(
+    (label) =>
+      label.length > 0 &&
+      label.length <= 63 &&
+      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(label),
+  );
 }
 
 function parseViewerInput(value: unknown): ViewerInput {
@@ -617,6 +749,7 @@ function validateActionShape(action: BrowserAction): void {
       if (
         ![
           "Enter",
+          "Space",
           "Tab",
           "Escape",
           "ArrowUp",
@@ -635,7 +768,8 @@ function validateActionShape(action: BrowserAction): void {
       }
       return;
     case "select":
-      throw new Error("Phase 1 does not allow select controls");
+      requireFields("value");
+      return;
     case "wait":
       requireFields("duration_ms");
       if ((action.duration_ms ?? 0) < 1 || (action.duration_ms ?? 0) > 5000) {
@@ -657,12 +791,35 @@ function validateActionShape(action: BrowserAction): void {
       for (const nested of action.actions ?? []) {
         if (
           nested.observation !== undefined ||
-          !["scroll", "wait", "screenshot"].includes(nested.kind)
+          ["batch", "checkpoint", "preflight"].includes(nested.kind)
         ) {
           throw new Error("browser batch contains a disallowed action");
         }
       }
       return;
+  }
+}
+
+function validateActionPolicy(
+  action: BrowserAction,
+  policy: "restricted" | "full",
+): void {
+  if (policy === "full") {
+    return;
+  }
+  if (action.kind === "select") {
+    throw new Error("Phase 1 does not allow select controls");
+  }
+  if (action.kind === "keypress" && action.key === "Space") {
+    throw new Error("restricted policy does not allow Space");
+  }
+  if (
+    action.kind === "batch" &&
+    action.actions?.some(
+      (nested) => !["scroll", "wait", "screenshot"].includes(nested.kind),
+    )
+  ) {
+    throw new Error("browser batch contains a disallowed action");
   }
 }
 
@@ -759,6 +916,14 @@ function requireOpaque(value: unknown, label: string, maximum: number): string {
   return parsed;
 }
 
+function requireSHA256(value: unknown, label: string): string {
+  const parsed = requireString(value, label, 64, 64);
+  if (!/^[0-9a-f]{64}$/u.test(parsed)) {
+    throw new Error(`${label} is invalid`);
+  }
+  return parsed;
+}
+
 function requirePositiveInteger(value: unknown, label: string): number {
   const parsed = requireInteger(value, label);
   if (parsed < 1) {
@@ -803,6 +968,16 @@ export function failure(
       | "consecutive_access_denials"
       | "origin_blocked_for_attachment"
       | "challenge_release_unavailable"
+      | "retry_same_action"
+      | "attachment_usable"
+      | "fresh_observation_required"
+      | "mutation_outcome_reason"
+      | "attempted_units"
+      | "undispatched_units"
+      | "completed_actions"
+      | "mutation_requests_observed"
+      | "observed_origin"
+      | "browser_mutation_origins"
     >
   > = {},
 ): Extract<EngineResponse, { status: "error" }> {

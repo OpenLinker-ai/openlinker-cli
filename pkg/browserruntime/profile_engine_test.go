@@ -867,14 +867,18 @@ func fixtureProfileFactory(loaded *bool) func(ProcessEngineOptions) (managedBrow
 
 func profileEngineIdentity(principal string) browserprotocol.Identity {
 	return browserprotocol.Identity{
-		RunID:            "11111111-1111-4111-8111-111111111111",
-		AgentID:          "22222222-2222-4222-8222-222222222222",
-		PrincipalScopeID: principal,
-		BrowserSessionID: "33333333-3333-4333-8333-333333333333",
-		SessionEpoch:     1,
-		AttachmentID:     "44444444-4444-4444-8444-444444444444",
-		ControlEpoch:     1,
-		Controller:       browserprotocol.ControllerAgent,
+		RunID:                              "11111111-1111-4111-8111-111111111111",
+		AgentID:                            "22222222-2222-4222-8222-222222222222",
+		PrincipalScopeID:                   principal,
+		BrowserSessionID:                   "33333333-3333-4333-8333-333333333333",
+		SessionEpoch:                       1,
+		AttachmentID:                       "44444444-4444-4444-8444-444444444444",
+		ControlEpoch:                       1,
+		Controller:                         browserprotocol.ControllerAgent,
+		BrowserInteractionPolicy:           "restricted",
+		BrowserInteractionPolicyGeneration: 1,
+		BrowserMutationOrigins:             []string{},
+		BrowserMutationOriginsSHA256:       browserprotocol.RestrictedMutationOriginsSHA256,
 	}
 }
 

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	browserSessionStateVersion = 1
+	browserSessionStateVersion = 2
 	maxBrowserSessionStateSize = 16 << 10
 )
 
@@ -44,6 +44,9 @@ type browserSessionState struct {
 	RuntimeSessionID    string                     `json:"runtime_session_id"`
 	RuntimeSessionEpoch int64                      `json:"runtime_session_epoch"`
 	RuntimeAttachmentID string                     `json:"runtime_attachment_id"`
+	InteractionPolicy   string                     `json:"browser_interaction_policy"`
+	PolicyGeneration    int64                      `json:"browser_interaction_policy_generation"`
+	MutationOriginsHash string                     `json:"browser_mutation_origins_sha256"`
 	UpdatedAt           string                     `json:"updated_at"`
 }
 
@@ -85,6 +88,12 @@ func newBrowserExecutionProvider(base Provider, config ProviderConfig) (Provider
 		!filepath.IsAbs(config.BrowserBrokerRoot) {
 		return nil, errors.New("Browser execution paths must be absolute")
 	}
+	if config.BrowserInteractionPolicy != "restricted" &&
+		config.BrowserInteractionPolicy != "full" {
+		return nil, errors.New(
+			"Browser interaction policy must be restricted or full",
+		)
+	}
 	return &browserExecutionProvider{
 		base:      base,
 		config:    config,
@@ -116,12 +125,14 @@ func (provider *browserExecutionProvider) Run(
 	)
 	go humanControl.run(ctx)
 	defer humanControl.stopFrames()
+	mutationJournal := newBrowserMutationJournal(lease.identity)
 	broker, err := startBrowserToolBroker(
 		ctx,
 		provider.config.Provider,
 		provider.config.BrowserBrokerRoot,
 		lease,
 		humanControl.executor,
+		mutationJournal,
 	)
 	if err != nil {
 		runtimeErr := lease.closeBrowserRuntime()
@@ -139,6 +150,7 @@ func (provider *browserExecutionProvider) Run(
 		"ready",
 		"",
 		browserClientEvidence(provider.config),
+		browserAuthorityEvidence(lease.identity),
 	)
 	status := "failed"
 	defer func() {
@@ -152,7 +164,13 @@ func (provider *browserExecutionProvider) Run(
 				resultErr = fmt.Errorf("close Browser execution attachment: %w", cleanupErr)
 			}
 		}
-		emitBrowserLifecycle(run.Emit, "closed", status)
+		emitBrowserLifecycle(
+			run.Emit,
+			"closed",
+			status,
+			browserAuthorityEvidence(lease.identity),
+			mutationJournal.summary(status),
+		)
 	}()
 	result, resultErr = provider.base.Run(ctx, run)
 	if resultErr == nil {
@@ -169,9 +187,22 @@ func (provider *browserExecutionProvider) Run(
 		for key, value := range evidence {
 			copied[key] = value
 		}
+		for key, value := range browserAuthorityEvidence(lease.identity) {
+			copied[key] = value
+		}
 		result.Output = copied
 	}
 	return result, resultErr
+}
+
+func browserAuthorityEvidence(identity browserprotocol.Identity) map[string]any {
+	return map[string]any{
+		"browser_interaction_policy":            identity.BrowserInteractionPolicy,
+		"browser_interaction_policy_generation": identity.BrowserInteractionPolicyGeneration,
+		"browser_mutation_origins":              append([]string{}, identity.BrowserMutationOrigins...),
+		"browser_mutation_origins_sha256":       identity.BrowserMutationOriginsSHA256,
+		"browser_contract_id":                   browserprotocol.ContractID,
+	}
 }
 
 func preflightBrowserRuntime(
@@ -214,10 +245,14 @@ func (lease *browserRunLease) browserEvidenceSnapshot() (
 		)
 	}
 	return browserplugin.EvidenceSnapshot{
-		Environment:      *lease.environment,
-		BrowserSessionID: lease.identity.BrowserSessionID,
-		SessionEpoch:     lease.identity.SessionEpoch,
-		ControlEpoch:     lease.identity.ControlEpoch,
+		Environment:                        *lease.environment,
+		BrowserSessionID:                   lease.identity.BrowserSessionID,
+		SessionEpoch:                       lease.identity.SessionEpoch,
+		ControlEpoch:                       lease.identity.ControlEpoch,
+		BrowserInteractionPolicy:           lease.identity.BrowserInteractionPolicy,
+		BrowserInteractionPolicyGeneration: lease.identity.BrowserInteractionPolicyGeneration,
+		BrowserMutationOrigins:             append([]string{}, lease.identity.BrowserMutationOrigins...),
+		BrowserMutationOriginsSHA256:       lease.identity.BrowserMutationOriginsSHA256,
 	}, nil
 }
 
@@ -317,6 +352,21 @@ func acquireBrowserRunLease(
 	if run.Conversation != nil && run.Conversation.Source != "core" {
 		return nil, errors.New("Browser execution rejected untrusted conversation identity")
 	}
+	authority := run.Authority
+	if authority.ExecutionProfile != "browser" ||
+		authority.BrowserInteractionPolicy != config.BrowserInteractionPolicy ||
+		authority.BrowserInteractionPolicyGeneration < 1 {
+		return nil, errors.New(
+			"Browser execution policy does not match Core-owned Runtime authority",
+		)
+	}
+	if failure := browserprotocol.ValidateMutationOrigins(
+		authority.BrowserInteractionPolicy,
+		authority.BrowserMutationOrigins,
+		authority.BrowserMutationOriginsSHA256,
+	); failure != nil {
+		return nil, failure
+	}
 	sessionKey := conversationSessionKey(run)
 	if sessionKey == "" {
 		sessionKey = strings.TrimSpace(run.RunID)
@@ -368,25 +418,42 @@ func acquireBrowserRunLease(
 			return nil, idErr
 		}
 		state = browserSessionState{
-			Version:          browserSessionStateVersion,
-			SessionKeyHash:   sessionKeyHash,
-			BrowserSessionID: browserSessionID,
-			SessionEpoch:     1,
-			Controller:       browserprotocol.ControllerAgent,
+			Version:             browserSessionStateVersion,
+			SessionKeyHash:      sessionKeyHash,
+			BrowserSessionID:    browserSessionID,
+			SessionEpoch:        1,
+			Controller:          browserprotocol.ControllerAgent,
+			InteractionPolicy:   authority.BrowserInteractionPolicy,
+			PolicyGeneration:    authority.BrowserInteractionPolicyGeneration,
+			MutationOriginsHash: authority.BrowserMutationOriginsSHA256,
 		}
 	} else if state.SessionKeyHash != sessionKeyHash {
 		return nil, errors.New("Browser session state identity does not match")
 	}
-	authority := run.Authority
+	if state.Version == 1 {
+		state.Version = browserSessionStateVersion
+		state.SessionEpoch++
+		state.InteractionPolicy = authority.BrowserInteractionPolicy
+		state.PolicyGeneration = authority.BrowserInteractionPolicyGeneration
+		state.MutationOriginsHash = authority.BrowserMutationOriginsSHA256
+	}
 	if state.RuntimeSessionID != "" &&
 		(state.RuntimeSessionID != authority.RuntimeSessionID ||
 			state.RuntimeSessionEpoch != authority.RuntimeSessionEpoch ||
 			state.RuntimeAttachmentID != authority.RuntimeAttachmentID) {
 		state.SessionEpoch++
 	}
+	if state.InteractionPolicy != authority.BrowserInteractionPolicy ||
+		state.PolicyGeneration != authority.BrowserInteractionPolicyGeneration ||
+		state.MutationOriginsHash != authority.BrowserMutationOriginsSHA256 {
+		state.SessionEpoch++
+	}
 	state.RuntimeSessionID = authority.RuntimeSessionID
 	state.RuntimeSessionEpoch = authority.RuntimeSessionEpoch
 	state.RuntimeAttachmentID = authority.RuntimeAttachmentID
+	state.InteractionPolicy = authority.BrowserInteractionPolicy
+	state.PolicyGeneration = authority.BrowserInteractionPolicyGeneration
+	state.MutationOriginsHash = authority.BrowserMutationOriginsSHA256
 	state.ControlEpoch++
 	state.Controller = browserprotocol.ControllerAgent
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -395,14 +462,18 @@ func acquireBrowserRunLease(
 		return nil, err
 	}
 	identity := browserprotocol.Identity{
-		RunID:            run.RunID,
-		AgentID:          run.AgentID,
-		PrincipalScopeID: authority.PrincipalScopeID,
-		BrowserSessionID: state.BrowserSessionID,
-		SessionEpoch:     state.SessionEpoch,
-		AttachmentID:     attachmentID,
-		ControlEpoch:     state.ControlEpoch,
-		Controller:       state.Controller,
+		RunID:                              run.RunID,
+		AgentID:                            run.AgentID,
+		PrincipalScopeID:                   authority.PrincipalScopeID,
+		BrowserSessionID:                   state.BrowserSessionID,
+		SessionEpoch:                       state.SessionEpoch,
+		AttachmentID:                       attachmentID,
+		ControlEpoch:                       state.ControlEpoch,
+		Controller:                         state.Controller,
+		BrowserInteractionPolicy:           authority.BrowserInteractionPolicy,
+		BrowserInteractionPolicyGeneration: authority.BrowserInteractionPolicyGeneration,
+		BrowserMutationOrigins:             append([]string{}, authority.BrowserMutationOrigins...),
+		BrowserMutationOriginsSHA256:       authority.BrowserMutationOriginsSHA256,
 	}
 	if failure := identity.Validate(); failure != nil {
 		return nil, failure
@@ -709,7 +780,7 @@ func (lease *browserRunLease) removeActiveIfCurrent() error {
 	if err != nil {
 		return err
 	}
-	if current.Identity != lease.identity {
+	if !browserprotocol.SameIdentity(current.Identity, lease.identity) {
 		return nil
 	}
 	return removePrivateBrowserFile(lease.activePath)
@@ -733,13 +804,22 @@ func readBrowserSessionState(path string) (browserSessionState, error) {
 	if state.Controller == "" {
 		state.Controller = browserprotocol.ControllerAgent
 	}
-	if state.Version != browserSessionStateVersion ||
+	if (state.Version != 1 && state.Version != browserSessionStateVersion) ||
 		state.SessionKeyHash == "" ||
 		state.BrowserSessionID == "" ||
 		state.SessionEpoch == 0 ||
 		(state.Controller != browserprotocol.ControllerAgent &&
 			state.Controller != browserprotocol.ControllerNone &&
 			state.Controller != browserprotocol.ControllerHuman) {
+		return browserSessionState{}, errors.New("Browser session state is invalid")
+	}
+	if state.Version == browserSessionStateVersion {
+		if state.InteractionPolicy == "" || state.PolicyGeneration < 1 ||
+			state.MutationOriginsHash == "" {
+			return browserSessionState{}, errors.New("Browser session state is invalid")
+		}
+	} else if state.InteractionPolicy != "" || state.PolicyGeneration != 0 ||
+		state.MutationOriginsHash != "" {
 		return browserSessionState{}, errors.New("Browser session state is invalid")
 	}
 	return state, nil

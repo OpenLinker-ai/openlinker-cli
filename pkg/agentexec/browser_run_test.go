@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,71 @@ func TestBrowserExecutionLeaseUsesAuthorityAndRejectsLateAttachment(t *testing.T
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("lease remained after completion at %s: %v", path, err)
 		}
+	}
+}
+
+func TestBrowserExecutionRejectsLocalAndCorePolicyMismatch(t *testing.T) {
+	root := shortBrowserTestRoot(t)
+	config := browserProviderTestConfig(root)
+	provider, err := newBrowserExecutionProvider(&browserCaptureProvider{root: root}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubBrowserPreflight(t, provider)
+	run := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
+	run.Authority.BrowserInteractionPolicy = "full"
+	run.Authority.BrowserMutationOrigins = []string{"https://github.com"}
+	_, digest, failure := browserprotocol.CanonicalMutationOrigins(
+		"full",
+		run.Authority.BrowserMutationOrigins,
+	)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	run.Authority.BrowserMutationOriginsSHA256 = digest
+	if _, err := provider.Run(context.Background(), run); err == nil ||
+		!strings.Contains(err.Error(), "does not match Core-owned Runtime authority") {
+		t.Fatalf("policy mismatch error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "runs", run.RunID+".json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("policy mismatch created a Run lease: %v", err)
+	}
+}
+
+func TestBrowserExecutionPropagatesFullPolicyIntoTheFencedLease(t *testing.T) {
+	root := shortBrowserTestRoot(t)
+	base := &browserCaptureProvider{root: root}
+	config := browserProviderTestConfig(root)
+	config.BrowserInteractionPolicy = "full"
+	provider, err := newBrowserExecutionProvider(base, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubBrowserPreflight(t, provider)
+	run := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
+	run.Authority.BrowserInteractionPolicy = "full"
+	run.Authority.BrowserInteractionPolicyGeneration = 7
+	run.Authority.BrowserMutationOrigins = []string{"https://github.com"}
+	_, digest, failure := browserprotocol.CanonicalMutationOrigins(
+		"full",
+		run.Authority.BrowserMutationOrigins,
+	)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	run.Authority.BrowserMutationOriginsSHA256 = digest
+	if _, err := provider.Run(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if len(base.leases) != 1 {
+		t.Fatalf("leases = %#v", base.leases)
+	}
+	identity := base.leases[0].Identity
+	if identity.BrowserInteractionPolicy != "full" ||
+		identity.BrowserInteractionPolicyGeneration != 7 ||
+		identity.BrowserMutationOriginsSHA256 != digest ||
+		!slices.Equal(identity.BrowserMutationOrigins, []string{"https://github.com"}) {
+		t.Fatalf("full Browser authority was not preserved: %#v", identity)
 	}
 }
 
@@ -353,8 +419,14 @@ func TestBrowserLifecycleEventBudgetIsFixed(t *testing.T) {
 	stubBrowserPreflight(t, provider)
 	run := browserProviderTestRun("44444444-4444-4444-8444-444444444444")
 	var events []string
-	run.Emit = func(eventType string, _ any) error {
+	var payloads []map[string]any
+	run.Emit = func(eventType string, payload any) error {
 		events = append(events, eventType)
+		value, ok := payload.(map[string]any)
+		if !ok {
+			t.Fatalf("Browser lifecycle payload = %#v", payload)
+		}
+		payloads = append(payloads, value)
 		return nil
 	}
 	result, err := provider.Run(context.Background(), run)
@@ -369,8 +441,29 @@ func TestBrowserLifecycleEventBudgetIsFixed(t *testing.T) {
 	}
 	output, ok := result.Output.(map[string]any)
 	if !ok || output["browser_execution_profile"] != "isolated" ||
-		output["browser_tool"] != "browser_session" {
+		output["browser_tool"] != "browser_session" ||
+		output["browser_interaction_policy"] != "restricted" ||
+		output["browser_interaction_policy_generation"] != int64(1) ||
+		output["browser_mutation_origins_sha256"] !=
+			browserprotocol.RestrictedMutationOriginsSHA256 ||
+		output["browser_contract_id"] != browserprotocol.ContractID {
 		t.Fatalf("Browser result evidence = %#v", result.Output)
+	}
+	origins, ok := output["browser_mutation_origins"].([]string)
+	if !ok || len(origins) != 0 {
+		t.Fatalf("Browser result mutation origins = %#v", output["browser_mutation_origins"])
+	}
+	for _, index := range []int{1, 2} {
+		if payloads[index]["browser_interaction_policy"] != "restricted" ||
+			payloads[index]["browser_interaction_policy_generation"] != int64(1) ||
+			payloads[index]["browser_mutation_origins_sha256"] !=
+				browserprotocol.RestrictedMutationOriginsSHA256 ||
+			payloads[index]["browser_contract_id"] != browserprotocol.ContractID {
+			t.Fatalf("Browser lifecycle evidence at %d = %#v", index, payloads[index])
+		}
+	}
+	if _, ok := payloads[2]["browser_mutation_summary"].(map[string]any); !ok {
+		t.Fatalf("closed Browser lifecycle mutation summary = %#v", payloads[2])
 	}
 }
 
@@ -428,11 +521,14 @@ func TestBrowserSessionPruneIsBoundedOldestFirstAndProtectsCurrentAndActive(
 		t.Helper()
 		path := filepath.Join(sessionRoot, name+".json")
 		if err := writePrivateBrowserJSON(path, browserSessionState{
-			Version:          browserSessionStateVersion,
-			SessionKeyHash:   name,
-			BrowserSessionID: browserSessionID,
-			SessionEpoch:     1,
-			UpdatedAt:        updatedAt.Format(time.RFC3339Nano),
+			Version:             browserSessionStateVersion,
+			SessionKeyHash:      name,
+			BrowserSessionID:    browserSessionID,
+			SessionEpoch:        1,
+			InteractionPolicy:   "restricted",
+			PolicyGeneration:    1,
+			MutationOriginsHash: browserprotocol.RestrictedMutationOriginsSHA256,
+			UpdatedAt:           updatedAt.Format(time.RFC3339Nano),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -472,14 +568,18 @@ func TestBrowserSessionPruneIsBoundedOldestFirstAndProtectsCurrentAndActive(
 			ContractID: browserclient.LeaseContractID,
 			ExpiresAt:  now.Add(time.Hour),
 			Identity: browserprotocol.Identity{
-				RunID:            "11111111-1111-4111-8111-111111111111",
-				AgentID:          "22222222-2222-4222-8222-222222222222",
-				PrincipalScopeID: "33333333-3333-4333-8333-333333333333",
-				BrowserSessionID: activeSessionID,
-				SessionEpoch:     1,
-				AttachmentID:     "99999999-9999-4999-8999-999999999999",
-				ControlEpoch:     1,
-				Controller:       browserprotocol.ControllerAgent,
+				RunID:                              "11111111-1111-4111-8111-111111111111",
+				AgentID:                            "22222222-2222-4222-8222-222222222222",
+				PrincipalScopeID:                   "33333333-3333-4333-8333-333333333333",
+				BrowserSessionID:                   activeSessionID,
+				SessionEpoch:                       1,
+				AttachmentID:                       "99999999-9999-4999-8999-999999999999",
+				ControlEpoch:                       1,
+				Controller:                         browserprotocol.ControllerAgent,
+				BrowserInteractionPolicy:           "restricted",
+				BrowserInteractionPolicyGeneration: 1,
+				BrowserMutationOrigins:             []string{},
+				BrowserMutationOriginsSHA256:       browserprotocol.RestrictedMutationOriginsSHA256,
 			},
 		},
 	); err != nil {
@@ -546,11 +646,14 @@ func TestBrowserSessionPruneDoesNotProtectExpiredActiveLease(t *testing.T) {
 	sessionID := "55555555-5555-4555-8555-555555555555"
 	statePath := filepath.Join(sessionRoot, "expired-active.json")
 	if err := writePrivateBrowserJSON(statePath, browserSessionState{
-		Version:          browserSessionStateVersion,
-		SessionKeyHash:   "expired-active",
-		BrowserSessionID: sessionID,
-		SessionEpoch:     1,
-		UpdatedAt:        now.Add(-31 * 24 * time.Hour).Format(time.RFC3339Nano),
+		Version:             browserSessionStateVersion,
+		SessionKeyHash:      "expired-active",
+		BrowserSessionID:    sessionID,
+		SessionEpoch:        1,
+		InteractionPolicy:   "restricted",
+		PolicyGeneration:    1,
+		MutationOriginsHash: browserprotocol.RestrictedMutationOriginsSHA256,
+		UpdatedAt:           now.Add(-31 * 24 * time.Hour).Format(time.RFC3339Nano),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -560,14 +663,18 @@ func TestBrowserSessionPruneDoesNotProtectExpiredActiveLease(t *testing.T) {
 			ContractID: browserclient.LeaseContractID,
 			ExpiresAt:  now.Add(-time.Minute),
 			Identity: browserprotocol.Identity{
-				RunID:            "11111111-1111-4111-8111-111111111111",
-				AgentID:          "22222222-2222-4222-8222-222222222222",
-				PrincipalScopeID: "33333333-3333-4333-8333-333333333333",
-				BrowserSessionID: sessionID,
-				SessionEpoch:     1,
-				AttachmentID:     "99999999-9999-4999-8999-999999999999",
-				ControlEpoch:     1,
-				Controller:       browserprotocol.ControllerAgent,
+				RunID:                              "11111111-1111-4111-8111-111111111111",
+				AgentID:                            "22222222-2222-4222-8222-222222222222",
+				PrincipalScopeID:                   "33333333-3333-4333-8333-333333333333",
+				BrowserSessionID:                   sessionID,
+				SessionEpoch:                       1,
+				AttachmentID:                       "99999999-9999-4999-8999-999999999999",
+				ControlEpoch:                       1,
+				Controller:                         browserprotocol.ControllerAgent,
+				BrowserInteractionPolicy:           "restricted",
+				BrowserInteractionPolicyGeneration: 1,
+				BrowserMutationOrigins:             []string{},
+				BrowserMutationOriginsSHA256:       browserprotocol.RestrictedMutationOriginsSHA256,
 			},
 		},
 	); err != nil {
@@ -602,14 +709,15 @@ func stubBrowserPreflight(t *testing.T, provider Provider) {
 
 func browserProviderTestConfig(root string) ProviderConfig {
 	return ProviderConfig{
-		Provider:              "codex",
-		ExecutionProfile:      "browser",
-		BrowserPluginBin:      "/opt/openlinker",
-		BrowserSocket:         "/browser/control.sock",
-		BrowserCredentialFile: "/browser/channel",
-		BrowserLeaseRoot:      root,
-		BrowserBrokerRoot:     filepath.Join(root, "broker"),
-		Timeout:               time.Minute,
+		Provider:                 "codex",
+		ExecutionProfile:         "browser",
+		BrowserInteractionPolicy: "restricted",
+		BrowserPluginBin:         "/opt/openlinker",
+		BrowserSocket:            "/browser/control.sock",
+		BrowserCredentialFile:    "/browser/channel",
+		BrowserLeaseRoot:         root,
+		BrowserBrokerRoot:        filepath.Join(root, "broker"),
+		Timeout:                  time.Minute,
 	}
 }
 
@@ -629,10 +737,15 @@ func browserProviderTestRun(runID string) RunContext {
 		AgentID:       "11111111-1111-4111-8111-111111111111",
 		RunDeadlineAt: time.Now().Add(time.Minute),
 		Authority: &openlinker.RuntimeAuthorityContext{
-			PrincipalScopeID:    "22222222-2222-4222-8222-222222222222",
-			RuntimeSessionID:    "33333333-3333-4333-8333-333333333333",
-			RuntimeSessionEpoch: 1,
-			RuntimeAttachmentID: "99999999-9999-4999-8999-999999999999",
+			PrincipalScopeID:                   "22222222-2222-4222-8222-222222222222",
+			RuntimeSessionID:                   "33333333-3333-4333-8333-333333333333",
+			RuntimeSessionEpoch:                1,
+			RuntimeAttachmentID:                "99999999-9999-4999-8999-999999999999",
+			ExecutionProfile:                   "browser",
+			BrowserInteractionPolicy:           "restricted",
+			BrowserInteractionPolicyGeneration: 1,
+			BrowserMutationOrigins:             []string{},
+			BrowserMutationOriginsSHA256:       browserprotocol.RestrictedMutationOriginsSHA256,
 		},
 		Conversation: &ConversationContext{
 			ID:           "conversation-one",

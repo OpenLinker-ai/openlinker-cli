@@ -9,7 +9,7 @@ RUN go mod download && go mod verify
 COPY . .
 
 FROM go-source AS go-build
-RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserclientmode ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/netpolicy ./pkg/pluginbridge
+RUN go test ./cmd/openlinker-browser-runtime ./cmd/openlinker-provider-launcher ./cmd/openlinker-runtime-entrypoint ./pkg/agent ./pkg/agentexec ./pkg/browserclient ./pkg/browserclientmode ./pkg/browserplugin ./pkg/browserprofile ./pkg/browserprotocol ./pkg/browserruntime ./pkg/netpolicy ./pkg/pluginbridge ./test/browser-provider-live/client
 ARG TARGETOS
 ARG TARGETARCH
 ARG OPENLINKER_VERSION=container
@@ -19,7 +19,8 @@ RUN test "${TARGETOS}" = linux \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=codex" -o /out/openlinker-provider-launcher-codex ./cmd/openlinker-provider-launcher \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=claude" -o /out/openlinker-provider-launcher-claude ./cmd/openlinker-provider-launcher \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=codex" -o /out/openlinker-runtime-entrypoint-codex ./cmd/openlinker-runtime-entrypoint \
- && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=claude" -o /out/openlinker-runtime-entrypoint-claude ./cmd/openlinker-runtime-entrypoint
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X main.fixedProvider=claude" -o /out/openlinker-runtime-entrypoint-claude ./cmd/openlinker-runtime-entrypoint \
+ && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/openlinker-browser-provider-live ./test/browser-provider-live/client
 
 FROM go-source AS egress-build
 RUN go test ./cmd/openlinker-egress-gateway ./pkg/egressgateway ./pkg/netpolicy
@@ -141,6 +142,20 @@ LABEL org.opencontainers.image.title="OpenLinker Runtime Claude" \
       org.opencontainers.image.description="OpenLinker CLI Runtime Worker with a pinned Claude Code CLI provider" \
       org.opencontainers.image.source="https://github.com/OpenLinker-ai/openlinker-cli" \
       org.opencontainers.image.licenses="Apache-2.0"
+
+# Test-only descendants retain the exact pinned Provider CLI, Runtime Plugin,
+# privilege boundary and filesystem layout from the production images. They
+# replace only the entrypoint so the credential-backed release gate can execute
+# one controlled Browser Run without registering a real Agent in Core.
+FROM codex AS codex-live
+COPY --from=go-build /out/openlinker-browser-provider-live /usr/local/bin/openlinker-browser-provider-live
+ENV OPENLINKER_BROWSER_LIVE_PROVIDER=codex
+ENTRYPOINT ["/usr/local/bin/openlinker-browser-provider-live"]
+
+FROM claude AS claude-live
+COPY --from=go-build /out/openlinker-browser-provider-live /usr/local/bin/openlinker-browser-provider-live
+ENV OPENLINKER_BROWSER_LIVE_PROVIDER=claude
+ENTRYPOINT ["/usr/local/bin/openlinker-browser-provider-live"]
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35 AS egress
 COPY --from=egress-build /out/openlinker-egress-gateway /usr/local/bin/openlinker-egress-gateway

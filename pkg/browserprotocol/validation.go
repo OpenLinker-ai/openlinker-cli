@@ -24,7 +24,7 @@ func (request Request) Validate(now time.Time) *Failure {
 	if request.Deadline.After(now.Add(MaxActionDeadline)) {
 		return NewFailure(ErrorProtocolInvalid, "browser action deadline exceeds the allowed horizon", false)
 	}
-	return request.Action.Validate()
+	return request.Action.ValidateForPolicy(request.Identity.BrowserInteractionPolicy)
 }
 
 func (mode ObservationMode) Validate() *Failure {
@@ -67,12 +67,44 @@ func (identity Identity) Validate() *Failure {
 	if identity.ControlEpoch == 0 {
 		return NewFailure(ErrorProtocolInvalid, "control_epoch must be positive", false)
 	}
+	if identity.BrowserInteractionPolicyGeneration < 1 {
+		return NewFailure(ErrorProtocolInvalid, "browser_interaction_policy_generation must be positive", false)
+	}
+	if failure := ValidateMutationOrigins(
+		identity.BrowserInteractionPolicy,
+		identity.BrowserMutationOrigins,
+		identity.BrowserMutationOriginsSHA256,
+	); failure != nil {
+		return failure
+	}
 	switch identity.Controller {
 	case ControllerAgent, ControllerNone, ControllerHuman:
 	default:
 		return NewFailure(ErrorProtocolInvalid, "controller is invalid", false)
 	}
 	return nil
+}
+
+func SameIdentity(left, right Identity) bool {
+	if left.RunID != right.RunID || left.AgentID != right.AgentID ||
+		left.PrincipalScopeID != right.PrincipalScopeID ||
+		left.BrowserSessionID != right.BrowserSessionID ||
+		left.SessionEpoch != right.SessionEpoch ||
+		left.AttachmentID != right.AttachmentID ||
+		left.ControlEpoch != right.ControlEpoch ||
+		left.Controller != right.Controller ||
+		left.BrowserInteractionPolicy != right.BrowserInteractionPolicy ||
+		left.BrowserInteractionPolicyGeneration != right.BrowserInteractionPolicyGeneration ||
+		left.BrowserMutationOriginsSHA256 != right.BrowserMutationOriginsSHA256 ||
+		len(left.BrowserMutationOrigins) != len(right.BrowserMutationOrigins) {
+		return false
+	}
+	for index := range left.BrowserMutationOrigins {
+		if left.BrowserMutationOrigins[index] != right.BrowserMutationOrigins[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (observation Observation) Validate() *Failure {
@@ -99,7 +131,10 @@ func (observation Observation) ValidateEngine() *Failure {
 	switch {
 	case observation.ClickEffect == "" && observation.TargetCategory == "":
 	case observation.ClickEffect == ClickEffectActivated &&
-		observation.TargetCategory == TargetCategoryLink:
+		(observation.TargetCategory == TargetCategoryLink ||
+			observation.TargetCategory == TargetCategoryButton ||
+			observation.TargetCategory == TargetCategoryCustom ||
+			observation.TargetCategory == TargetCategoryOther):
 	case observation.ClickEffect == ClickEffectFocused &&
 		observation.TargetCategory == TargetCategoryTextInput:
 	default:
@@ -109,6 +144,13 @@ func (observation Observation) ValidateEngine() *Failure {
 		if failure := observation.Environment.Validate(); failure != nil {
 			return failure
 		}
+	}
+	if observation.BlockedMutationRequests < 0 || observation.BlockedMutationRequests > 1024 {
+		return NewFailure(ErrorOutputInvalid, "blocked mutation request count is invalid", false)
+	}
+	if observation.MutationRequestsObserved < 0 ||
+		observation.MutationRequestsObserved > 32 {
+		return NewFailure(ErrorOutputInvalid, "observed mutation request count is invalid", false)
 	}
 	if observation.SiteOutcome == "" {
 		if observation.ClassifierRulesVersion != "" ||
@@ -143,7 +185,9 @@ func (observation Observation) ValidateClosed() *Failure {
 		observation.Environment != nil ||
 		observation.SiteOutcome != "" ||
 		observation.ClassifierRulesVersion != "" ||
-		observation.ChallengeReleaseUnavailable {
+		observation.ChallengeReleaseUnavailable ||
+		observation.BlockedMutationRequests != 0 ||
+		observation.MutationRequestsObserved != 0 {
 		return NewFailure(ErrorOutputInvalid, "closed observation contains Engine fields", false)
 	}
 	return nil
@@ -209,6 +253,8 @@ func ValidateFailure(failure *Failure) *Failure {
 		ErrorProfileEngineUpgrade,
 		ErrorUserActionRequired,
 		ErrorHighImpactActionBlocked,
+		ErrorMutationOriginBlocked,
+		ErrorMutationOutcomeUnknown,
 		ErrorAccessDenied,
 		ErrorRateLimited,
 		ErrorChallengeSuspected,
@@ -233,6 +279,16 @@ func ValidateFailure(failure *Failure) *Failure {
 	if failure.ActionIndex != nil &&
 		(*failure.ActionIndex < 0 || *failure.ActionIndex >= 8) {
 		return NewFailure(ErrorOutputInvalid, "browser failure action index is invalid", false)
+	}
+	if failure.CompletedActions != nil {
+		if *failure.CompletedActions < 0 || *failure.CompletedActions > 8 ||
+			failure.ActionIndex == nil || *failure.CompletedActions != *failure.ActionIndex {
+			return NewFailure(ErrorOutputInvalid, "browser batch completion evidence is invalid", false)
+		}
+	}
+	if failure.MutationRequestsObserved < 0 ||
+		failure.MutationRequestsObserved > 32 {
+		return NewFailure(ErrorOutputInvalid, "observed mutation request count is invalid", false)
 	}
 	hasClickContext := failure.TargetCategory != "" ||
 		failure.PageStateID != "" ||
@@ -270,6 +326,9 @@ func ValidateFailure(failure *Failure) *Failure {
 		return NewFailure(ErrorOutputInvalid, "browser Run click retry budget is invalid", false)
 	}
 	if evidenceFailure := validateSiteFailureEvidence(failure); evidenceFailure != nil {
+		return evidenceFailure
+	}
+	if evidenceFailure := validateMutationFailureEvidence(failure); evidenceFailure != nil {
 		return evidenceFailure
 	}
 	if failure.HumanControlAvailable &&
@@ -391,6 +450,69 @@ func validateSiteFailureEvidence(failure *Failure) *Failure {
 		(failure.ConsecutiveAccessDenials == nil ||
 			*failure.ConsecutiveAccessDenials != 3) {
 		return NewFailure(ErrorOutputInvalid, "browser origin-block evidence is invalid", false)
+	}
+	return nil
+}
+
+func validateMutationFailureEvidence(failure *Failure) *Failure {
+	hasEvidence := failure.RetrySameAction != nil ||
+		failure.AttachmentUsable != nil ||
+		failure.FreshObservationRequired != nil ||
+		failure.MutationOutcomeReason != "" ||
+		failure.AttemptedUnits != nil ||
+		failure.UndispatchedUnits != nil ||
+		failure.ObservedOrigin != "" ||
+		failure.BrowserMutationOrigins != nil
+	switch failure.Code {
+	case ErrorMutationOriginBlocked:
+		if failure.Recoverable || failure.RetrySameAction == nil ||
+			*failure.RetrySameAction || failure.AttachmentUsable == nil ||
+			!*failure.AttachmentUsable || failure.FreshObservationRequired == nil ||
+			failure.MutationOutcomeReason != "" || failure.AttemptedUnits != nil ||
+			failure.UndispatchedUnits != nil || failure.BrowserMutationOrigins == nil {
+			return NewFailure(ErrorOutputInvalid, "browser mutation-origin evidence is invalid", false)
+		}
+		if failure.ObservedOrigin != "" {
+			canonical, ok := canonicalMutationOrigin(failure.ObservedOrigin)
+			if !ok || canonical != failure.ObservedOrigin {
+				return NewFailure(ErrorOutputInvalid, "browser observed mutation origin is invalid", false)
+			}
+		}
+		canonical, _, canonicalFailure := CanonicalMutationOrigins(
+			"full",
+			failure.BrowserMutationOrigins,
+		)
+		if canonicalFailure != nil || len(canonical) != len(failure.BrowserMutationOrigins) {
+			return NewFailure(ErrorOutputInvalid, "browser mutation-origin evidence is invalid", false)
+		}
+		for index := range canonical {
+			if canonical[index] != failure.BrowserMutationOrigins[index] {
+				return NewFailure(ErrorOutputInvalid, "browser mutation-origin evidence is invalid", false)
+			}
+		}
+	case ErrorMutationOutcomeUnknown:
+		if failure.Recoverable || failure.RetrySameAction == nil ||
+			*failure.RetrySameAction || failure.AttachmentUsable == nil ||
+			failure.FreshObservationRequired == nil || failure.MutationOutcomeReason == "" ||
+			!validOpaqueID(failure.MutationOutcomeReason, 96) ||
+			failure.ObservedOrigin != "" || failure.BrowserMutationOrigins != nil {
+			return NewFailure(ErrorOutputInvalid, "browser mutation uncertainty evidence is invalid", false)
+		}
+		if *failure.AttachmentUsable != *failure.FreshObservationRequired {
+			return NewFailure(ErrorOutputInvalid, "browser mutation uncertainty recovery is invalid", false)
+		}
+		if (failure.AttemptedUnits == nil) != (failure.UndispatchedUnits == nil) {
+			return NewFailure(ErrorOutputInvalid, "browser text-entry uncertainty evidence is invalid", false)
+		}
+		if failure.AttemptedUnits != nil &&
+			(*failure.AttemptedUnits < 0 || *failure.AttemptedUnits > 2048 ||
+				*failure.UndispatchedUnits < 0 || *failure.UndispatchedUnits > 2048) {
+			return NewFailure(ErrorOutputInvalid, "browser text-entry uncertainty evidence is invalid", false)
+		}
+	default:
+		if hasEvidence {
+			return NewFailure(ErrorOutputInvalid, "browser failure contains unexpected mutation evidence", false)
+		}
 	}
 	return nil
 }

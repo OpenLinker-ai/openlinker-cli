@@ -29,7 +29,7 @@ func New(ioStreams shared.IO, service *Service) *cobra.Command {
 
 func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	var provider, agentID, workspace, platformURL, state, bin, model, transport, codexBaseURL, sandbox, approval, permission string
-	var executionProfile, browserClientMode, browserPluginBin, browserNativePlugin, browserSocket, browserCredentialFile, browserLeaseRoot, browserBrokerRoot string
+	var executionProfile, browserInteractionPolicy, browserClientMode, browserPluginBin, browserNativePlugin, browserSocket, browserCredentialFile, browserLeaseRoot, browserBrokerRoot string
 	var capacity int64
 	var timeout int
 	var webSearch, sessionReuse, enabled bool
@@ -102,6 +102,9 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 			if command.Flags().Changed("execution-profile") {
 				config.ExecutionProfile = strings.ToLower(strings.TrimSpace(executionProfile))
 			}
+			if command.Flags().Changed("browser-interaction-policy") {
+				config.BrowserInteractionPolicy = strings.ToLower(strings.TrimSpace(browserInteractionPolicy))
+			}
 			if command.Flags().Changed("browser-client-mode") {
 				config.BrowserClientMode = strings.ToLower(strings.TrimSpace(browserClientMode))
 			}
@@ -172,6 +175,7 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().StringVar(&permission, "claude-permission", "dontAsk", "Claude permission mode")
 	command.Flags().Var(&allowedTools, "allowed-tool", "Claude allowed tool; repeatable")
 	command.Flags().StringVar(&executionProfile, "execution-profile", "standard", "Agent execution profile: standard or browser")
+	command.Flags().StringVar(&browserInteractionPolicy, "browser-interaction-policy", "restricted", "Browser interaction policy: restricted or full")
 	command.Flags().StringVar(&browserClientMode, "browser-client-mode", "mcp", "Browser client mode: auto, native, or mcp")
 	command.Flags().StringVar(&browserPluginBin, "browser-plugin-bin", "", "OpenLinker CLI binary used for the Browser-only tool server")
 	command.Flags().StringVar(&browserNativePlugin, "browser-native-plugin", "", "absolute Runtime-owned native Browser Plugin path")
@@ -268,6 +272,13 @@ func Diagnose(getenv func(string) string, providerOverride string) Diagnostic {
 	check("openlinker_url", config.OpenLinkerURL != "", "present", "missing")
 	check("runtime_options", runtimeOptionsErr == nil, "valid", "invalid")
 	check("execution_profile", config.ExecutionProfile == "standard" || config.ExecutionProfile == "browser", config.ExecutionProfile, "invalid")
+	check(
+		"browser_interaction_policy",
+		config.BrowserInteractionPolicy == "restricted" ||
+			(config.ExecutionProfile == "browser" && config.BrowserInteractionPolicy == "full"),
+		config.BrowserInteractionPolicy,
+		"invalid",
+	)
 	if config.ExecutionProfile == "browser" {
 		check(
 			"browser_client_mode",
@@ -344,6 +355,9 @@ func validateNonSecretConfig(config Config) error {
 func validateExecutionProfile(config Config) error {
 	switch config.ExecutionProfile {
 	case "", "standard":
+		if config.BrowserInteractionPolicy != "" && config.BrowserInteractionPolicy != "restricted" {
+			return errors.New("standard execution profile requires restricted Browser interaction policy")
+		}
 		return nil
 	case "browser":
 	default:
@@ -351,6 +365,10 @@ func validateExecutionProfile(config Config) error {
 	}
 	if config.Capacity != 1 {
 		return errors.New("Browser execution profile requires --capacity 1")
+	}
+	if config.BrowserInteractionPolicy != "restricted" &&
+		config.BrowserInteractionPolicy != "full" {
+		return errors.New("Browser interaction policy must be restricted or full")
 	}
 	if !config.SessionReuse {
 		return errors.New("Browser execution profile requires --session-reuse")
