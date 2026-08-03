@@ -547,7 +547,7 @@ docker run -d \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=8m \
   --mount "type=volume,src=${capture_volume},dst=/capture" \
   "$observer_image" \
-  -Z root -i any -nn -U -w /capture/runtime.pcap "tcp or udp" \
+  --immediate-mode -Z root -i any -nn -U -w /capture/runtime.pcap "tcp or udp" \
   >/dev/null
 
 observer_ready_attempt=0

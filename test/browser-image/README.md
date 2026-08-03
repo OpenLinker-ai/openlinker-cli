@@ -140,6 +140,12 @@ all interfaces while real Chromium:
 - performs a WebRTC offer with a public STUN endpoint; and
 - retries public navigation after the Gateway is stopped.
 
+The live observer uses libpcap immediate mode. Besides avoiding capture
+buffering, this deliberately selects libpcap's TPACKET_V2 path instead of
+TPACKET_V3, whose packet-header probe is not supported when an ARM64 observer
+runs through QEMU user-mode on an x86_64 Linux runner. The resulting pcap is
+still read back and evaluated by the same packet assertions below.
+
 The captured trace must contain real TCP traffic to the Egress Gateway, zero
 UDP packets, and zero TCP packets to any non-Gateway destination. Chromium
 launch flags remain a secondary configuration assertion. Separate direct
