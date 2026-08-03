@@ -140,11 +140,14 @@ all interfaces while real Chromium:
 - performs a WebRTC offer with a public STUN endpoint; and
 - retries public navigation after the Gateway is stopped.
 
-The live observer uses libpcap immediate mode. Besides avoiding capture
-buffering, this deliberately selects libpcap's TPACKET_V2 path instead of
-TPACKET_V3, whose packet-header probe is not supported when an ARM64 observer
-runs through QEMU user-mode on an x86_64 Linux runner. The resulting pcap is
-still read back and evaluated by the same packet assertions below.
+The live observer uses libpcap immediate mode to avoid capture buffering. It
+is a test-only image and is built for the Docker server's native architecture,
+then joins the target Browser container with `--network container:<runtime>`.
+Therefore an ARM64 Browser/Egress/client/fixture matrix on an x86_64 runner
+still executes those production and behavioral components through QEMU, while
+the observer uses the host PF_PACKET ABI instead of an unsupported QEMU
+TPACKET translation. The resulting pcap contains the target Browser network
+namespace's real packets and is read back by the same three assertions below.
 
 The captured trace must contain real TCP traffic to the Egress Gateway, zero
 UDP packets, and zero TCP packets to any non-Gateway destination. Chromium

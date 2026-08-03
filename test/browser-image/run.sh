@@ -44,6 +44,19 @@ client_image="openlinker-browser-acceptance-client:image-acceptance"
 fixture_image="openlinker-browser-acceptance-fixture:image-acceptance"
 observer_image="openlinker-browser-acceptance-observer:image-acceptance"
 cloudflared_image="cloudflare/cloudflared@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf"
+observer_architecture=$(docker version --format '{{.Server.Arch}}')
+case "$observer_architecture" in
+  amd64|arm64) ;;
+  *)
+    echo "Docker server architecture is unsupported for packet observation" >&2
+    exit 1
+    ;;
+esac
+observer_platform="linux/${observer_architecture}"
+
+run_observer() {
+  docker run --platform "$observer_platform" "$@"
+}
 
 cleanup() {
   status=$?
@@ -102,10 +115,18 @@ docker build \
   -t "$fixture_image" \
   "$repository_root"
 docker build \
+  --platform "$observer_platform" \
   --target observer \
   -f "$repository_root/test/browser-image/Dockerfile" \
   -t "$observer_image" \
   "$repository_root"
+actual_observer_architecture=$(
+  docker image inspect "$observer_image" --format '{{.Architecture}}'
+)
+if [ "$actual_observer_architecture" != "$observer_architecture" ]; then
+  echo "Packet observer image does not match the Docker server architecture" >&2
+  exit 1
+fi
 docker pull "$cloudflared_image" >/dev/null
 
 docker network create "$tunnel_network" >/dev/null
@@ -386,7 +407,7 @@ docker volume create "$key_volume" >/dev/null
 docker volume create "$state_volume" >/dev/null
 docker volume create "$capture_volume" >/dev/null
 
-docker run --rm \
+run_observer --rm \
   --network "$public_network" \
   --read-only \
   --cap-drop ALL \
@@ -454,7 +475,7 @@ esac
 # on the internal network first can leave Linux Docker with an internal default
 # route even after the public network is attached. Probe DoH from the exact
 # Gateway network namespace so that failure is diagnosed before Chromium.
-if ! docker run --rm \
+if ! run_observer --rm \
   --network "container:${egress_container}" \
   --read-only \
   --cap-drop ALL \
@@ -534,7 +555,7 @@ if [ "$runtime_network_count" != "1" ] ||
   exit 1
 fi
 
-docker run -d \
+run_observer -d \
   --name "$observer_container" \
   --network "container:${runtime_container}" \
   --read-only \
@@ -704,7 +725,7 @@ docker exec "$runtime_container" node -e '
 
 docker stop -t 5 "$observer_container" >/dev/null
 
-if ! docker run --rm \
+if ! run_observer --rm \
   --user tcpdump:tcpdump \
   --read-only \
   --cap-drop ALL \
@@ -720,7 +741,7 @@ if ! docker run --rm \
   exit 1
 fi
 
-if docker run --rm \
+if run_observer --rm \
   --user tcpdump:tcpdump \
   --read-only \
   --cap-drop ALL \
@@ -734,7 +755,7 @@ if docker run --rm \
   exit 1
 fi
 
-if docker run --rm \
+if run_observer --rm \
   --user tcpdump:tcpdump \
   --read-only \
   --cap-drop ALL \
