@@ -474,15 +474,20 @@ esac
 # The Gateway must keep its default route on the public network. Starting it
 # on the internal network first can leave Linux Docker with an internal default
 # route even after the public network is attached. Probe DoH from the exact
-# Gateway network namespace so that failure is diagnosed before Chromium.
-if ! run_observer --rm \
-  --network "container:${egress_container}" \
-  --read-only \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  --entrypoint node \
-  "$observer_image" \
-  -e '
+# Gateway network namespace so that failure is diagnosed before Chromium. The
+# Gateway process and its TLS stack may still be starting after Docker reports
+# the container as running, so retry this exact probe within a bounded window.
+egress_route_ready_attempt=1
+egress_route_ready_max_attempts=20
+while [ "$egress_route_ready_attempt" -le "$egress_route_ready_max_attempts" ]; do
+  if run_observer --rm \
+    --network "container:${egress_container}" \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --entrypoint node \
+    "$observer_image" \
+    -e '
     const https = require("node:https");
     const host = process.argv[1];
     const request = https.get(
@@ -508,10 +513,16 @@ if ! run_observer --rm \
     request.setTimeout(10_000, () => request.destroy());
     request.on("error", () => process.exit(1));
   ' \
-  "$fixture_host"; then
-  echo "Egress Gateway public-route secure-DNS preflight failed" >&2
-  exit 1
-fi
+    "$fixture_host"; then
+    break
+  fi
+  if [ "$egress_route_ready_attempt" -eq "$egress_route_ready_max_attempts" ]; then
+    echo "Egress Gateway public-route secure-DNS preflight failed after ${egress_route_ready_max_attempts} attempts" >&2
+    exit 1
+  fi
+  egress_route_ready_attempt=$((egress_route_ready_attempt + 1))
+  sleep 1
+done
 
 docker run -d \
   --name "$runtime_container" \

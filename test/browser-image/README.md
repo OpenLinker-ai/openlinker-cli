@@ -67,8 +67,8 @@ observer images, then proves:
 
 - the Browser container has one internal network and no published ports;
 - the dual-homed Egress Gateway starts on its public network before its
-  internal attachment, and a secure-DNS probe from the exact Gateway network
-  namespace proves that its default route is public;
+  internal attachment, and a bounded secure-DNS readiness probe from the exact
+  Gateway network namespace proves that its default route is public;
 - HTTPS CONNECT can move to another address only within one bounded,
   fully-public secure-DNS answer set when the first public edge is unavailable;
 - Browser preflight starts Chromium and checks the real Gateway;
