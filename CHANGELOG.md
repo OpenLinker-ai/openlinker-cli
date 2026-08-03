@@ -9,6 +9,15 @@ runtime boundaries are stabilizing.
 
 ### Added
 
+- Added capability-gated `restricted` and `full` Browser interaction. Full
+  Attachments receive only Core-issued, generation-fenced mutation authority
+  for an exact HTTPS origin scope and record a bounded local mutation journal.
+- Added deterministic Browser reliability controls: per-principal origin
+  budgets, challenge classification evidence, access-denial guards, document
+  generation tracking over Playwright's pipe-backed CDP session, and
+  checkpoint-safe profile/environment evidence.
+- Added reproducible real-Chromium acceptance harnesses for isolated Browser
+  behavior and the credential-backed Codex/Claude restricted/full matrix.
 - Added `tasks create`, asynchronous `run --async`, `runs cancel`, and an
   explicit `--idempotency-key` for retry-safe Agent calls.
 - Added versioned CLI surface and capability metadata to the redacted
@@ -25,6 +34,16 @@ runtime boundaries are stabilizing.
 
 ### Changed
 
+- Updated the formal `openlinker-go` dependency to `v0.2.0-rc5`; no workspace
+  replacement or vendored SDK is used by release builds.
+- Browser Provider images now keep page traffic behind the egress gateway,
+  expose no remote-debugging listener, enforce exact mutation-origin scopes,
+  bundle the checksum-pinned OpenLinker Plugin v0.1.2, and publish
+  dual-architecture image, SBOM, and provenance evidence. The optional Google
+  Chrome image remains operator-built and amd64-only.
+- The Egress Gateway now tries a bounded set of already validated public DNS
+  addresses before failing an HTTPS CONNECT. It never re-resolves during the
+  fallback and rejects the complete answer set if any address is non-public.
 - Made native Codex MCP calls accept Codex client `_meta`, added a validated
   OpenAI-compatible Base URL setting, and allowed new or resumed sessions to
   run from non-Git workspaces.

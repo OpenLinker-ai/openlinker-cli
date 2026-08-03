@@ -63,7 +63,7 @@ func TestExecuteSendsCredentialAndLeaseIdentityOverUDS(t *testing.T) {
 		t.Fatalf("observation = %#v", observation)
 	}
 	request := <-requests
-	if request.Identity != identity ||
+	if !browserprotocol.SameIdentity(request.Identity, identity) ||
 		request.ChannelCredential != strings.Repeat("c", 32) ||
 		request.ContractID != browserprotocol.ContractID ||
 		request.Action.Kind != browserprotocol.ActionScreenshot {

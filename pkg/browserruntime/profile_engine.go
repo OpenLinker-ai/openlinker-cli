@@ -106,7 +106,7 @@ func (engine *ProfileEngine) Execute(
 	if failure := identity.Validate(); failure != nil {
 		return browserprotocol.Observation{}, failure
 	}
-	if failure := action.Validate(); failure != nil {
+	if failure := action.ValidateForPolicy(identity.BrowserInteractionPolicy); failure != nil {
 		return browserprotocol.Observation{}, failure
 	}
 	engine.mu.Lock()

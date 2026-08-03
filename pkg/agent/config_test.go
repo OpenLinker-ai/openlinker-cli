@@ -93,6 +93,7 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 		"OPENLINKER_CODEX_SANDBOX":                   "workspace-write",
 		"OPENLINKER_CODEX_APPROVAL":                  "never",
 		"OPENLINKER_AGENT_EXECUTION_PROFILE":         "browser",
+		"OPENLINKER_BROWSER_INTERACTION_POLICY":      "full",
 		"OPENLINKER_BROWSER_CLIENT_MODE":             "auto",
 		"OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE":   "native",
 		"OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH":      "/opt/openlinker/agent-runtime-plugin/codex",
@@ -108,7 +109,8 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 		config.Model != "gpt-test" || config.CodexBaseURL != "https://router.example/v1" || !config.WebSearch || config.CodexSandbox != "workspace-write" {
 		t.Fatalf("environment overrides = %#v", config)
 	}
-	if config.ExecutionProfile != "browser" || config.BrowserSocket != "/browser/control.sock" ||
+	if config.ExecutionProfile != "browser" || config.BrowserInteractionPolicy != "full" ||
+		config.BrowserSocket != "/browser/control.sock" ||
 		config.BrowserCredentialFile != "/browser/channel" || config.BrowserLeaseRoot != "/browser/leases" ||
 		config.BrowserBrokerRoot != "/browser/broker" ||
 		config.BrowserClientMode != "auto" ||
@@ -131,6 +133,10 @@ func TestBrowserExecutionProfileIsExplicitAndSingleCapacity(t *testing.T) {
 	if err := validateNonSecretConfig(config); err != nil {
 		t.Fatal(err)
 	}
+	config.BrowserInteractionPolicy = "full"
+	if err := validateNonSecretConfig(config); err != nil {
+		t.Fatalf("full Browser interaction policy was rejected: %v", err)
+	}
 	config.BrowserClientMode = "auto"
 	if err := validateNonSecretConfig(config); err != nil {
 		t.Fatalf("persisted Browser auto mode was rejected: %v", err)
@@ -152,6 +158,11 @@ func TestBrowserExecutionProfileIsExplicitAndSingleCapacity(t *testing.T) {
 	config.BrowserSocket = "/browser/control.sock"
 	if err := validateNonSecretConfig(config); err != nil {
 		t.Fatalf("ordinary Agent rejected unused Browser config: %v", err)
+	}
+	config.BrowserInteractionPolicy = "full"
+	if err := validateNonSecretConfig(config); err == nil ||
+		!strings.Contains(err.Error(), "standard execution profile") {
+		t.Fatalf("ordinary Agent accepted full Browser policy: %v", err)
 	}
 }
 
@@ -249,19 +260,25 @@ func TestAgentModeLockIsExclusiveAndReusable(t *testing.T) {
 }
 
 func TestRuntimeOptionalFeaturesOnlyAdvertiseBrowserProfile(t *testing.T) {
-	if features := runtimeOptionalFeatures("standard", true); features != nil {
+	if features := runtimeOptionalFeatures("standard", "restricted", true); features != nil {
 		t.Fatalf("standard Runtime features = %#v", features)
 	}
-	features := runtimeOptionalFeatures("browser", false)
+	features := runtimeOptionalFeatures("browser", "restricted", false)
 	if len(features) != 1 ||
 		features[0] != browserExecutionProfileFeature {
 		t.Fatalf("Browser Runtime features without Viewer = %#v", features)
 	}
-	features = runtimeOptionalFeatures("browser", true)
+	features = runtimeOptionalFeatures("browser", "restricted", true)
 	if len(features) != 2 ||
 		features[0] != browserExecutionProfileFeature ||
 		features[1] != browserHumanControlFeature {
 		t.Fatalf("browser Runtime features = %#v", features)
+	}
+	features = runtimeOptionalFeatures("browser", "full", false)
+	if len(features) != 2 ||
+		features[0] != browserExecutionProfileFeature ||
+		features[1] != browserFullInteractionFeature {
+		t.Fatalf("full Browser Runtime features = %#v", features)
 	}
 }
 

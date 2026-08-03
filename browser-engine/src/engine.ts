@@ -6,7 +6,9 @@ import {
   errors as playwrightErrors,
   type BrowserContext,
   type ElementHandle,
+  type Frame,
   type Page,
+  type Request as PlaywrightRequest,
   type WebSocketRoute,
 } from "playwright-core";
 
@@ -30,6 +32,7 @@ import {
   type ObservationMode,
   type TargetCategory,
   type Controller,
+  canonicalHTTPSOrigin,
   isPublicHTTPURL,
   success,
   truncateUTF8,
@@ -69,6 +72,8 @@ const MAX_VIEWER_FRAME_BYTES = 1024 * 1024;
 const MAX_STATE_TEXT_BYTES = 256 * 1024;
 const MAX_TYPE_VALUE_BYTES = 16 * 1024;
 const MAX_PAGES = 4;
+const MAX_TRACKED_MUTATION_REQUESTS_PER_ACTION = 32;
+const MUTATION_RESPONSE_SETTLE_MS = 2_000;
 const VIEWPORT = {
   width: BROWSER_VIEWPORT_WIDTH,
   height: BROWSER_VIEWPORT_HEIGHT,
@@ -77,10 +82,22 @@ type GatewayHealthProbe = (timeout: number) => Promise<boolean>;
 type DocumentTrackerFactory = (
   page: Page,
 ) => Promise<DocumentGenerationTracker>;
+type TrackedMutationRequest = {
+  sequence: number;
+  outcome: "pending" | "finished" | "failed";
+  settled: Promise<void>;
+  resolve: () => void;
+};
 export type ControlState = {
   controller: Controller;
   attachmentKey: string;
   pageWebSockets: Set<WebSocketRoute>;
+  interactionPolicy: "restricted" | "full";
+  mutationOrigins: Set<string>;
+  mutationBlockSerial: number;
+  blockedMutationRequests: number;
+  actionInFlight: boolean;
+  frameOrigins: () => string[];
 };
 
 const MAX_HUMAN_PAGE_WEBSOCKETS = 64;
@@ -125,6 +142,14 @@ export class BrowserEngine {
   private suspectedDocumentGeneration: number | undefined;
   private suspectedSticky = false;
   private readonly controlState: ControlState;
+  private mutationRequestSequence = 0;
+  private mutationCaptureStart: number | undefined;
+  private mutationTrackingOverflow = false;
+  private freshObservationRequired = false;
+  private readonly trackedMutationRequests = new Map<
+    PlaywrightRequest,
+    TrackedMutationRequest
+  >();
 
   private constructor(
     context: BrowserContext,
@@ -177,16 +202,23 @@ export class BrowserEngine {
       controller: "agent",
       attachmentKey: "",
       pageWebSockets: new Set(),
+      interactionPolicy: "restricted",
+      mutationOrigins: new Set(),
+      mutationBlockSerial: 0,
+      blockedMutationRequests: 0,
+      actionInFlight: false,
+      frameOrigins: () =>
+        context
+          .pages()
+          .flatMap((candidatePage) =>
+            candidatePage.frames().map((frame) => frame.url()),
+          ),
     };
     await context.route("**/*", async (route) => {
-      if (
-        controlState.controller !== "human" &&
-        !allowsPageRequestMethod(route.request().method())
-      ) {
-        await route.abort("blockedbyclient");
-        return;
-      }
-      await route.continue();
+      await routePageRequest(controlState, route.request(), {
+        abort: () => route.abort("blockedbyclient"),
+        continue: () => route.continue(),
+      });
     });
     await context.routeWebSocket("**/*", async (webSocket) => {
       await routePageWebSocket(controlState, webSocket);
@@ -230,9 +262,66 @@ export class BrowserEngine {
     try {
       const timeout = remainingTimeout(request.deadline);
       await this.bindSession(request, timeout);
+      this.admitMutationRecoveryAction(request.action);
       this.refreshSuspectedSticky();
       this.admitOriginBudget(request);
-      const effect = await this.executeAction(request.action, timeout, request);
+      const mutationSerial = this.controlState.mutationBlockSerial;
+      const mutationCaptureStart = this.beginMutationCapture(request);
+      this.controlState.actionInFlight = true;
+      let effect: ActionEffect | undefined;
+      try {
+        effect = await this.executeAction(request.action, timeout, request);
+        if (this.controlState.mutationBlockSerial !== mutationSerial) {
+          throw this.mutationOriginBlocked(request, true);
+        }
+        await this.awaitMutationOutcomes(
+          mutationCaptureStart,
+          request.deadline,
+        );
+      } catch (error) {
+        if (
+          error instanceof EngineActionError &&
+          mutationCaptureStart !== undefined &&
+          this.mutationRequestSequence > mutationCaptureStart
+        ) {
+          error = new EngineActionError(
+            error.code,
+            error.message,
+            error.recoverable,
+            error.actionIndex,
+            {
+              ...error.details,
+              mutation_requests_observed: Math.min(
+                MAX_TRACKED_MUTATION_REQUESTS_PER_ACTION,
+                this.mutationRequestSequence - mutationCaptureStart,
+              ),
+            },
+          );
+        }
+        if (
+          this.controlState.mutationBlockSerial !== mutationSerial &&
+          !(
+            error instanceof EngineActionError &&
+            error.code === "BROWSER_MUTATION_ORIGIN_BLOCKED"
+          )
+        ) {
+          throw this.mutationOriginBlocked(request, true);
+        }
+        throw error;
+      } finally {
+        this.controlState.actionInFlight = false;
+        this.endMutationCapture(mutationCaptureStart);
+      }
+      if (this.controlState.mutationBlockSerial !== mutationSerial) {
+        throw this.mutationOriginBlocked(request, true);
+      }
+      const mutationRequestsObserved =
+        mutationCaptureStart === undefined
+          ? 0
+          : Math.min(
+              MAX_TRACKED_MUTATION_REQUESTS_PER_ACTION,
+              this.mutationRequestSequence - mutationCaptureStart,
+            );
       this.assertGatewayAllowed(this.page);
       assertAllowedPageURL(this.page.url());
       await this.classifyActionOutcome(request);
@@ -254,6 +343,16 @@ export class BrowserEngine {
         observation.classifier_rules_version = CLASSIFIER_RULES_VERSION;
         observation.challenge_release_unavailable = true;
       }
+      if (this.controlState.blockedMutationRequests > 0) {
+        observation.blocked_mutation_requests = Math.min(
+          1024,
+          this.controlState.blockedMutationRequests,
+        );
+        this.controlState.blockedMutationRequests = 0;
+      }
+      if (mutationRequestsObserved > 0) {
+        observation.mutation_requests_observed = mutationRequestsObserved;
+      }
       this.assertGatewayAllowed(this.page);
       assertAllowedPageURL(this.page.url());
       if (request.action.kind !== "preflight") {
@@ -267,6 +366,9 @@ export class BrowserEngine {
       if (request.action.kind === "checkpoint") {
         await this.originBudget?.checkpoint();
       }
+      if (request.action.kind === "screenshot") {
+        this.freshObservationRequired = false;
+      }
       return success(request.action_id, observation);
     } catch (error) {
       if (error instanceof PageContinuationCorruptError) {
@@ -278,6 +380,9 @@ export class BrowserEngine {
         );
       }
       if (error instanceof EngineActionError) {
+        if (error.code === "BROWSER_MUTATION_OUTCOME_UNKNOWN") {
+          this.freshObservationRequired = true;
+        }
         this.refreshSuspectedSticky();
         return failure(
           request.action_id,
@@ -450,6 +555,15 @@ export class BrowserEngine {
       return;
     }
     if (this.originBudget !== undefined) {
+      if (
+        request.action.kind === "batch" &&
+        request.action.actions?.some(isTraversalAction)
+      ) {
+        // A traversing batch changes its effective origin while it runs. Each
+        // nested action is charged immediately before dispatch instead of
+        // attributing the entire batch to a stale or empty starting origin.
+        return;
+      }
       const actionCount =
         request.action.kind === "batch"
           ? (request.action.actions?.length ?? 1)
@@ -478,6 +592,21 @@ export class BrowserEngine {
       request,
       origin,
       request.action.kind === "navigate",
+    );
+  }
+
+  private admitMutationRecoveryAction(action: BrowserAction): void {
+    if (
+      !this.freshObservationRequired ||
+      action.kind === "screenshot" ||
+      action.kind === "checkpoint"
+    ) {
+      return;
+    }
+    throw new EngineActionError(
+      "BROWSER_ACTION_REJECTED",
+      "A fresh Browser observation is required after an uncertain mutation",
+      false,
     );
   }
 
@@ -511,6 +640,43 @@ export class BrowserEngine {
     if (navigationDelay !== undefined) {
       throw originRateLimited(navigationDelay);
     }
+  }
+
+  private admitNestedOriginBudget(
+    request: EngineRequest,
+    action: BrowserAction,
+    traversingBatch: boolean,
+  ): void {
+    const origin =
+      action.kind === "navigate"
+        ? safeOrigin(action.url ?? "")
+        : safeOrigin(this.page.url());
+    if (origin === "") {
+      return;
+    }
+    if (traversingBatch && this.originBudget !== undefined) {
+      const actionDelay = this.originBudget.chargeAction(
+        request.identity,
+        origin,
+      );
+      if (actionDelay !== undefined) {
+        throw originRateLimited(actionDelay);
+      }
+      const retryDelay = this.originBudget.retryDelay(
+        request.identity,
+        origin,
+      );
+      if (retryDelay !== undefined) {
+        throw originRateLimited(retryDelay);
+      }
+    }
+    if (!isTraversalAction(action)) {
+      return;
+    }
+    // Each nested traversal also consumes the independent navigation window.
+    // Non-traversing batches were charged atomically at admission; traversing
+    // batches were charged per nested effective origin above.
+    this.admitNavigation(request, origin, action.kind === "navigate");
   }
 
   private async classifyActionOutcome(request: EngineRequest): Promise<void> {
@@ -633,6 +799,41 @@ export class BrowserEngine {
     }
   }
 
+  private mutationOriginBlocked(
+    request: EngineRequest,
+    freshObservationRequired: boolean,
+    observedOrigin = canonicalDocumentOrigin(this.page.mainFrame()),
+  ): EngineActionError {
+    return new EngineActionError(
+      "BROWSER_MUTATION_ORIGIN_BLOCKED",
+      "Browser mutation origin is outside the Owner-authorized scope",
+      false,
+      undefined,
+      {
+        retry_same_action: false,
+        attachment_usable: true,
+        fresh_observation_required: freshObservationRequired,
+        ...(observedOrigin === "" ? {} : { observed_origin: observedOrigin }),
+        browser_mutation_origins: [
+          ...request.identity.browser_mutation_origins,
+        ],
+      },
+    );
+  }
+
+  private requireMutationOrigin(
+    request: EngineRequest,
+    origin: string,
+  ): void {
+    if (
+      request.identity.browser_interaction_policy !== "full" ||
+      origin === "" ||
+      !request.identity.browser_mutation_origins.includes(origin)
+    ) {
+      throw this.mutationOriginBlocked(request, false, origin);
+    }
+  }
+
   private async establishDocumentTracker(page: Page): Promise<void> {
     await this.documentTracker?.detach();
     this.documentTracker = undefined;
@@ -666,7 +867,25 @@ export class BrowserEngine {
     page.on("download", (download) => {
       void download.cancel();
     });
+    page.on("request", (request) => {
+      this.trackMutationRequest(request);
+    });
+    page.on("requestfinished", (request) => {
+      this.finishMutationRequest(request, "finished");
+    });
+    page.on("requestfailed", (request) => {
+      this.finishMutationRequest(request, "failed");
+    });
     page.on("response", (response) => {
+      if (response.status() >= 500) {
+        this.failMutationRequest(response.request());
+      } else {
+        // Receiving a non-server-error response establishes the transport
+        // outcome. Do not wait for requestfinished: that event also waits for
+        // the response body to drain and may be delayed by an intermediary
+        // after the server has already acknowledged the mutation.
+        this.finishMutationRequest(response.request(), "finished");
+      }
       if (
         response.request().isNavigationRequest() &&
         response.frame() === page.mainFrame()
@@ -691,6 +910,122 @@ export class BrowserEngine {
     });
   }
 
+  private beginMutationCapture(request: EngineRequest): number | undefined {
+    if (request.identity.browser_interaction_policy !== "full") {
+      return undefined;
+    }
+    const start = this.mutationRequestSequence;
+    this.mutationCaptureStart = start;
+    this.mutationTrackingOverflow = false;
+    return start;
+  }
+
+  private trackMutationRequest(request: PlaywrightRequest): void {
+    if (
+      !this.controlState.actionInFlight ||
+      this.controlState.interactionPolicy !== "full" ||
+      this.mutationCaptureStart === undefined ||
+      !["POST", "PUT", "PATCH", "DELETE"].includes(
+        request.method().toUpperCase(),
+      )
+    ) {
+      return;
+    }
+    const sequence = ++this.mutationRequestSequence;
+    if (
+      sequence - this.mutationCaptureStart >
+      MAX_TRACKED_MUTATION_REQUESTS_PER_ACTION
+    ) {
+      this.mutationTrackingOverflow = true;
+      return;
+    }
+    let resolve: () => void = () => {};
+    const settled = new Promise<void>((done) => {
+      resolve = done;
+    });
+    this.trackedMutationRequests.set(request, {
+      sequence,
+      outcome: "pending",
+      settled,
+      resolve,
+    });
+  }
+
+  private finishMutationRequest(
+    request: PlaywrightRequest,
+    outcome: "finished" | "failed",
+  ): void {
+    const tracked = this.trackedMutationRequests.get(request);
+    if (tracked === undefined || tracked.outcome !== "pending") {
+      return;
+    }
+    tracked.outcome = outcome;
+    tracked.resolve();
+  }
+
+  private failMutationRequest(request: PlaywrightRequest): void {
+    this.finishMutationRequest(request, "failed");
+  }
+
+  private async awaitMutationOutcomes(
+    captureStart: number | undefined,
+    deadline: string,
+  ): Promise<void> {
+    if (captureStart === undefined) {
+      return;
+    }
+    if (this.mutationTrackingOverflow) {
+      throw mutationOutcomeUnknown("page_mutation_tracking_overflow");
+    }
+    const tracked = [...this.trackedMutationRequests.values()].filter(
+      (request) => request.sequence > captureStart,
+    );
+    if (tracked.length === 0) {
+      return;
+    }
+    const settleDeadline = Math.min(
+      Date.parse(deadline),
+      Date.now() + MUTATION_RESPONSE_SETTLE_MS,
+    );
+    while (tracked.some((request) => request.outcome === "pending")) {
+      const remaining = settleDeadline - Date.now();
+      if (remaining <= 0) {
+        throw mutationOutcomeUnknown("page_mutation_response_unobserved");
+      }
+      await Promise.race([
+        ...tracked
+          .filter((request) => request.outcome === "pending")
+          .map((request) => request.settled),
+        delay(Math.min(remaining, 25)),
+      ]);
+      if (this.mutationTrackingOverflow) {
+        throw mutationOutcomeUnknown("page_mutation_tracking_overflow");
+      }
+    }
+    if (tracked.some((request) => request.outcome === "failed")) {
+      throw mutationOutcomeUnknown("page_mutation_request_failed");
+    }
+  }
+
+  private endMutationCapture(captureStart: number | undefined): void {
+    if (captureStart === undefined) {
+      return;
+    }
+    this.discardTrackedMutationRequestsAfter(captureStart);
+    if (this.mutationCaptureStart === captureStart) {
+      this.mutationCaptureStart = undefined;
+      this.mutationTrackingOverflow = false;
+    }
+  }
+
+  private discardTrackedMutationRequestsAfter(captureStart: number): void {
+    for (const [request, tracked] of this.trackedMutationRequests) {
+      if (tracked.sequence > captureStart) {
+        this.trackedMutationRequests.delete(request);
+      }
+    }
+  }
+
   private assertGatewayAllowed(page: Page): void {
     if (!this.blockedNavigationPages.has(page)) {
       return;
@@ -711,7 +1046,17 @@ export class BrowserEngine {
     const attachmentKey = [
       request.identity.attachment_id,
       request.identity.control_epoch,
+      request.identity.browser_interaction_policy,
+      request.identity.browser_interaction_policy_generation,
+      request.identity.browser_mutation_origins_sha256,
     ].join("\u0000");
+    this.controlState.interactionPolicy =
+      request.identity.browser_interaction_policy;
+    this.controlState.mutationOrigins = new Set(
+      request.identity.browser_mutation_origins,
+    );
+    this.controlState.frameOrigins = () =>
+      this.page.frames().map((frame) => frame.url());
     if (
       this.boundSessionKey === sessionKey &&
       this.boundAttachmentKey === attachmentKey
@@ -725,6 +1070,7 @@ export class BrowserEngine {
       this.boundAttachmentKey = attachmentKey;
       return;
     }
+    this.freshObservationRequired = false;
     this.boundSessionKey = "";
     this.boundAttachmentKey = "";
     const pages = this.context.pages().filter((page) => !page.isClosed());
@@ -829,9 +1175,12 @@ export class BrowserEngine {
               targetCategory: "text_input",
             };
           }
+          const full = request.identity.browser_interaction_policy === "full";
+          const topOrigin = canonicalDocumentOrigin(page.mainFrame());
+          const targetOrigin = target.origin;
           if (
             target.handle === undefined ||
-            blocksHighImpactActivation(target.metadata)
+            (!full && blocksHighImpactActivation(target.metadata))
           ) {
             const blocked = await this.observe("semantic", timeout);
             throw new EngineActionError(
@@ -846,19 +1195,41 @@ export class BrowserEngine {
               },
             );
           }
+          if (
+            full &&
+            (topOrigin === "" || targetOrigin === "" ||
+              !request.identity.browser_mutation_origins.includes(topOrigin) ||
+              !request.identity.browser_mutation_origins.includes(targetOrigin))
+          ) {
+            if (blocksHighImpactActivation(target.metadata)) {
+              throw this.mutationOriginBlocked(request, false, targetOrigin);
+            }
+          }
           this.denySuspectedMutation();
           this.admitNavigation(
             request,
             safeOrigin(target.metadata.href),
             true,
           );
-          await this.actAndAwaitNavigation(
-            () => target.handle!.click({ timeout }),
-            timeout,
-          );
+          if (full) {
+            await target.handle.click({ timeout, trial: true });
+            try {
+              await this.actAndAwaitNavigation(
+                () => target.handle!.click({ timeout }),
+                timeout,
+              );
+            } catch {
+              throw mutationOutcomeUnknown("click_dispatch_uncertain");
+            }
+          } else {
+            await this.actAndAwaitNavigation(
+              () => target.handle!.click({ timeout }),
+              timeout,
+            );
+          }
           return {
             clickEffect: "activated",
-            targetCategory: "link",
+            targetCategory: activationTargetCategory(target.metadata),
           };
         } finally {
           await target.handle?.dispose();
@@ -867,10 +1238,22 @@ export class BrowserEngine {
       case "type_non_secret": {
         const target = await activeInteractiveHandle(page);
         try {
-          if (
-            target.handle === undefined ||
-            blocksNonSecretTyping(target.metadata)
-          ) {
+          if (target.handle === undefined) {
+            throw new EngineActionError(
+              "BROWSER_ACTION_REJECTED",
+              "active text control is no longer actionable",
+              false,
+            );
+          }
+          const full = request.identity.browser_interaction_policy === "full";
+          if (full) {
+            this.requireMutationOrigin(
+              request,
+              canonicalDocumentOrigin(page.mainFrame()),
+            );
+            this.requireMutationOrigin(request, target.origin);
+          }
+          if (blocksNonSecretTyping(target.metadata)) {
             throw new EngineActionError(
               "BROWSER_USER_ACTION_REQUIRED",
               "credential fields require a later human-control phase",
@@ -914,7 +1297,22 @@ export class BrowserEngine {
               false,
             );
           }
-          await target.handle.fill(result, { timeout });
+          if (!full) {
+            await target.handle.fill(result, { timeout });
+            return;
+          }
+          if (Buffer.byteLength(action.text ?? "", "utf8") > 2 * 1024) {
+            throw new EngineActionError(
+              "BROWSER_ACTION_REJECTED",
+              "sequential text exceeds the full-policy input limit",
+              false,
+            );
+          }
+          await sequentialTypeIntoPinnedHandle(
+            page,
+            target.handle,
+            action.text ?? "",
+          );
           return;
         } finally {
           await target.handle?.dispose();
@@ -925,21 +1323,60 @@ export class BrowserEngine {
         return;
       case "keypress":
         {
-          const metadata = await activeInteractiveMetadata(page);
-          if (blocksKeypress(metadata, action.key ?? "")) {
-            throw new EngineActionError(
-              "BROWSER_HIGH_IMPACT_ACTION_BLOCKED",
-              "Phase 1 blocks this browser key action",
-              false,
+          const target = await activeInteractiveHandle(page);
+          try {
+            const blockedByRestricted = blocksKeypress(
+              target.metadata,
+              action.key ?? "",
             );
-          }
-          this.denySuspectedMutation();
-          if (action.key === "Enter") {
-            this.admitNavigation(
-              request,
-              safeOrigin(metadata.formAction),
-              true,
-            );
+            const full = request.identity.browser_interaction_policy === "full";
+            if (!full && blockedByRestricted) {
+              throw new EngineActionError(
+                "BROWSER_HIGH_IMPACT_ACTION_BLOCKED",
+                "Phase 1 blocks this browser key action",
+                false,
+              );
+            }
+            if (full && blockedByRestricted) {
+              this.requireMutationOrigin(
+                request,
+                canonicalDocumentOrigin(page.mainFrame()),
+              );
+              this.requireMutationOrigin(request, target.origin);
+            }
+            this.denySuspectedMutation();
+            if (action.key === "Enter") {
+              this.admitNavigation(
+                request,
+                safeOrigin(target.metadata.formAction),
+                true,
+              );
+            }
+            if (full && blockedByRestricted && target.handle !== undefined) {
+              if (!(await pinnedHandleOwnsFocus(target.handle))) {
+                throw new EngineActionError(
+                  "BROWSER_ACTION_REJECTED",
+                  "active control changed before key dispatch",
+                  false,
+                );
+              }
+              try {
+                await this.actAndAwaitNavigation(
+                  () => page.keyboard.press(action.key ?? ""),
+                  timeout,
+                );
+              } catch {
+                throw mutationOutcomeUnknown("keypress_dispatch_uncertain");
+              }
+              if (!(await pinnedHandleOwnsFocus(target.handle))) {
+                throw mutationOutcomeUnknown(
+                  "keypress_target_changed_after_dispatch",
+                );
+              }
+              return;
+            }
+          } finally {
+            await target.handle?.dispose();
           }
         }
         await this.actAndAwaitNavigation(
@@ -948,11 +1385,40 @@ export class BrowserEngine {
         );
         return;
       case "select": {
-        throw new EngineActionError(
-          "BROWSER_USER_ACTION_REQUIRED",
-          "Phase 1 does not allow select controls",
-          false,
-        );
+        if (request.identity.browser_interaction_policy !== "full") {
+            throw new EngineActionError(
+              "BROWSER_USER_ACTION_REQUIRED",
+              "Phase 1 does not allow select controls",
+              false,
+            );
+        }
+        const target = await activeInteractiveHandle(page);
+        try {
+          if (
+            target.handle === undefined ||
+            target.metadata.tagName.toLowerCase() !== "select"
+          ) {
+            throw new EngineActionError(
+              "BROWSER_ACTION_REJECTED",
+              "active control is not a supported select",
+              false,
+            );
+          }
+          this.requireMutationOrigin(
+            request,
+            canonicalDocumentOrigin(page.mainFrame()),
+          );
+          this.requireMutationOrigin(request, target.origin);
+          this.denySuspectedMutation();
+          try {
+            await target.handle.selectOption(action.value ?? "", { timeout });
+          } catch {
+            throw mutationOutcomeUnknown("select_dispatch_uncertain");
+          }
+          return;
+        } finally {
+          await target.handle?.dispose();
+        }
       }
       case "wait":
         await page.waitForTimeout(action.duration_ms ?? 1);
@@ -979,10 +1445,34 @@ export class BrowserEngine {
           waitUntil: "domcontentloaded",
         });
         return;
-      case "batch":
+      case "batch": {
+        const traversingBatch = (action.actions ?? []).some(
+          isTraversalAction,
+        );
         for (const [index, nested] of (action.actions ?? []).entries()) {
+          const mutationSerial = this.controlState.mutationBlockSerial;
+          const nestedMutationStart = this.mutationRequestSequence;
           try {
+            this.admitNestedOriginBudget(request, nested, traversingBatch);
             await this.executeAction(nested, timeout, request);
+            if (this.controlState.mutationBlockSerial !== mutationSerial) {
+              const blocked = this.mutationOriginBlocked(request, true);
+              throw new EngineActionError(
+                blocked.code,
+                blocked.message,
+                blocked.recoverable,
+                index,
+                { ...blocked.details, completed_actions: index },
+              );
+            }
+            await this.awaitMutationOutcomes(
+              nestedMutationStart,
+              request.deadline,
+            );
+            // A batch must not defer navigation/challenge classification until
+            // its final action. Otherwise a 403, 429, or challenge reached by
+            // one nested action could still be followed by later dispatches.
+            await this.classifyActionOutcome(request);
           } catch (error) {
             if (error instanceof EngineActionError) {
               throw new EngineActionError(
@@ -990,7 +1480,7 @@ export class BrowserEngine {
                 error.message,
                 error.recoverable,
                 index,
-                error.details,
+                { ...error.details, completed_actions: index },
               );
             }
             throw new EngineActionError(
@@ -1000,10 +1490,14 @@ export class BrowserEngine {
               ),
               true,
               index,
+              { completed_actions: index },
             );
+          } finally {
+            this.discardTrackedMutationRequestsAfter(nestedMutationStart);
           }
         }
         return;
+      }
     }
   }
 
@@ -1147,17 +1641,116 @@ export async function routePageWebSocket(
   webSocket: WebSocketRoute,
 ): Promise<void> {
   if (
-    controlState.controller === "human" &&
+    (controlState.controller === "human" ||
+      (controlState.controller === "agent" &&
+        controlState.interactionPolicy === "full" &&
+        webSocketMutationAllowed(controlState, webSocket.url()))) &&
     controlState.pageWebSockets.size < MAX_HUMAN_PAGE_WEBSOCKETS
   ) {
     controlState.pageWebSockets.add(webSocket);
     webSocket.connectToServer();
     return;
   }
+  if (controlState.controller === "agent" &&
+      controlState.interactionPolicy === "full") {
+    recordMutationBlock(controlState);
+  }
   await webSocket.close({
     code: 1008,
     reason: "Agent control blocks page WebSocket traffic",
   });
+}
+
+export async function routePageRequest(
+  controlState: ControlState,
+  request: PlaywrightRequest,
+  operations: {
+    abort: () => Promise<unknown>;
+    continue: () => Promise<unknown>;
+  },
+): Promise<void> {
+  const method = request.method().toUpperCase();
+  if (controlState.controller === "human" || allowsPageRequestMethod(method)) {
+    await operations.continue();
+    return;
+  }
+  if (
+    controlState.controller === "agent" &&
+    controlState.interactionPolicy === "full" &&
+    ["POST", "PUT", "PATCH", "DELETE"].includes(method) &&
+    pageRequestMutationAllowed(controlState, request)
+  ) {
+    await operations.continue();
+    return;
+  }
+  if (
+    controlState.controller === "agent" &&
+    controlState.interactionPolicy === "full"
+  ) {
+    recordMutationBlock(controlState);
+  }
+  await operations.abort();
+}
+
+function pageRequestMutationAllowed(
+  controlState: ControlState,
+  request: PlaywrightRequest,
+): boolean {
+  try {
+    const frame = request.frame();
+    const source = canonicalDocumentOrigin(frame);
+    const top = canonicalDocumentOrigin(frame.page().mainFrame());
+    const destination = canonicalHTTPSOrigin(new URL(request.url()).origin);
+    return [top, source, destination].every(
+      (origin) => origin !== "" && controlState.mutationOrigins.has(origin),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function webSocketMutationAllowed(
+  controlState: ControlState,
+  rawURL: string,
+): boolean {
+  try {
+    const url = new URL(rawURL);
+    if (url.protocol !== "wss:") {
+      return false;
+    }
+    const destination = canonicalHTTPSOrigin(`https://${url.host}`);
+    const frameOrigins = controlState.frameOrigins().map((origin) =>
+      canonicalHTTPSOrigin(safeOrigin(origin)),
+    );
+    return (
+      destination !== "" &&
+      controlState.mutationOrigins.has(destination) &&
+      frameOrigins.length > 0 &&
+      frameOrigins.every(
+        (origin) => origin !== "" && controlState.mutationOrigins.has(origin),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function recordMutationBlock(controlState: ControlState): void {
+  controlState.mutationBlockSerial++;
+  if (!controlState.actionInFlight) {
+    controlState.blockedMutationRequests = Math.min(
+      1024,
+      controlState.blockedMutationRequests + 1,
+    );
+  }
+}
+
+function isTraversalAction(action: BrowserAction): boolean {
+  return (
+    action.kind === "navigate" ||
+    action.kind === "back" ||
+    action.kind === "forward"
+  );
 }
 
 export async function restoreAgentPagePolicy(
@@ -1185,7 +1778,7 @@ interface ExtractionResult {
 
 interface ActionEffect {
   clickEffect: ClickEffect;
-  targetCategory: "link" | "text_input";
+  targetCategory: "link" | "text_input" | "button" | "custom" | "other";
 }
 
 interface MainDocumentResponse {
@@ -1233,6 +1826,89 @@ class EngineActionError extends Error {
   }
 }
 
+function mutationOutcomeUnknown(
+  reason: string,
+  details: Pick<
+    EngineFailure,
+    "attempted_units" | "undispatched_units"
+  > = {},
+): EngineActionError {
+  return new EngineActionError(
+    "BROWSER_MUTATION_OUTCOME_UNKNOWN",
+    "Browser mutation outcome could not be established",
+    false,
+    undefined,
+    {
+      retry_same_action: false,
+      attachment_usable: true,
+      fresh_observation_required: true,
+      mutation_outcome_reason: reason,
+      ...details,
+    },
+  );
+}
+
+function delay(durationMS: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(1, durationMS)));
+}
+
+async function pinnedHandleOwnsFocus(
+  handle: ElementHandle<HTMLElement>,
+): Promise<boolean> {
+  try {
+    return await handle.evaluate((element) => {
+      const formControl = element as HTMLInputElement | HTMLTextAreaElement;
+      return (
+        element.isConnected &&
+        element.ownerDocument.activeElement === element &&
+        !("disabled" in formControl && formControl.disabled) &&
+        !("readOnly" in formControl && formControl.readOnly)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function sequentialTypeIntoPinnedHandle(
+  page: Page,
+  handle: ElementHandle<HTMLElement>,
+  text: string,
+): Promise<void> {
+  const units = Array.from(text);
+  let attempted = 0;
+  for (const unit of units) {
+    if (!(await pinnedHandleOwnsFocus(handle))) {
+      if (attempted === 0) {
+        throw new EngineActionError(
+          "BROWSER_ACTION_REJECTED",
+          "active text control changed before text dispatch",
+          false,
+        );
+      }
+      throw mutationOutcomeUnknown("text_entry_target_changed_before_unit", {
+        attempted_units: attempted,
+        undispatched_units: units.length - attempted,
+      });
+    }
+    try {
+      await page.keyboard.type(unit);
+    } catch {
+      throw mutationOutcomeUnknown("text_entry_dispatch_uncertain", {
+        attempted_units: attempted + 1,
+        undispatched_units: units.length - attempted - 1,
+      });
+    }
+    attempted++;
+    if (!(await pinnedHandleOwnsFocus(handle))) {
+      throw mutationOutcomeUnknown("text_entry_target_changed_after_unit", {
+        attempted_units: attempted,
+        undispatched_units: units.length - attempted,
+      });
+    }
+  }
+}
+
 type EngineErrorDetails = Partial<
   Pick<
     EngineFailure,
@@ -1245,6 +1921,16 @@ type EngineErrorDetails = Partial<
     | "consecutive_access_denials"
     | "origin_blocked_for_attachment"
     | "challenge_release_unavailable"
+    | "retry_same_action"
+    | "attachment_usable"
+    | "fresh_observation_required"
+    | "mutation_outcome_reason"
+    | "attempted_units"
+    | "undispatched_units"
+    | "completed_actions"
+    | "mutation_requests_observed"
+    | "observed_origin"
+    | "browser_mutation_origins"
   >
 >;
 
@@ -1364,6 +2050,7 @@ function assertAllowedPageURL(raw: string): void {
 interface InteractiveTarget {
   handle: ElementHandle<HTMLElement> | undefined;
   metadata: InteractiveMetadata;
+  origin: string;
 }
 
 async function interactiveHandleAt(
@@ -1371,40 +2058,87 @@ async function interactiveHandleAt(
   x: number,
   y: number,
 ): Promise<InteractiveTarget> {
-  const candidate = await page.evaluateHandle(
-    ({ pointX, pointY }) => {
-      const element = document.elementFromPoint(pointX, pointY);
-      const interactive = element?.closest(
+  let frame = page.mainFrame();
+  let pointX = x;
+  let pointY = y;
+  for (let depth = 0; depth < 8; depth++) {
+    const hitTest = ({ localX, localY }: { localX: number; localY: number }) => {
+      const hit = document.elementFromPoint(localX, localY);
+      const interactive = hit?.closest(
         "a,button,input,select,textarea,[role=button],[role=link]",
       );
-      return interactive instanceof HTMLElement ? interactive : null;
-    },
-    { pointX: x, pointY: y },
-  );
-  const element = candidate.asElement() as ElementHandle<HTMLElement> | null;
-  if (element === null) {
-    await candidate.dispose();
-    return { handle: undefined, metadata: emptyInteractiveMetadata() };
+      if (interactive instanceof HTMLElement) return interactive;
+      return hit instanceof HTMLIFrameElement ? hit : null;
+    };
+    const point = { localX: pointX, localY: pointY };
+    const candidate =
+      frame === page.mainFrame()
+        ? await page.evaluateHandle(hitTest, point)
+        : await frame.evaluateHandle(hitTest, point);
+    const element = candidate.asElement() as ElementHandle<HTMLElement> | null;
+    if (element === null) {
+      await candidate.dispose();
+      break;
+    }
+    const metadata = await metadataForHandle(element);
+    if (metadata.tagName.toLowerCase() !== "iframe") {
+      return {
+        handle: element,
+        metadata,
+        origin: canonicalDocumentOrigin(frame),
+      };
+    }
+    const bounds = await element.evaluate((iframe) => {
+      const rect = iframe.getBoundingClientRect();
+      return { left: rect.left, top: rect.top };
+    });
+    const child = await element.contentFrame();
+    await element.dispose();
+    if (child === null) break;
+    pointX -= bounds.left;
+    pointY -= bounds.top;
+    frame = child;
   }
   return {
-    handle: element,
-    metadata: await metadataForHandle(element),
+    handle: undefined,
+    metadata: emptyInteractiveMetadata(),
+    origin: "",
   };
 }
 
 async function activeInteractiveHandle(page: Page): Promise<InteractiveTarget> {
-  const candidate = await page.evaluateHandle(() => {
-    const active = document.activeElement;
-    return active instanceof HTMLElement ? active : null;
-  });
-  const element = candidate.asElement() as ElementHandle<HTMLElement> | null;
-  if (element === null) {
-    await candidate.dispose();
-    return { handle: undefined, metadata: emptyInteractiveMetadata() };
+  let frame = page.mainFrame();
+  for (let depth = 0; depth < 8; depth++) {
+    const activeElement = () => {
+      const active = document.activeElement;
+      return active instanceof HTMLElement ? active : null;
+    };
+    const candidate =
+      frame === page.mainFrame()
+        ? await page.evaluateHandle(activeElement)
+        : await frame.evaluateHandle(activeElement);
+    const element = candidate.asElement() as ElementHandle<HTMLElement> | null;
+    if (element === null) {
+      await candidate.dispose();
+      break;
+    }
+    const metadata = await metadataForHandle(element);
+    if (metadata.tagName.toLowerCase() !== "iframe") {
+      return {
+        handle: element,
+        metadata,
+        origin: canonicalDocumentOrigin(frame),
+      };
+    }
+    const child = await element.contentFrame();
+    await element.dispose();
+    if (child === null) break;
+    frame = child;
   }
   return {
-    handle: element,
-    metadata: await metadataForHandle(element),
+    handle: undefined,
+    metadata: emptyInteractiveMetadata(),
+    origin: "",
   };
 }
 
@@ -1494,13 +2228,11 @@ function targetCategory(metadata: InteractiveMetadata): TargetCategory {
   return "other";
 }
 
-async function activeInteractiveMetadata(page: Page): Promise<InteractiveMetadata> {
-  const target = await activeInteractiveHandle(page);
-  try {
-    return target.metadata;
-  } finally {
-    await target.handle?.dispose();
-  }
+function activationTargetCategory(
+  metadata: InteractiveMetadata,
+): "link" | "text_input" | "button" | "custom" | "other" {
+  const category = targetCategory(metadata);
+  return category === "none" ? "other" : category;
 }
 
 function textDiff(
@@ -1562,6 +2294,13 @@ function safeOrigin(raw: string): string {
   } catch {
     return "";
   }
+}
+
+function canonicalDocumentOrigin(frame: Frame): string {
+  if (typeof frame.url !== "function") {
+    return "";
+  }
+  return canonicalHTTPSOrigin(safeOrigin(frame.url()));
 }
 
 function safeRuntimeMessage(message: string): string {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -24,6 +25,11 @@ function request(): Record<string, unknown> {
       attachment_id: "55555555-5555-4555-8555-555555555555",
       control_epoch: 1,
       controller: "agent",
+      browser_interaction_policy: "restricted",
+      browser_interaction_policy_generation: 1,
+      browser_mutation_origins: [],
+      browser_mutation_origins_sha256:
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     },
     action: {
       kind: "navigate",
@@ -40,6 +46,80 @@ test("strictly parses the closed engine request", () => {
   assert.equal(parsed.action.kind, "navigate");
   assert.equal(parsed.action.url, "https://example.com/path");
   assert.equal(parsed.action.observation, undefined);
+});
+
+test("full policy requires canonical origins and admits the v2 select shape", () => {
+  const value = request();
+  const identity = value.identity as Record<string, unknown>;
+  identity.browser_interaction_policy = "full";
+  identity.browser_mutation_origins = ["https://public.example"];
+  identity.browser_mutation_origins_sha256 =
+    "a91c0941e6d38c53ed130419dca7b8607a4961d70c78d55e752296600f3a9731";
+  value.action = { kind: "select", value: "option-a" };
+  assert.equal(
+    parseRequest(
+      JSON.stringify(value),
+      Date.parse("2029-12-31T23:59:30Z"),
+    ).action.kind,
+    "select",
+  );
+  value.action = { kind: "keypress", key: "Space" };
+  assert.equal(
+    parseRequest(
+      JSON.stringify(value),
+      Date.parse("2029-12-31T23:59:30Z"),
+    ).action.key,
+    "Space",
+  );
+  value.action = { kind: "select", value: "option-a" };
+  for (const origins of [
+    ["https://Public.example"],
+    ["http://public.example"],
+    ["https://public.example/path"],
+    ["https://*.public.example"],
+    ["https://public.example:0443"],
+    ["https://public.example:08443"],
+    ["https://127.1"],
+    ["https://2130706433"],
+    ["https://0x7f.1"],
+    ["https://0177.1"],
+    ["https://09.1"],
+    ["https://1.2.3.999"],
+    ["https://１２７。１"],
+    ["https://[::ffff:127.0.0.1]"],
+    ["https://[::ffff:7f00:1]"],
+  ]) {
+    identity.browser_mutation_origins = origins;
+    identity.browser_mutation_origins_sha256 = createHash("sha256")
+      .update(JSON.stringify(origins), "utf8")
+      .digest("hex");
+    assert.throws(
+      () =>
+        parseRequest(
+          JSON.stringify(value),
+          Date.parse("2029-12-31T23:59:30Z"),
+        ),
+      origins[0],
+    );
+  }
+  for (const origin of [
+    "https://xn--bcher-kva.example",
+    "https://public.example:8443",
+    "https://[2001:db8::1]",
+  ]) {
+    identity.browser_mutation_origins = [origin];
+    identity.browser_mutation_origins_sha256 = createHash("sha256")
+      .update(JSON.stringify([origin]), "utf8")
+      .digest("hex");
+    assert.doesNotThrow(
+      () =>
+        parseRequest(
+          JSON.stringify(value),
+          Date.parse("2029-12-31T23:59:30Z"),
+        ),
+      origin,
+    );
+  }
 });
 
 test("strictly separates human Viewer input from Agent actions", () => {

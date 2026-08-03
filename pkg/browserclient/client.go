@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	LeaseContractID          = "openlinker.browser.lease.v1"
+	LeaseContractID          = "openlinker.browser.lease.v2"
 	DefaultSocketPath        = "/browser-control/openlinker.browser.sock"
 	defaultTimeout           = 20 * time.Second
 	maxCredentialFileBytes   = 4096
@@ -62,6 +62,22 @@ func NewFromEnv(getenv func(string) string) (*Client, error) {
 	})
 }
 
+// LoadLeaseIdentityFromEnv reads only the owner-protected Browser lease. It is
+// used by the native MCP surface to publish the authority-matched tool schema
+// before the first Browser action, without opening the Browser channel.
+func LoadLeaseIdentityFromEnv(
+	getenv func(string) string,
+) (browserprotocol.Identity, error) {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	lease, err := loadLease(getenv("OPENLINKER_BROWSER_LEASE_FILE"), time.Now().UTC())
+	if err != nil {
+		return browserprotocol.Identity{}, err
+	}
+	return lease.Identity, nil
+}
+
 func New(config Config) (*Client, error) {
 	socketPath := filepath.Clean(strings.TrimSpace(config.SocketPath))
 	if !filepath.IsAbs(socketPath) {
@@ -82,24 +98,13 @@ func New(config Config) (*Client, error) {
 		strings.ContainsAny(channelCredential, "\r\n\t ") {
 		return nil, errors.New("Browser channel credential value is invalid")
 	}
-	leaseRaw, err := readOwnerOnlyFile(
-		config.LeaseFile,
-		maxLeaseFileBytes,
-		"Browser lease",
-	)
-	if err != nil {
-		return nil, err
-	}
-	var lease Lease
-	if err := decodeStrictJSON(leaseRaw, &lease); err != nil {
-		return nil, errors.New("Browser lease is invalid")
-	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
 	}
-	if failure := lease.Validate(now().UTC()); failure != nil {
-		return nil, failure
+	lease, err := loadLease(config.LeaseFile, now().UTC())
+	if err != nil {
+		return nil, err
 	}
 	timeout := config.Timeout
 	if timeout == 0 {
@@ -115,6 +120,25 @@ func New(config Config) (*Client, error) {
 		timeout:           timeout,
 		now:               now,
 	}, nil
+}
+
+func loadLease(path string, now time.Time) (Lease, error) {
+	leaseRaw, err := readOwnerOnlyFile(
+		path,
+		maxLeaseFileBytes,
+		"Browser lease",
+	)
+	if err != nil {
+		return Lease{}, err
+	}
+	var lease Lease
+	if err := decodeStrictJSON(leaseRaw, &lease); err != nil {
+		return Lease{}, errors.New("Browser lease is invalid")
+	}
+	if failure := lease.Validate(now.UTC()); failure != nil {
+		return Lease{}, failure
+	}
+	return lease, nil
 }
 
 func (lease Lease) Validate(now time.Time) *browserprotocol.Failure {
@@ -156,7 +180,7 @@ func (client *Client) Execute(
 			false,
 		)
 	}
-	if failure := action.Validate(); failure != nil {
+	if failure := action.ValidateForPolicy(client.lease.Identity.BrowserInteractionPolicy); failure != nil {
 		return browserprotocol.Observation{}, failure
 	}
 	now := client.now().UTC()

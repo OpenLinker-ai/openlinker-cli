@@ -25,6 +25,37 @@ type fakeExecutor struct {
 	)
 }
 
+type directEvidenceExecutor struct {
+	identity browserprotocol.Identity
+	actions  []browserprotocol.Action
+}
+
+func (executor *directEvidenceExecutor) Identity() browserprotocol.Identity {
+	return executor.identity
+}
+
+func (executor *directEvidenceExecutor) Execute(
+	_ context.Context,
+	action browserprotocol.Action,
+) (browserprotocol.Observation, *browserprotocol.Failure) {
+	executor.actions = append(executor.actions, action)
+	if action.Kind == browserprotocol.ActionPreflight {
+		return browserprotocol.Observation{
+			Environment: &browserprotocol.EnvironmentEvidence{
+				BrowserEngine:       "chromium",
+				BrowserDistribution: "playwright_chromium",
+				BrowserVersion:      "149.0.7827.55",
+				BrowserMajorVersion: 149,
+				BrowserLocale:       "en-US",
+				BrowserTimezone:     "UTC",
+				FontContractVersion: "openlinker.browser.fonts.v1",
+				FontManifestSHA256:  strings.Repeat("a", 64),
+			},
+		}, nil
+	}
+	return browserprotocol.Observation{PageStateID: "state-2"}, nil
+}
+
 func (executor *fakeExecutor) Execute(
 	ctx context.Context,
 	action browserprotocol.Action,
@@ -76,6 +107,10 @@ func TestServerListsOnlyClientOwnedBrowserTool(t *testing.T) {
 		strings.Contains(string(schemaRaw), `"none"`) {
 		t.Fatalf("schema observation modes = %s", schemaRaw)
 	}
+	if !strings.Contains(string(schemaRaw), "Multi-action batches may contain only scroll") ||
+		strings.Contains(string(schemaRaw), "exact completed-action count") {
+		t.Fatalf("restricted batch contract = %s", schemaRaw)
+	}
 	annotations := tool["annotations"].(map[string]any)
 	if annotations["destructiveHint"] != true {
 		t.Fatalf("Browser tool must require destructive approval: %#v", annotations)
@@ -92,6 +127,71 @@ func TestServerListsOnlyClientOwnedBrowserTool(t *testing.T) {
 		if strings.Contains(string(schemaRaw), forbidden) {
 			t.Fatalf("schema exposes trusted or secret field %q: %s", forbidden, schemaRaw)
 		}
+	}
+}
+
+func TestDirectNativeServerUsesLeasePolicyAndPreflightsAttachmentEvidence(
+	t *testing.T,
+) {
+	canonical, digest, failure := browserprotocol.CanonicalMutationOrigins(
+		"full",
+		[]string{"https://example.com"},
+	)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	identity := browserprotocol.Identity{
+		RunID:                              "11111111-1111-4111-8111-111111111111",
+		AgentID:                            "22222222-2222-4222-8222-222222222222",
+		PrincipalScopeID:                   "principal-owner",
+		BrowserSessionID:                   "33333333-3333-4333-8333-333333333333",
+		SessionEpoch:                       1,
+		AttachmentID:                       "44444444-4444-4444-8444-444444444444",
+		ControlEpoch:                       2,
+		Controller:                         browserprotocol.ControllerAgent,
+		BrowserInteractionPolicy:           "full",
+		BrowserInteractionPolicyGeneration: 7,
+		BrowserMutationOrigins:             canonical,
+		BrowserMutationOriginsSHA256:       digest,
+	}
+	executor := &directEvidenceExecutor{identity: identity}
+	input := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"act","actions":[{"kind":"select","value":"option-a"}]}}}` + "\n",
+	)
+	var output bytes.Buffer
+	server := &Server{
+		Host: "codex",
+		IO:   shared.IO{Getenv: func(string) string { return "" }},
+		ClientFactory: func() (Executor, error) {
+			return executor, nil
+		},
+		IdentitySupplier: func() (browserprotocol.Identity, error) {
+			return identity, nil
+		},
+	}
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	responses := decodeResponses(t, output.String())
+	listedRaw, _ := json.Marshal(responses["1"]["result"])
+	if !strings.Contains(string(listedRaw), `"select"`) ||
+		!strings.Contains(string(listedRaw), "exact completed-action count") ||
+		strings.Contains(string(listedRaw), "Multi-action batches may contain only scroll") {
+		t.Fatalf("full tools/list schema = %s", listedRaw)
+	}
+	result := responses["2"]["result"].(map[string]any)
+	structured := result["structuredContent"].(map[string]any)
+	evidence := structured["attachment_evidence"].(map[string]any)
+	if evidence["browser_interaction_policy"] != "full" ||
+		evidence["browser_interaction_policy_generation"] != float64(7) ||
+		evidence["browser_contract_id"] != browserprotocol.ContractID {
+		t.Fatalf("direct attachment evidence = %#v", evidence)
+	}
+	if len(executor.actions) != 2 ||
+		executor.actions[0].Kind != browserprotocol.ActionPreflight ||
+		executor.actions[1].Kind != browserprotocol.ActionSelect {
+		t.Fatalf("direct Browser actions = %#v", executor.actions)
 	}
 }
 
@@ -113,9 +213,13 @@ func TestAttachmentEvidenceEmitsOncePerValidatedEpochWithoutFullVersion(
 					FontContractVersion: "openlinker.browser.fonts.v1",
 					FontManifestSHA256:  strings.Repeat("a", 64),
 				},
-				BrowserSessionID: "11111111-1111-4111-8111-111111111111",
-				SessionEpoch:     1,
-				ControlEpoch:     controlEpoch,
+				BrowserSessionID:                   "11111111-1111-4111-8111-111111111111",
+				SessionEpoch:                       1,
+				ControlEpoch:                       controlEpoch,
+				BrowserInteractionPolicy:           "restricted",
+				BrowserInteractionPolicyGeneration: 1,
+				BrowserMutationOrigins:             []string{},
+				BrowserMutationOriginsSHA256:       browserprotocol.RestrictedMutationOriginsSHA256,
 			}, nil
 		},
 	}
@@ -128,7 +232,9 @@ func TestAttachmentEvidenceEmitsOncePerValidatedEpochWithoutFullVersion(
 	structured := first.StructuredContent.(map[string]any)
 	evidence := structured["attachment_evidence"].(map[string]any)
 	if evidence["browser_major_version"] != 149 ||
-		evidence["browser_version"] != nil {
+		evidence["browser_version"] != nil ||
+		evidence["browser_interaction_policy"] != "restricted" ||
+		evidence["browser_contract_id"] != browserprotocol.ContractID {
 		t.Fatalf("attachment evidence = %#v", evidence)
 	}
 	if _, ok := server.takeAttachmentEvidence(); ok {

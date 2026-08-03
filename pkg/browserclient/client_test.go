@@ -18,7 +18,7 @@ func TestNewLoadsOnlyOwnerProtectedCredentialAndAuthoritativeLease(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.Identity() != identity {
+	if !browserprotocol.SameIdentity(client.Identity(), identity) {
 		t.Fatalf("identity = %#v, want %#v", client.Identity(), identity)
 	}
 }
@@ -99,14 +99,18 @@ func writeClientConfig(
 		t.Fatal(err)
 	}
 	identity := browserprotocol.Identity{
-		RunID:            "11111111-1111-4111-8111-111111111111",
-		AgentID:          "22222222-2222-4222-8222-222222222222",
-		PrincipalScopeID: "principal-owner",
-		BrowserSessionID: "33333333-3333-4333-8333-333333333333",
-		SessionEpoch:     7,
-		AttachmentID:     "44444444-4444-4444-8444-444444444444",
-		ControlEpoch:     9,
-		Controller:       browserprotocol.ControllerAgent,
+		RunID:                              "11111111-1111-4111-8111-111111111111",
+		AgentID:                            "22222222-2222-4222-8222-222222222222",
+		PrincipalScopeID:                   "principal-owner",
+		BrowserSessionID:                   "33333333-3333-4333-8333-333333333333",
+		SessionEpoch:                       7,
+		AttachmentID:                       "44444444-4444-4444-8444-444444444444",
+		ControlEpoch:                       9,
+		Controller:                         browserprotocol.ControllerAgent,
+		BrowserInteractionPolicy:           "restricted",
+		BrowserInteractionPolicyGeneration: 1,
+		BrowserMutationOrigins:             []string{},
+		BrowserMutationOriginsSHA256:       browserprotocol.RestrictedMutationOriginsSHA256,
 	}
 	lease := Lease{
 		ContractID: LeaseContractID,

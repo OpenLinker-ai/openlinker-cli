@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	engineContractID       = "openlinker.browser.engine.v1"
+	engineContractID       = "openlinker.browser.engine.v2"
 	engineViewerContractID = "openlinker.browser.engine.viewer.v1"
 	maxEngineOutputBytes   = browserprotocol.MaxResponseBytes
 	maxEngineLogBytes      = 32 << 10
@@ -116,7 +116,7 @@ func (engine *ProcessEngine) Execute(
 	if failure := identity.Validate(); failure != nil {
 		return browserprotocol.Observation{}, failure
 	}
-	if failure := action.Validate(); failure != nil {
+	if failure := action.ValidateForPolicy(identity.BrowserInteractionPolicy); failure != nil {
 		return browserprotocol.Observation{}, failure
 	}
 	engine.mu.Lock()
@@ -683,6 +683,39 @@ func normalizeEngineFailure(failure *browserprotocol.Failure) *browserprotocol.F
 	}
 	normalized.OriginBlockedForAttachment = failure.OriginBlockedForAttachment
 	normalized.ChallengeReleaseUnavailable = failure.ChallengeReleaseUnavailable
+	if failure.RetrySameAction != nil {
+		value := *failure.RetrySameAction
+		normalized.RetrySameAction = &value
+	}
+	if failure.AttachmentUsable != nil {
+		value := *failure.AttachmentUsable
+		normalized.AttachmentUsable = &value
+	}
+	if failure.FreshObservationRequired != nil {
+		value := *failure.FreshObservationRequired
+		normalized.FreshObservationRequired = &value
+	}
+	normalized.MutationOutcomeReason = failure.MutationOutcomeReason
+	normalized.MutationRequestsObserved = failure.MutationRequestsObserved
+	if failure.AttemptedUnits != nil {
+		value := *failure.AttemptedUnits
+		normalized.AttemptedUnits = &value
+	}
+	if failure.UndispatchedUnits != nil {
+		value := *failure.UndispatchedUnits
+		normalized.UndispatchedUnits = &value
+	}
+	if failure.CompletedActions != nil {
+		value := *failure.CompletedActions
+		normalized.CompletedActions = &value
+	}
+	normalized.ObservedOrigin = failure.ObservedOrigin
+	if failure.BrowserMutationOrigins != nil {
+		normalized.BrowserMutationOrigins = append(
+			[]string{},
+			failure.BrowserMutationOrigins...,
+		)
+	}
 	return normalized
 }
 
@@ -697,6 +730,8 @@ func allowedEngineErrorCode(code browserprotocol.ErrorCode) bool {
 		browserprotocol.ErrorProfileCorrupt,
 		browserprotocol.ErrorUserActionRequired,
 		browserprotocol.ErrorHighImpactActionBlocked,
+		browserprotocol.ErrorMutationOriginBlocked,
+		browserprotocol.ErrorMutationOutcomeUnknown,
 		browserprotocol.ErrorAccessDenied,
 		browserprotocol.ErrorRateLimited,
 		browserprotocol.ErrorChallengeSuspected,

@@ -1,7 +1,7 @@
 # OpenLinker Browser Engine
 
 This private package is the Chromium implementation behind
-`openlinker.browser.v1`. It is not an MCP server, Plugin payload, Provider
+`openlinker.browser.v2`. It is not an MCP server, Plugin payload, Provider
 adapter, or independently supported CLI.
 
 The Go Browser Runtime supervises this process over a closed newline-delimited
@@ -40,6 +40,7 @@ distribution and version:
 
 ```bash
 docker build \
+  --platform linux/amd64 \
   -f Dockerfile.browser.chrome \
   --build-arg OPENLINKER_BROWSER_BASE=openlinker-browser-runtime@sha256:<digest> \
   --build-arg OPENLINKER_BROWSER_DISTRIBUTION=chrome_for_testing \
@@ -58,7 +59,7 @@ remains responsible for Browser acquisition, use, and distribution rights.
 
 ## 中文说明
 
-此目录只实现 `openlinker.browser.v1` 后面的容器内 Chromium 引擎，不是 MCP
+此目录只实现 `openlinker.browser.v2` 后面的容器内 Chromium 引擎，不是 MCP
 服务、Plugin 内容、Provider adapter 或独立 CLI。Go Browser Runtime 通过封闭的
 JSON 行协议监管该进程，并使用显式环境白名单启动；Provider、Agent、User、通道
 凭据和 Profile 加密密钥都不会继承给 Chromium 进程。

@@ -2,10 +2,12 @@
 
 # Operator-only local build. OpenLinker release workflows must not publish this
 # image unless the independent redistribution and retention gates are approved.
-ARG OPENLINKER_BROWSER_BASE=openlinker-browser-runtime:dev
+ARG OPENLINKER_BROWSER_BASE
 FROM ${OPENLINKER_BROWSER_BASE}
 
+ARG OPENLINKER_BROWSER_BASE
 USER root
+ARG TARGETARCH
 ARG OPENLINKER_CHROME_ARTIFACT=chrome.tar
 ARG OPENLINKER_CHROME_LOCK=chrome.lock.json
 ARG OPENLINKER_BROWSER_DISTRIBUTION
@@ -14,7 +16,12 @@ ARG OPENLINKER_BROWSER_PROFILE_GENERATION
 COPY --chown=root:root --chmod=0444 ${OPENLINKER_CHROME_ARTIFACT} /tmp/operator-chrome/chrome.tar
 COPY --chown=root:root --chmod=0444 ${OPENLINKER_CHROME_LOCK} /tmp/operator-chrome/chrome.lock.json
 COPY --chown=root:root --chmod=0444 test/browser-image/verify-chrome-lock.mjs /tmp/operator-chrome/verify-chrome-lock.mjs
-RUN node /tmp/operator-chrome/verify-chrome-lock.mjs \
+RUN base_digest="${OPENLINKER_BROWSER_BASE##*@sha256:}" \
+ && test "${OPENLINKER_BROWSER_BASE}" != "${base_digest}" \
+ && test "${#base_digest}" -eq 64 \
+ && case "${base_digest}" in *[!0-9a-f]*) exit 1 ;; esac \
+ && test "${TARGETARCH}" = amd64 \
+ && node /tmp/operator-chrome/verify-chrome-lock.mjs \
       /tmp/operator-chrome/chrome.lock.json \
       /tmp/operator-chrome/chrome.tar \
       "${OPENLINKER_BROWSER_DISTRIBUTION}" \

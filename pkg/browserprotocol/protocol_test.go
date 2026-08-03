@@ -3,6 +3,7 @@ package browserprotocol
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +137,145 @@ func TestCoordinatesUseTheFixedBrowserViewport(t *testing.T) {
 		if failure := (Action{Kind: ActionClick, X: &x, Y: &y}).Validate(); failure == nil {
 			t.Errorf("point %v was accepted", point)
 		}
+	}
+}
+
+func TestCanonicalMutationOriginsEnforcesExactHTTPSPolicy(t *testing.T) {
+	t.Parallel()
+	canonical, digest, failure := CanonicalMutationOrigins("full", []string{
+		"https://Example.COM:443",
+		"https://xn--bcher-kva.example",
+		"https://example.com",
+	})
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	want := []string{"https://example.com", "https://xn--bcher-kva.example"}
+	if !slices.Equal(canonical, want) || digest == "" {
+		t.Fatalf("canonical origins = %#v digest=%q", canonical, digest)
+	}
+	if validation := ValidateMutationOrigins("full", canonical, digest); validation != nil {
+		t.Fatalf("canonical origins rejected: %v", validation)
+	}
+	for _, origins := range [][]string{
+		nil,
+		{},
+		{"http://example.com"},
+		{"https://*.example.com"},
+		{"https://user@example.com"},
+		{"https://example.com/path"},
+		{"https://example.com."},
+		{"https://127.1"},
+		{"https://2130706433"},
+		{"https://0x7f.1"},
+		{"https://0177.1"},
+		{"https://09.1"},
+		{"https://1.2.3.999"},
+		{"https://１２７。１"},
+		{"https://[::ffff:127.0.0.1]"},
+		{"https://[::ffff:7f00:1]"},
+	} {
+		if _, _, invalid := CanonicalMutationOrigins("full", origins); invalid == nil {
+			t.Errorf("invalid full origins accepted: %#v", origins)
+		}
+	}
+	if canonical, _, failure := CanonicalMutationOrigins(
+		"full",
+		[]string{"https://123.example"},
+	); failure != nil || !slices.Equal(canonical, []string{"https://123.example"}) {
+		t.Fatalf("ordinary numeric DNS label was rejected: %#v failure=%v", canonical, failure)
+	}
+	if canonical, _, failure := CanonicalMutationOrigins(
+		"full",
+		[]string{"HTTPS://BÜCHER.example:0443", "https://example.com:08443"},
+	); failure != nil || !slices.Equal(canonical, []string{
+		"https://example.com:8443",
+		"https://xn--bcher-kva.example",
+	}) {
+		t.Fatalf("IDNA/default-port origin was not canonicalized: %#v failure=%v", canonical, failure)
+	}
+	if canonical, digest, failure := CanonicalMutationOrigins("restricted", []string{}); failure != nil ||
+		len(canonical) != 0 || digest != RestrictedMutationOriginsSHA256 {
+		t.Fatalf("restricted origins = %#v %q failure=%v", canonical, digest, failure)
+	}
+}
+
+func TestFullPolicyRequestAdmitsV2SelectAndMutationBatch(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	request := validRequest(now)
+	origins, digest, failure := CanonicalMutationOrigins(
+		"full",
+		[]string{"https://public.example"},
+	)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	request.Identity.BrowserInteractionPolicy = "full"
+	request.Identity.BrowserMutationOrigins = origins
+	request.Identity.BrowserMutationOriginsSHA256 = digest
+	request.Action = Action{Kind: ActionSelect, Value: "option-a"}
+	if failure := request.Validate(now); failure != nil {
+		t.Fatalf("full select rejected: %v", failure)
+	}
+	request.Action = Action{Kind: ActionKeypress, Key: "Space"}
+	if failure := request.Validate(now); failure != nil {
+		t.Fatalf("full Space keypress rejected: %v", failure)
+	}
+	x, y := 10, 20
+	request.Action = Action{
+		Kind: ActionBatch,
+		Actions: []Action{
+			{Kind: ActionClick, X: &x, Y: &y},
+			{Kind: ActionSelect, Value: "option-a"},
+		},
+	}
+	if failure := request.Validate(now); failure != nil {
+		t.Fatalf("full mutation batch rejected: %v", failure)
+	}
+	request.Identity.BrowserInteractionPolicy = "restricted"
+	request.Identity.BrowserMutationOrigins = []string{}
+	request.Identity.BrowserMutationOriginsSHA256 = RestrictedMutationOriginsSHA256
+	if failure := request.Validate(now); failure == nil {
+		t.Fatal("restricted request accepted a mutation batch")
+	}
+}
+
+func TestMutationFailureEvidenceIsStrictAndBounded(t *testing.T) {
+	t.Parallel()
+	falseValue, trueValue := false, true
+	fresh := false
+	originFailure := NewFailure(
+		ErrorMutationOriginBlocked,
+		"mutation origin blocked",
+		false,
+	)
+	originFailure.RetrySameAction = &falseValue
+	originFailure.AttachmentUsable = &trueValue
+	originFailure.FreshObservationRequired = &fresh
+	originFailure.ObservedOrigin = "https://public.example"
+	originFailure.BrowserMutationOrigins = []string{"https://public.example"}
+	if validation := ValidateFailure(originFailure); validation != nil {
+		t.Fatalf("valid origin failure rejected: %v", validation)
+	}
+	attempted, undispatched := 1, 2
+	unknown := NewFailure(
+		ErrorMutationOutcomeUnknown,
+		"mutation outcome unknown",
+		false,
+	)
+	unknown.RetrySameAction = &falseValue
+	unknown.AttachmentUsable = &trueValue
+	unknown.FreshObservationRequired = &trueValue
+	unknown.MutationOutcomeReason = "text_entry_target_changed_after_unit"
+	unknown.AttemptedUnits = &attempted
+	unknown.UndispatchedUnits = &undispatched
+	if validation := ValidateFailure(unknown); validation != nil {
+		t.Fatalf("valid uncertainty failure rejected: %v", validation)
+	}
+	unknown.RetrySameAction = nil
+	if validation := ValidateFailure(unknown); validation == nil {
+		t.Fatal("uncertainty failure without explicit retry policy was accepted")
 	}
 }
 
@@ -494,14 +634,18 @@ func validRequest(now time.Time) Request {
 		RequestID:         "77777777-7777-4777-8777-777777777777",
 		Deadline:          now.Add(30 * time.Second),
 		Identity: Identity{
-			RunID:            "11111111-1111-4111-8111-111111111111",
-			AgentID:          "22222222-2222-4222-8222-222222222222",
-			PrincipalScopeID: "scope_333333333333",
-			BrowserSessionID: "44444444-4444-4444-8444-444444444444",
-			SessionEpoch:     1,
-			AttachmentID:     "55555555-5555-4555-8555-555555555555",
-			ControlEpoch:     1,
-			Controller:       ControllerAgent,
+			RunID:                              "11111111-1111-4111-8111-111111111111",
+			AgentID:                            "22222222-2222-4222-8222-222222222222",
+			PrincipalScopeID:                   "scope_333333333333",
+			BrowserSessionID:                   "44444444-4444-4444-8444-444444444444",
+			SessionEpoch:                       1,
+			AttachmentID:                       "55555555-5555-4555-8555-555555555555",
+			ControlEpoch:                       1,
+			Controller:                         ControllerAgent,
+			BrowserInteractionPolicy:           "restricted",
+			BrowserInteractionPolicyGeneration: 1,
+			BrowserMutationOrigins:             []string{},
+			BrowserMutationOriginsSHA256:       RestrictedMutationOriginsSHA256,
 		},
 		Action: Action{Kind: ActionScreenshot},
 	}

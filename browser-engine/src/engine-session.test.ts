@@ -10,7 +10,7 @@ import {
   type Page,
 } from "playwright-core";
 
-import { BrowserEngine } from "./engine.js";
+import { BrowserEngine, type ControlState } from "./engine.js";
 import { OriginBudgetStore } from "./origin-budget.js";
 import { PageContinuationStore } from "./page-continuation.js";
 import {
@@ -312,6 +312,121 @@ test("reports the failed action index for any batch execution failure", async ()
   }
 });
 
+test("charges each nested batch navigation before dispatch", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+  const continuation = new PageContinuationStore(root);
+  let page: FakePage | undefined;
+  const context = new FakeContext(() => {
+    page = new FakePage();
+    return page;
+  });
+  const engine = createEngine(context, continuation, async () => true);
+  const identity = fullIdentity(41, true);
+  const budget = new OriginBudgetStore({
+    profileDirectory: root,
+    profileGeneration: 1,
+    maxActionsPerMinute: 8,
+    maxNavigationsPerMinute: 1,
+    now: () => 1_000_000,
+  });
+  await budget.load();
+  (
+    engine as unknown as {
+      originBudget: OriginBudgetStore | undefined;
+    }
+  ).originBudget = budget;
+
+  const response = await engine.execute(
+    actionRequest(identity, "batch-navigation", {
+      kind: "batch",
+      actions: [
+        { kind: "navigate", url: "https://public.example/first" },
+        { kind: "navigate", url: "https://public.example/second" },
+      ],
+    }),
+  );
+  assert.equal(response.status, "error");
+  if (response.status === "error") {
+    assert.equal(response.error.code, "BROWSER_ORIGIN_RATE_LIMITED");
+    assert.equal(response.error.action_index, 1);
+    assert.equal(response.error.completed_actions, 1);
+  }
+  assert.equal(page?.publicNavigationCalls, 1);
+});
+
+test("does not let an about:blank traversal batch bypass action budgets", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+  const continuation = new PageContinuationStore(root);
+  let page: FakePage | undefined;
+  const context = new FakeContext(() => {
+    page = new FakePage();
+    return page;
+  });
+  const engine = createEngine(context, continuation, async () => true);
+  const identity = fullIdentity(42, true);
+  const budget = new OriginBudgetStore({
+    profileDirectory: root,
+    profileGeneration: 1,
+    maxActionsPerMinute: 1,
+    maxNavigationsPerMinute: 4,
+    now: () => 1_000_000,
+  });
+  await budget.load();
+  (
+    engine as unknown as {
+      originBudget: OriginBudgetStore | undefined;
+    }
+  ).originBudget = budget;
+
+  const response = await engine.execute(
+    actionRequest(identity, "blank-batch", {
+      kind: "batch",
+      actions: [
+        { kind: "navigate", url: "https://public.example/first" },
+        { kind: "screenshot" },
+      ],
+    }),
+  );
+  assert.equal(response.status, "error");
+  if (response.status === "error") {
+    assert.equal(response.error.code, "BROWSER_ORIGIN_RATE_LIMITED");
+    assert.equal(response.error.action_index, 1);
+    assert.equal(response.error.completed_actions, 1);
+  }
+  assert.equal(page?.publicNavigationCalls, 1);
+});
+
+test("stops a batch immediately after a nested access denial", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+  const continuation = new PageContinuationStore(root);
+  let page: FakePage | undefined;
+  const context = new FakeContext(() => {
+    page = new FakePage();
+    page.responseStatus = 403;
+    return page;
+  });
+  const engine = createEngine(context, continuation, async () => true);
+  const identity = fullIdentity(43, true);
+
+  const response = await engine.execute(
+    actionRequest(identity, "batch-access-denial", {
+      kind: "batch",
+      actions: [
+        { kind: "navigate", url: "https://public.example/first" },
+        { kind: "navigate", url: "https://public.example/second" },
+      ],
+    }),
+  );
+  assert.equal(response.status, "error");
+  if (response.status === "error") {
+    assert.equal(response.error.code, "BROWSER_ACCESS_DENIED");
+    assert.equal(response.error.action_index, 0);
+    assert.equal(response.error.completed_actions, 0);
+    assert.equal(response.error.consecutive_access_denials, 1);
+  }
+  assert.equal(page?.publicNavigationCalls, 1);
+});
+
 test("keeps 403 active and locally blocks only the fourth navigation", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
   const continuation = new PageContinuationStore(root);
@@ -513,7 +628,7 @@ test("fails closed when the document tracker factory is missing", async () => {
     environment: undefined,
     originBudget: undefined,
     documentTrackerFactory: undefined,
-    controlState: { controller: "agent"; attachmentKey: string },
+    controlState: ControlState,
   ) => BrowserEngine;
   const Constructor = BrowserEngine as unknown as UnsafeConstructor;
   const engine = new Constructor(
@@ -524,7 +639,7 @@ test("fails closed when the document tracker factory is missing", async () => {
     undefined,
     undefined,
     undefined,
-    { controller: "agent", attachmentKey: "" },
+    testControlState(),
   );
 
   const response = await engine.execute(
@@ -731,6 +846,385 @@ test("blocked click exposes only a coarse target category", async () => {
   );
 });
 
+test("full policy activates an allowlisted button and blocks it elsewhere", async () => {
+  for (const allowed of [true, false]) {
+    const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+    const continuation = new PageContinuationStore(root);
+    const target = new FakeElementState({
+      ...safeTextMetadata(),
+      tagName: "button",
+      type: "button",
+      label: "Star fixture",
+    });
+    const context = new FakeContext(() => {
+      const page = new FakePage();
+      page.hitTestElement = target;
+      return page;
+    });
+    const engine = createEngine(context, continuation, async () => true);
+    const identity = fullIdentity(allowed ? 11 : 12, allowed);
+    assert.equal(
+      (await engine.execute(request(identity, "1", "navigate"))).status,
+      "ok",
+    );
+    const response = await engine.execute(
+      actionRequest(identity, "2", {
+        kind: "click",
+        x: 120,
+        y: 80,
+        observation: "semantic",
+      }),
+    );
+    if (allowed) {
+      assert.equal(response.status, "ok");
+      if (response.status === "ok") {
+        assert.equal(response.observation.click_effect, "activated");
+        assert.equal(response.observation.target_category, "button");
+      }
+      assert.equal(target.clickCalls, 1);
+    } else {
+      assert.equal(response.status, "error");
+      if (response.status === "error") {
+        assert.equal(response.error.code, "BROWSER_MUTATION_ORIGIN_BLOCKED");
+        assert.equal(response.error.retry_same_action, false);
+        assert.equal(response.error.attachment_usable, true);
+      }
+      assert.equal(target.clickCalls, 0);
+    }
+  }
+});
+
+test("full policy establishes or rejects state-changing page request outcomes", async () => {
+  for (const requestOutcome of [
+    "response",
+    "finished",
+    "failed",
+    "server_error",
+  ] as const) {
+    const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+    const continuation = new PageContinuationStore(root);
+    let page: FakePage | undefined;
+    const target = new FakeElementState({
+      ...safeTextMetadata(),
+      tagName: "button",
+      type: "button",
+      label: "Mutation fixture",
+    });
+    const context = new FakeContext(() => {
+      page = new FakePage();
+      page.hitTestElement = target;
+      target.onClick = () => {
+        const request = new FakeMutationRequest("POST");
+        page?.emit("request", request);
+        if (requestOutcome === "response" || requestOutcome === "server_error") {
+          page?.emit(
+            "response",
+            new FakeMutationResponse(
+              request,
+              requestOutcome === "response" ? 200 : 502,
+            ),
+          );
+        }
+        if (requestOutcome !== "response") {
+          page?.emit(
+            requestOutcome === "failed" ? "requestfailed" : "requestfinished",
+            request,
+          );
+        }
+      };
+      return page;
+    });
+    const engine = createEngine(context, continuation, async () => true);
+    const identity = fullIdentity(requestOutcome === "finished" ? 13 : 14, true);
+    assert.equal(
+      (await engine.execute(request(identity, "1", "navigate"))).status,
+      "ok",
+    );
+    const response = await engine.execute(
+      actionRequest(identity, "2", {
+        kind: "click",
+        x: 120,
+        y: 80,
+        observation: "semantic",
+      }),
+    );
+    if (requestOutcome === "response" || requestOutcome === "finished") {
+      assert.equal(response.status, "ok");
+      if (response.status === "ok") {
+        assert.equal(response.observation.mutation_requests_observed, 1);
+      }
+      continue;
+    }
+    assert.equal(response.status, "error");
+    if (response.status === "error") {
+      assert.equal(response.error.code, "BROWSER_MUTATION_OUTCOME_UNKNOWN");
+      assert.equal(
+        response.error.mutation_outcome_reason,
+        "page_mutation_request_failed",
+      );
+      assert.equal(response.error.retry_same_action, false);
+      assert.equal(response.error.attachment_usable, true);
+      assert.equal(response.error.fresh_observation_required, true);
+      assert.equal(response.error.mutation_requests_observed, 1);
+    }
+  }
+});
+
+test("requires a fresh observation before another action after an unknown mutation", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+  const continuation = new PageContinuationStore(root);
+  let page: FakePage | undefined;
+  const target = new FakeElementState({
+    ...safeTextMetadata(),
+    tagName: "button",
+    type: "button",
+    label: "Mutation recovery fixture",
+  });
+  const context = new FakeContext(() => {
+    page = new FakePage();
+    page.hitTestElement = target;
+    target.onClick = () => {
+      const mutation = new FakeMutationRequest("POST");
+      page?.emit("request", mutation);
+      page?.emit("requestfailed", mutation);
+    };
+    return page;
+  });
+  const engine = createEngine(context, continuation, async () => true);
+  const identity = fullIdentity(15, true);
+  assert.equal(
+    (await engine.execute(request(identity, "navigate", "navigate"))).status,
+    "ok",
+  );
+
+  const mutation = actionRequest(identity, "mutation", {
+    kind: "click",
+    x: 120,
+    y: 80,
+    observation: "semantic",
+  });
+  const uncertain = await engine.execute(mutation);
+  assert.equal(uncertain.status, "error");
+  if (uncertain.status === "error") {
+    assert.equal(uncertain.error.code, "BROWSER_MUTATION_OUTCOME_UNKNOWN");
+    assert.equal(uncertain.error.fresh_observation_required, true);
+  }
+
+  const blocked = await engine.execute({
+    ...mutation,
+    action_id: "blocked-retry",
+  });
+  assert.equal(blocked.status, "error");
+  if (blocked.status === "error") {
+    assert.equal(blocked.error.code, "BROWSER_ACTION_REJECTED");
+  }
+  assert.equal(target.clickCalls, 1, "the uncertain click must not be retried");
+
+  const observed = await engine.execute(
+    request(identity, "fresh-observation", "screenshot"),
+  );
+  assert.equal(observed.status, "ok");
+
+  const admitted = await engine.execute({
+    ...mutation,
+    action_id: "after-observation",
+  });
+  assert.equal(admitted.status, "error");
+  if (admitted.status === "error") {
+    assert.equal(admitted.error.code, "BROWSER_MUTATION_OUTCOME_UNKNOWN");
+  }
+  assert.equal(target.clickCalls, 2);
+});
+
+test("stops a full batch before the next action when mutation delivery becomes unknown", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+  const continuation = new PageContinuationStore(root);
+  let page: FakePage | undefined;
+  const target = new FakeElementState({
+    ...safeTextMetadata(),
+    tagName: "button",
+    type: "button",
+    label: "Batch mutation fixture",
+  });
+  const context = new FakeContext(() => {
+    page = new FakePage();
+    page.hitTestElement = target;
+    target.onClick = () => {
+      const mutation = new FakeMutationRequest("POST");
+      page?.emit("request", mutation);
+      page?.emit("requestfailed", mutation);
+    };
+    return page;
+  });
+  const engine = createEngine(context, continuation, async () => true);
+  const identity = fullIdentity(16, true);
+  assert.equal(
+    (await engine.execute(request(identity, "navigate", "navigate"))).status,
+    "ok",
+  );
+
+  const response = await engine.execute({
+    ...request(identity, "batch", "screenshot"),
+    action: {
+      kind: "batch",
+      observation: "semantic",
+      actions: [
+        { kind: "click", x: 120, y: 80 },
+        { kind: "click", x: 120, y: 80 },
+      ],
+    },
+  });
+  assert.equal(response.status, "error");
+  if (response.status === "error") {
+    assert.equal(response.error.code, "BROWSER_MUTATION_OUTCOME_UNKNOWN");
+    assert.equal(response.error.action_index, 0);
+    assert.equal(response.error.completed_actions, 0);
+  }
+  assert.equal(target.clickCalls, 1, "the second batch click must not run");
+});
+
+test("full policy resolves a pinned child-frame target and requires both exact origins", async () => {
+  for (const allowChild of [true, false]) {
+    const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+    const continuation = new PageContinuationStore(root);
+    const target = new FakeElementState({
+      ...safeTextMetadata(),
+      tagName: "button",
+      type: "button",
+      label: "Child frame mutation",
+    });
+    const child = new FakeChildFrame("https://child.example/frame");
+    child.hitTestElement = target;
+    const iframe = new FakeElementState(
+      {
+        ...safeTextMetadata(),
+        tagName: "iframe",
+        type: "",
+        label: "",
+      },
+      "",
+      0,
+      0,
+      child,
+      { left: 40, top: 20 },
+    );
+    const context = new FakeContext(() => {
+      const page = new FakePage();
+      page.hitTestElement = iframe;
+      return page;
+    });
+    const engine = createEngine(context, continuation, async () => true);
+    const identity = fullIdentityWithOrigins(
+      allowChild ? 31 : 32,
+      allowChild
+        ? ["https://child.example", "https://public.example"]
+        : ["https://public.example"],
+    );
+    assert.equal(
+      (await engine.execute(request(identity, "1", "navigate"))).status,
+      "ok",
+    );
+    const response = await engine.execute(
+      actionRequest(identity, "2", {
+        kind: "click",
+        x: 120,
+        y: 80,
+        observation: "semantic",
+      }),
+    );
+    if (allowChild) {
+      assert.equal(response.status, "ok");
+      assert.equal(target.clickCalls, 1);
+      assert.deepEqual(child.lastHitPoint, { localX: 80, localY: 60 });
+    } else {
+      assert.equal(response.status, "error");
+      if (response.status === "error") {
+        assert.equal(response.error.code, "BROWSER_MUTATION_ORIGIN_BLOCKED");
+        assert.equal(response.error.retry_same_action, false);
+      }
+      assert.equal(target.clickCalls, 0);
+    }
+  }
+});
+
+test("full text entry dispatches Unicode units and stops after focus drift", async () => {
+  for (const stealFocus of [false, true]) {
+    const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+    const continuation = new PageContinuationStore(root);
+    const target = new FakeElementState(safeTextMetadata());
+    let page: FakePage | undefined;
+    const context = new FakeContext(() => {
+      page = new FakePage();
+      page.activeElement = target;
+      if (stealFocus) {
+        page.onType = () => {
+          if (page !== undefined) page.activeElement = undefined;
+        };
+      }
+      return page;
+    });
+    const engine = createEngine(context, continuation, async () => true);
+    const identity = fullIdentity(stealFocus ? 21 : 20, true);
+    assert.equal(
+      (await engine.execute(request(identity, "1", "navigate"))).status,
+      "ok",
+    );
+    const response = await engine.execute(
+      actionRequest(identity, "2", {
+        kind: "type_non_secret",
+        text: "A中🙂",
+        observation: "semantic",
+      }),
+    );
+    if (!stealFocus) {
+      assert.equal(response.status, "ok");
+      assert.deepEqual(page?.typedUnits, ["A", "中", "🙂"]);
+      assert.equal(target.value, "A中🙂");
+    } else {
+      assert.equal(response.status, "error");
+      if (response.status === "error") {
+        assert.equal(response.error.code, "BROWSER_MUTATION_OUTCOME_UNKNOWN");
+        assert.equal(response.error.attempted_units, 1);
+        assert.equal(response.error.undispatched_units, 2);
+        assert.equal(response.error.retry_same_action, false);
+      }
+      assert.deepEqual(page?.typedUnits, ["A"]);
+    }
+  }
+});
+
+test("full policy dispatches Space only for an allowlisted pinned control", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+  const continuation = new PageContinuationStore(root);
+  const target = new FakeElementState({
+    ...safeTextMetadata(),
+    tagName: "button",
+    type: "button",
+    label: "Toggle fixture",
+  });
+  let page: FakePage | undefined;
+  const context = new FakeContext(() => {
+    page = new FakePage();
+    page.activeElement = target;
+    return page;
+  });
+  const engine = createEngine(context, continuation, async () => true);
+  const identity = fullIdentity(40, true);
+  assert.equal(
+    (await engine.execute(request(identity, "1", "navigate"))).status,
+    "ok",
+  );
+  const response = await engine.execute(
+    actionRequest(identity, "2", {
+      kind: "keypress",
+      key: "Space",
+      observation: "semantic",
+    }),
+  );
+  assert.equal(response.status, "ok");
+  assert.deepEqual(page?.pressedKeys, ["Space"]);
+});
+
 type GatewayHealthProbe = (timeout: number) => Promise<boolean>;
 
 function createEngine(
@@ -751,7 +1245,7 @@ function createEngine(
     documentTrackerFactory: (
       page: Page,
     ) => Promise<FakeDocumentTracker>,
-    controlState: { controller: "agent"; attachmentKey: string },
+    controlState: ControlState,
   ) => BrowserEngine;
   const Constructor = BrowserEngine as unknown as TestConstructor;
   return new Constructor(
@@ -762,8 +1256,22 @@ function createEngine(
     undefined,
     undefined,
     documentTrackerFactory ?? (async () => new FakeDocumentTracker()),
-    { controller: "agent", attachmentKey: "" },
+    testControlState(),
   );
+}
+
+function testControlState(): ControlState {
+  return {
+    controller: "agent",
+    attachmentKey: "",
+    pageWebSockets: new Set(),
+    interactionPolicy: "restricted",
+    mutationOrigins: new Set(),
+    mutationBlockSerial: 0,
+    blockedMutationRequests: 0,
+    actionInFlight: false,
+    frameOrigins: () => [],
+  };
 }
 
 class FakeDocumentTracker {
@@ -810,14 +1318,39 @@ class FakePage {
   readonly challengeSelectors = new Set<string>();
   hitTestElement: FakeElementState | undefined;
   activeElement: FakeElementState | undefined;
+  readonly typedUnits: string[] = [];
+  readonly pressedKeys: string[] = [];
+  onType: (() => void) | undefined;
+  readonly keyboard = {
+    type: async (text: string) => {
+      this.typedUnits.push(text);
+      if (this.activeElement !== undefined) {
+        this.activeElement.value += text;
+      }
+      this.onType?.();
+    },
+    press: async (key: string) => {
+      this.pressedKeys.push(key);
+    },
+  };
+  readonly mouse = {
+    wheel: async () => undefined,
+  };
   private currentURL = "about:blank";
   private closed = false;
-  private readonly frame = {};
+  private readonly frame: {
+    url: () => string;
+    page: () => { mainFrame: () => object };
+  };
   private readonly listeners = new Map<string, Array<(value: any) => void>>();
   private readonly navigate: (url: string) => Promise<void>;
 
   constructor(navigate: (url: string) => Promise<void> = async () => undefined) {
     this.navigate = navigate;
+    this.frame = {
+      url: () => this.currentURL,
+      page: () => ({ mainFrame: () => this.frame }),
+    };
   }
 
   on(event: string, listener: (value: any) => void): this {
@@ -825,6 +1358,12 @@ class FakePage {
     listeners.push(listener);
     this.listeners.set(event, listeners);
     return this;
+  }
+
+  emit(event: string, value: unknown): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(value);
+    }
   }
 
   isClosed(): boolean {
@@ -871,6 +1410,10 @@ class FakePage {
     return this.frame;
   }
 
+  frames(): object[] {
+    return [this.frame];
+  }
+
   async screenshot(): Promise<Buffer> {
     this.screenshotCalls++;
     return Buffer.from(`fixture screenshot ${this.screenshotCalls}`);
@@ -896,6 +1439,10 @@ class FakePage {
     this.documentReadyWaits++;
   }
 
+  async waitForEvent(): Promise<never> {
+    throw new playwrightErrors.TimeoutError("no navigation");
+  }
+
   async evaluateHandle(
     callback: (...args: any[]) => unknown,
   ): Promise<FakeJSHandle> {
@@ -903,9 +1450,14 @@ class FakePage {
     const target = source.includes("elementFromPoint")
       ? this.hitTestElement
       : this.activeElement;
-    return new FakeJSHandle(target, (focused) => {
-      this.activeElement = focused;
-    });
+    return new FakeJSHandle(
+      target,
+      (focused) => {
+        this.activeElement = focused;
+      },
+      () => this.activeElement === target,
+      this.frame,
+    );
   }
 
   locator(selector: string): {
@@ -935,6 +1487,36 @@ class FakePage {
   }
 }
 
+class FakeChildFrame {
+  hitTestElement: FakeElementState | undefined;
+  activeElement: FakeElementState | undefined;
+  lastHitPoint: { localX: number; localY: number } | undefined;
+
+  constructor(private readonly currentURL: string) {}
+
+  url(): string {
+    return this.currentURL;
+  }
+
+  async evaluateHandle(
+    callback: (...args: any[]) => unknown,
+    argument?: { localX: number; localY: number },
+  ): Promise<FakeJSHandle> {
+    const source = String(callback);
+    const hitTest = source.includes("elementFromPoint");
+    if (hitTest) this.lastHitPoint = argument;
+    const target = hitTest ? this.hitTestElement : this.activeElement;
+    return new FakeJSHandle(
+      target,
+      (focused) => {
+        this.activeElement = focused;
+      },
+      () => this.activeElement === target,
+      this,
+    );
+  }
+}
+
 interface FakeInteractiveMetadata {
   tagName: string;
   type: string;
@@ -955,12 +1537,15 @@ class FakeElementState {
   clickCalls = 0;
   fillCalls = 0;
   onMetadata: (() => void) | undefined;
+  onClick: (() => void) | undefined;
 
   constructor(
     readonly metadata: FakeInteractiveMetadata,
     public value = "",
     public selectionStart: number | null = value.length,
     public selectionEnd: number | null = value.length,
+    readonly childFrame: FakeChildFrame | undefined = undefined,
+    readonly bounds: { left: number; top: number } = { left: 0, top: 0 },
   ) {}
 }
 
@@ -970,9 +1555,13 @@ class FakeJSHandle {
   constructor(
     target: FakeElementState | undefined,
     onFocus: (target: FakeElementState) => void,
+    isFocused: () => boolean,
+    frame: object,
   ) {
     this.element =
-      target === undefined ? undefined : new FakeElementHandle(target, onFocus);
+      target === undefined
+        ? undefined
+        : new FakeElementHandle(target, onFocus, isFocused, frame);
   }
 
   asElement(): FakeElementHandle | null {
@@ -983,16 +1572,22 @@ class FakeJSHandle {
 }
 
 class FakeElementHandle {
-  private evaluationCount = 0;
-
   constructor(
     private readonly target: FakeElementState,
     private readonly onFocus: (target: FakeElementState) => void,
+    private readonly isFocused: () => boolean,
+    private readonly frame: object,
   ) {}
 
-  async evaluate(): Promise<unknown> {
-    this.evaluationCount++;
-    if (this.evaluationCount === 1) {
+  async evaluate(callback: (...args: any[]) => unknown): Promise<unknown> {
+    const source = String(callback);
+    if (source.includes("activeElement")) {
+      return this.isFocused();
+    }
+    if (source.includes("getBoundingClientRect")) {
+      return this.target.bounds;
+    }
+    if (!source.includes("selectionStart")) {
       this.target.onMetadata?.();
       return this.target.metadata;
     }
@@ -1008,8 +1603,23 @@ class FakeElementHandle {
     this.onFocus(this.target);
   }
 
-  async click(): Promise<void> {
-    this.target.clickCalls++;
+  async click(options?: { trial?: boolean }): Promise<void> {
+    if (!options?.trial) {
+      this.target.clickCalls++;
+      this.target.onClick?.();
+    }
+  }
+
+  async ownerFrame(): Promise<object> {
+    return this.frame;
+  }
+
+  async contentFrame(): Promise<FakeChildFrame | null> {
+    return this.target.childFrame ?? null;
+  }
+
+  async selectOption(value: string): Promise<void> {
+    this.target.value = value;
   }
 
   async fill(value: string): Promise<void> {
@@ -1018,6 +1628,45 @@ class FakeElementHandle {
   }
 
   async dispose(): Promise<void> {}
+}
+
+class FakeMutationRequest {
+  constructor(private readonly requestMethod: string) {}
+
+  method(): string {
+    return this.requestMethod;
+  }
+
+  isNavigationRequest(): boolean {
+    return false;
+  }
+}
+
+class FakeMutationResponse {
+  constructor(
+    private readonly mutationRequest: FakeMutationRequest,
+    private readonly responseStatus: number,
+  ) {}
+
+  request(): FakeMutationRequest {
+    return this.mutationRequest;
+  }
+
+  status(): number {
+    return this.responseStatus;
+  }
+
+  frame(): undefined {
+    return undefined;
+  }
+
+  headers(): Record<string, string> {
+    return {};
+  }
+
+  url(): string {
+    return "https://public.example/mutation";
+  }
 }
 
 function safeTextMetadata(): FakeInteractiveMetadata {
@@ -1087,5 +1736,37 @@ function fixtureIdentity(index: number): Identity {
     attachment_id: "44444444-4444-4444-8444-444444444444",
     control_epoch: 1,
     controller: "agent",
+    browser_interaction_policy: "restricted",
+    browser_interaction_policy_generation: 1,
+    browser_mutation_origins: [],
+    browser_mutation_origins_sha256:
+      "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  };
+}
+
+function fullIdentity(index: number, allowPublic: boolean): Identity {
+  const origin = allowPublic
+    ? "https://public.example"
+    : "https://allowed.example";
+  return {
+    ...fixtureIdentity(index),
+    browser_interaction_policy: "full",
+    browser_mutation_origins: [origin],
+    browser_mutation_origins_sha256: allowPublic
+      ? "a91c0941e6d38c53ed130419dca7b8607a4961d70c78d55e752296600f3a9731"
+      : "e07337870d6bd1ab8ab8b6609cd3197ff039a04aa646598b47ab2165b5e54ddb",
+  };
+}
+
+function fullIdentityWithOrigins(index: number, origins: string[]): Identity {
+  const digest =
+    origins.length === 1
+      ? "a91c0941e6d38c53ed130419dca7b8607a4961d70c78d55e752296600f3a9731"
+      : "b180fb106b9a048b6342aac52aea0c872a608336060574375811890d07275db2";
+  return {
+    ...fixtureIdentity(index),
+    browser_interaction_policy: "full",
+    browser_mutation_origins: origins,
+    browser_mutation_origins_sha256: digest,
   };
 }

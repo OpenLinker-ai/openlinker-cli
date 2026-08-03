@@ -15,11 +15,21 @@ command -v curl >/dev/null 2>&1 || {
 repository_root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 suffix=$$
 prefix="ol-browser-image-${suffix}"
+provider_live_nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+case "$provider_live_nonce" in
+  ????????????????????????????????) ;;
+  *)
+    echo "cannot generate the Browser Provider fixture marker" >&2
+    exit 1
+    ;;
+esac
+provider_live_marker="provider-live-${provider_live_nonce}"
 tunnel_network="${prefix}-tunnel"
 internal_network="${prefix}-internal"
 public_network="${prefix}-public"
 fixture_container="${prefix}-fixture"
 tunnel_container="${prefix}-tunnel"
+collector_tunnel_container="${prefix}-collector-tunnel"
 egress_container="${prefix}-egress"
 runtime_container="${prefix}-runtime"
 observer_container="${prefix}-observer"
@@ -34,6 +44,19 @@ client_image="openlinker-browser-acceptance-client:image-acceptance"
 fixture_image="openlinker-browser-acceptance-fixture:image-acceptance"
 observer_image="openlinker-browser-acceptance-observer:image-acceptance"
 cloudflared_image="cloudflare/cloudflared@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf"
+observer_architecture=$(docker version --format '{{.Server.Arch}}')
+case "$observer_architecture" in
+  amd64|arm64) ;;
+  *)
+    echo "Docker server architecture is unsupported for packet observation" >&2
+    exit 1
+    ;;
+esac
+observer_platform="linux/${observer_architecture}"
+
+run_observer() {
+  docker run --platform "$observer_platform" "$@"
+}
 
 cleanup() {
   status=$?
@@ -53,6 +76,7 @@ cleanup() {
     "$runtime_container" \
     "$observer_container" \
     "$egress_container" \
+    "$collector_tunnel_container" \
     "$tunnel_container" \
     "$fixture_container" \
     >/dev/null 2>&1 || true
@@ -91,10 +115,18 @@ docker build \
   -t "$fixture_image" \
   "$repository_root"
 docker build \
+  --platform "$observer_platform" \
   --target observer \
   -f "$repository_root/test/browser-image/Dockerfile" \
   -t "$observer_image" \
   "$repository_root"
+actual_observer_architecture=$(
+  docker image inspect "$observer_image" --format '{{.Architecture}}'
+)
+if [ "$actual_observer_architecture" != "$observer_architecture" ]; then
+  echo "Packet observer image does not match the Docker server architecture" >&2
+  exit 1
+fi
 docker pull "$cloudflared_image" >/dev/null
 
 docker network create "$tunnel_network" >/dev/null
@@ -106,10 +138,12 @@ docker run -d \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=8m \
+  -e "OPENLINKER_BROWSER_PROVIDER_LIVE_MARKER=${provider_live_marker}" \
   "$fixture_image" \
   >/dev/null
 
 fixture_url=${OPENLINKER_BROWSER_ACCEPTANCE_FIXTURE_URL:-}
+collector_url=${OPENLINKER_BROWSER_ACCEPTANCE_COLLECTOR_URL:-}
 fixture_prime_url=${OPENLINKER_BROWSER_ACCEPTANCE_PRIME_URL:-}
 rebind_hostname="${prefix}-make-1.1.1.1-rebindfor2m-127.0.0.1-rr-set-1-ttl.1u.ms"
 rebind_url="http://${rebind_hostname}/"
@@ -179,10 +213,16 @@ case "$fixture_url" in
           break
         fi
         fixture_url=
+        if [ "$(docker inspect "$tunnel_container" --format '{{.State.Running}}')" != "true" ]; then
+          break
+        fi
         ready_attempt=$((ready_attempt + 1))
         sleep 1
       done
       tunnel_attempt=$((tunnel_attempt + 1))
+      if [ -z "$fixture_url" ] && [ "$tunnel_attempt" -lt 3 ]; then
+        sleep $((tunnel_attempt * 20))
+      fi
     done
     ;;
   https://*)
@@ -244,6 +284,122 @@ if [ "$fixture_ready_attempt" -ge 30 ]; then
   exit 1
 fi
 
+collector_prevalidated=0
+case "$collector_url" in
+  "")
+    tunnel_attempt=0
+    while [ "$tunnel_attempt" -lt 3 ] && [ "$collector_prevalidated" != "1" ]; do
+      docker rm -f "$collector_tunnel_container" >/dev/null 2>&1 || true
+      docker run -d \
+        --name "$collector_tunnel_container" \
+        --network "$tunnel_network" \
+        --read-only \
+        --cap-drop ALL \
+        --security-opt no-new-privileges:true \
+        "$cloudflared_image" \
+        tunnel --no-autoupdate --url http://fixture:8080 \
+        >/dev/null
+      ready_attempt=0
+      while [ "$ready_attempt" -lt 45 ]; do
+        collector_url=$(
+          docker logs "$collector_tunnel_container" 2>&1 |
+            sed -n 's,.*\(https://[-a-z0-9]*\.trycloudflare\.com\).*,\1,p' |
+            tail -1
+        )
+        if [ -n "$collector_url" ]; then
+          candidate_host=${collector_url#https://}
+          candidate_host=${candidate_host%%/*}
+          candidate_host=${candidate_host%%:*}
+          secure_dns_response=$(
+            curl -fsS --max-time 5 \
+              -H 'accept: application/dns-json' \
+              "https://1.1.1.1/dns-query?name=${candidate_host}&type=A" \
+              2>/dev/null || true
+          )
+          if docker logs "$collector_tunnel_container" 2>&1 |
+            grep -q "Registered tunnel connection" &&
+            echo "$secure_dns_response" |
+              grep -Eq '"Answer":[[:space:]]*\[[^]]*"type":[[:space:]]*(1|28)' &&
+            curl -fsS --max-time 5 "$collector_url/full/collector" 2>/dev/null |
+              grep -q "Unallowlisted Collector Fixture"; then
+            collector_prevalidated=1
+            break
+          fi
+        fi
+        if [ "$(docker inspect "$collector_tunnel_container" --format '{{.State.Running}}')" != "true" ]; then
+          break
+        fi
+        ready_attempt=$((ready_attempt + 1))
+        sleep 1
+      done
+      tunnel_attempt=$((tunnel_attempt + 1))
+      if [ "$collector_prevalidated" != "1" ]; then
+        collector_url=
+        if [ "$tunnel_attempt" -lt 3 ]; then
+          sleep $((tunnel_attempt * 20))
+        fi
+      fi
+    done
+    ;;
+  https://*)
+    if ! curl -fsS --max-time 10 "$collector_url/full/collector" 2>/dev/null |
+      grep -q "Unallowlisted Collector Fixture"; then
+      collector_url=
+    fi
+    ;;
+  *)
+    collector_url=
+    ;;
+esac
+if [ -z "$collector_url" ]; then
+  echo "second HTTPS collector fixture did not become ready" >&2
+  exit 1
+fi
+collector_host=${collector_url#https://}
+collector_host=${collector_host%%/*}
+collector_host=${collector_host%%:*}
+case "$collector_host" in
+  ''|*[!A-Za-z0-9.-]*)
+    echo "second HTTPS collector fixture hostname is invalid" >&2
+    exit 1
+    ;;
+esac
+if [ "$collector_host" = "$fixture_host" ]; then
+  echo "collector fixture must use a distinct public origin" >&2
+  exit 1
+fi
+
+collector_ready_attempt=0
+while [ "$collector_prevalidated" != "1" ] && [ "$collector_ready_attempt" -lt 30 ]; do
+  secure_dns_response=$(
+    curl -fsS --max-time 10 \
+      -H 'accept: application/dns-json' \
+      "https://1.1.1.1/dns-query?name=${collector_host}&type=A" \
+      2>/dev/null || true
+  )
+  if ! echo "$secure_dns_response" |
+    grep -Eq '"Answer":[[:space:]]*\[[^]]*"type":[[:space:]]*1'; then
+    secure_dns_response=$(
+      curl -fsS --max-time 10 \
+        -H 'accept: application/dns-json' \
+        "https://1.1.1.1/dns-query?name=${collector_host}&type=AAAA" \
+        2>/dev/null || true
+    )
+  fi
+  if echo "$secure_dns_response" |
+    grep -Eq '"Answer":[[:space:]]*\[[^]]*"type":[[:space:]]*(1|28)' &&
+    curl -fsS --max-time 10 "$collector_url/full/collector" 2>/dev/null |
+      grep -q "Unallowlisted Collector Fixture"; then
+    break
+  fi
+  collector_ready_attempt=$((collector_ready_attempt + 1))
+  sleep 1
+done
+if [ "$collector_prevalidated" != "1" ] && [ "$collector_ready_attempt" -ge 30 ]; then
+  echo "second HTTPS collector fixture did not propagate to secure DNS" >&2
+  exit 1
+fi
+
 docker network create --internal "$internal_network" >/dev/null
 docker network create "$public_network" >/dev/null
 docker volume create "$control_volume" >/dev/null
@@ -251,7 +407,7 @@ docker volume create "$key_volume" >/dev/null
 docker volume create "$state_volume" >/dev/null
 docker volume create "$capture_volume" >/dev/null
 
-docker run --rm \
+run_observer --rm \
   --network "$public_network" \
   --read-only \
   --cap-drop ALL \
@@ -291,8 +447,7 @@ sleep 2
 
 docker run -d \
   --name "$egress_container" \
-  --network "$internal_network" \
-  --network-alias openlinker-egress-gateway \
+  --network "$public_network" \
   --read-only \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
@@ -301,7 +456,10 @@ docker run -d \
   -e OPENLINKER_EGRESS_DOH_URL=https://1.1.1.1/dns-query \
   "$egress_image" \
   >/dev/null
-docker network connect "$public_network" "$egress_container"
+docker network connect \
+  --alias openlinker-egress-gateway \
+  "$internal_network" \
+  "$egress_container"
 egress_internal_ip=$(
   docker inspect "$egress_container" \
     --format "{{(index .NetworkSettings.Networks \"${internal_network}\").IPAddress}}"
@@ -312,6 +470,59 @@ case "$egress_internal_ip" in
     exit 1
     ;;
 esac
+
+# The Gateway must keep its default route on the public network. Starting it
+# on the internal network first can leave Linux Docker with an internal default
+# route even after the public network is attached. Probe DoH from the exact
+# Gateway network namespace so that failure is diagnosed before Chromium. The
+# Gateway process and its TLS stack may still be starting after Docker reports
+# the container as running, so retry this exact probe within a bounded window.
+egress_route_ready_attempt=1
+egress_route_ready_max_attempts=20
+while [ "$egress_route_ready_attempt" -le "$egress_route_ready_max_attempts" ]; do
+  if run_observer --rm \
+    --network "container:${egress_container}" \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --entrypoint node \
+    "$observer_image" \
+    -e '
+    const https = require("node:https");
+    const host = process.argv[1];
+    const request = https.get(
+      {
+        hostname: "1.1.1.1",
+        path: `/dns-query?name=${encodeURIComponent(host)}&type=A`,
+        headers: { accept: "application/dns-json" },
+      },
+      (response) => {
+        let raw = "";
+        response.on("data", (chunk) => { raw += chunk; });
+        response.on("end", () => {
+          try {
+            const body = JSON.parse(raw);
+            const resolved = body.Answer?.some((answer) => answer.type === 1);
+            process.exit(response.statusCode === 200 && resolved ? 0 : 1);
+          } catch {
+            process.exit(1);
+          }
+        });
+      },
+    );
+    request.setTimeout(10_000, () => request.destroy());
+    request.on("error", () => process.exit(1));
+  ' \
+    "$fixture_host"; then
+    break
+  fi
+  if [ "$egress_route_ready_attempt" -eq "$egress_route_ready_max_attempts" ]; then
+    echo "Egress Gateway public-route secure-DNS preflight failed after ${egress_route_ready_max_attempts} attempts" >&2
+    exit 1
+  fi
+  egress_route_ready_attempt=$((egress_route_ready_attempt + 1))
+  sleep 1
+done
 
 docker run -d \
   --name "$runtime_container" \
@@ -355,7 +566,7 @@ if [ "$runtime_network_count" != "1" ] ||
   exit 1
 fi
 
-docker run -d \
+run_observer -d \
   --name "$observer_container" \
   --network "container:${runtime_container}" \
   --read-only \
@@ -368,7 +579,7 @@ docker run -d \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=8m \
   --mount "type=volume,src=${capture_volume},dst=/capture" \
   "$observer_image" \
-  -Z root -i any -nn -U -w /capture/runtime.pcap "tcp or udp" \
+  --immediate-mode -Z root -i any -nn -U -w /capture/runtime.pcap "tcp or udp" \
   >/dev/null
 
 observer_ready_attempt=0
@@ -385,7 +596,7 @@ if [ "$observer_ready_attempt" -ge 20 ]; then
   exit 1
 fi
 
-docker run --rm \
+full_result=$(docker run --rm \
   --network "$internal_network" \
   --user 10001:10001 \
   --cap-drop ALL \
@@ -405,16 +616,54 @@ docker run --rm \
   "$client_image" \
   --mode full \
   --public-url "$fixture_url/" \
+  --collector-url "$collector_url/" \
   --prime-url "$fixture_prime_url" \
   --rebind-url "$rebind_url" \
   --expected-browser-version "$expected_browser_version" \
-  --expected-font-sha256 "$expected_font_sha256"
+  --expected-font-sha256 "$expected_font_sha256")
+printf '%s\n' "$full_result"
+if ! printf '%s\n' "$full_result" |
+  grep -q '"action":"read_only_semantic_observation"'; then
+  echo "Browser action-latency comparison is missing" >&2
+  exit 1
+fi
+for latency_field in samples p50_ms p95_ms p99_ms; do
+  latency_field_count=$(printf '%s\n' "$full_result" |
+    grep -o "\"${latency_field}\":" |
+    wc -l |
+    tr -d ' ')
+  if [ "$latency_field_count" != "2" ]; then
+    echo "Browser action-latency field ${latency_field} is incomplete" >&2
+    exit 1
+  fi
+done
+sample_count=$(printf '%s\n' "$full_result" |
+  grep -o '"samples":40' |
+  wc -l |
+  tr -d ' ')
+if [ "$sample_count" != "2" ]; then
+  echo "Browser action-latency sample count is invalid" >&2
+  exit 1
+fi
 
 metrics=$(curl -fsS --max-time 10 "$fixture_url/metrics")
 for expected in \
-  '"post_requests":0' \
-  '"service_worker_requests":0' \
-  '"websocket_requests":0' \
+	'"post_requests":0' \
+	'"full_mutation_requests":0' \
+	'"star_requests":1' \
+	'"starred":true' \
+	'"method_post_requests":1' \
+	'"method_put_requests":1' \
+	'"method_patch_requests":1' \
+	'"method_delete_requests":1' \
+	'"form_submit_requests":1' \
+	'"websocket_state_updates":1' \
+	'"collector_mutations":0' \
+	'"collector_websockets":0' \
+	'"child_mutations":1' \
+	'"response_loss_requests":1' \
+	'"service_worker_requests":0' \
+	'"websocket_requests":0' \
   '"search_requests":1' \
   '"access_denied_requests":3' \
   '"rate_limited_requests":1'; do
@@ -423,6 +672,16 @@ for expected in \
     exit 1
   }
 done
+
+if [ "${OPENLINKER_BROWSER_ACCEPTANCE_LIVE_PROVIDER_MATRIX:-0}" = "1" ]; then
+  OPENLINKER_BROWSER_LIVE_FIXTURE_URL="$fixture_url" \
+    OPENLINKER_BROWSER_LIVE_FIXTURE_MARKER="$provider_live_marker" \
+    OPENLINKER_BROWSER_LIVE_INTERNAL_NETWORK="$internal_network" \
+    OPENLINKER_BROWSER_LIVE_CONTROL_VOLUME="$control_volume" \
+    OPENLINKER_BROWSER_LIVE_EGRESS_IP="$egress_internal_ip" \
+    OPENLINKER_BROWSER_LIVE_PREFIX="${prefix}-provider" \
+    "$repository_root/test/browser-provider-live/matrix.sh"
+fi
 
 docker stop -t 5 "$egress_container" >/dev/null
 docker run --rm \
@@ -477,7 +736,7 @@ docker exec "$runtime_container" node -e '
 
 docker stop -t 5 "$observer_container" >/dev/null
 
-if ! docker run --rm \
+if ! run_observer --rm \
   --user tcpdump:tcpdump \
   --read-only \
   --cap-drop ALL \
@@ -493,7 +752,7 @@ if ! docker run --rm \
   exit 1
 fi
 
-if docker run --rm \
+if run_observer --rm \
   --user tcpdump:tcpdump \
   --read-only \
   --cap-drop ALL \
@@ -507,7 +766,7 @@ if docker run --rm \
   exit 1
 fi
 
-if docker run --rm \
+if run_observer --rm \
   --user tcpdump:tcpdump \
   --read-only \
   --cap-drop ALL \

@@ -3,6 +3,8 @@ package egressgateway
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -226,6 +228,60 @@ func TestGatewayPinsValidatedHTTPDestination(t *testing.T) {
 	}
 	if receivedHost != "public.example" {
 		t.Fatalf("original Host was not preserved: %q", receivedHost)
+	}
+}
+
+func TestGatewayTriesEachValidatedAddressBeforeOpeningConnectTunnel(t *testing.T) {
+	publicOrigin := httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer publicOrigin.Close()
+	publicAddress := strings.TrimPrefix(publicOrigin.URL, "https://")
+
+	var dialed []string
+	gateway := New(Options{
+		LookupIP: func(context.Context, string) ([]net.IP, error) {
+			return []net.IP{
+				net.ParseIP("93.184.216.34"),
+				net.ParseIP("93.184.216.35"),
+			}, nil
+		},
+		DialContext: func(
+			ctx context.Context,
+			network string,
+			address string,
+		) (net.Conn, error) {
+			dialed = append(dialed, address)
+			if len(dialed) == 1 {
+				return nil, errors.New("first public edge is unavailable")
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, publicAddress)
+		},
+	})
+	proxy := httptest.NewServer(gateway)
+	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // test server
+	}}
+	response, err := client.Get("https://public.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("public response status = %d", response.StatusCode)
+	}
+	want := []string{"93.184.216.34:443", "93.184.216.35:443"}
+	if strings.Join(dialed, ",") != strings.Join(want, ",") {
+		t.Fatalf("CONNECT attempts = %v, want %v", dialed, want)
 	}
 }
 

@@ -83,6 +83,11 @@ function request(action: Record<string, unknown>): Record<string, unknown> {
       attachment_id: "55555555-5555-4555-8555-555555555555",
       control_epoch: 1,
       controller: "agent",
+      browser_interaction_policy: "restricted",
+      browser_interaction_policy_generation: 1,
+      browser_mutation_origins: [],
+      browser_mutation_origins_sha256:
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     },
     action,
   };

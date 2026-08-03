@@ -135,6 +135,11 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 	}
 	chromeSource := string(chromeDockerfile)
 	for _, required := range []string{
+		"ARG OPENLINKER_BROWSER_BASE\nFROM ${OPENLINKER_BROWSER_BASE}",
+		`base_digest="${OPENLINKER_BROWSER_BASE##*@sha256:}"`,
+		`test "${#base_digest}" -eq 64`,
+		"ARG TARGETARCH",
+		`test "${TARGETARCH}" = amd64`,
 		"OPENLINKER_CHROME_ARTIFACT",
 		"OPENLINKER_CHROME_LOCK",
 		"OPENLINKER_BROWSER_PROFILE_GENERATION",
@@ -148,6 +153,7 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		}
 	}
 	for _, forbidden := range []string{
+		"OPENLINKER_BROWSER_BASE=openlinker-browser-runtime:dev",
 		"apt-get",
 		"curl ",
 		"wget ",
@@ -157,6 +163,13 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		if strings.Contains(chromeSource, forbidden) {
 			t.Errorf("operator Chrome Dockerfile contains forbidden fetch or surface %q", forbidden)
 		}
+	}
+	engineReadme, err := os.ReadFile(filepath.Join(root, "browser-engine", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(engineReadme), "--platform linux/amd64") {
+		t.Error("operator Chrome build documentation does not select its only supported architecture")
 	}
 
 	providerDockerfile, err := os.ReadFile(filepath.Join(root, "Dockerfile.providers"))

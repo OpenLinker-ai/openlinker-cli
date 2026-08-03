@@ -28,6 +28,7 @@ type ProviderConfig struct {
 	Env                         []string
 	EnvAllowlist                []string
 	ExecutionProfile            string
+	BrowserInteractionPolicy    string
 	BrowserClientModeRequested  string
 	BrowserClientMode           string
 	BrowserClientFallbackReason string
