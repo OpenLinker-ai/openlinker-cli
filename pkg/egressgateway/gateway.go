@@ -24,6 +24,7 @@ import (
 const Version = "0.1.0"
 const DefaultDoHURL = "https://1.1.1.1/dns-query"
 const maxGatewaySecretBytes = 64 << 10
+const maxTunnelDialAddresses = 8
 
 var blockedDestinationPrefixes = netpolicy.BlockedDestinationPrefixes()
 
@@ -180,15 +181,9 @@ func (g *Gateway) serveConnect(w http.ResponseWriter, r *http.Request) {
 		writeBlockedResponse(w, "private or invalid destination blocked")
 		return
 	}
-	target := net.JoinHostPort(addresses[0].String(), port)
-
-	var upstreamConn net.Conn
-	if g.upstream == nil {
-		upstreamConn, err = g.dialContext(r.Context(), "tcp", target)
-	} else {
-		upstreamConn, err = g.connectThroughUpstream(r.Context(), target)
-	}
+	upstreamConn, err := g.openTunnel(r.Context(), addresses, port)
 	if err != nil {
+		g.logger.Printf("unavailable method=CONNECT host=%s", safeHost(host))
 		http.Error(w, "public destination unavailable", http.StatusBadGateway)
 		return
 	}
@@ -212,6 +207,39 @@ func (g *Gateway) serveConnect(w http.ResponseWriter, r *http.Request) {
 	<-done
 	_ = clientConn.Close()
 	_ = upstreamConn.Close()
+}
+
+// openTunnel tries only the bounded address set already returned and fully
+// validated by resolvePublic. No retry performs another DNS lookup, and the
+// client has not received a successful CONNECT response or sent application
+// bytes yet, so moving to the next validated public edge cannot duplicate an
+// HTTP mutation.
+func (g *Gateway) openTunnel(
+	ctx context.Context,
+	addresses []net.IP,
+	port string,
+) (net.Conn, error) {
+	attempts := len(addresses)
+	if attempts > maxTunnelDialAddresses {
+		attempts = maxTunnelDialAddresses
+	}
+	var lastErr error
+	for index := 0; index < attempts; index++ {
+		target := net.JoinHostPort(addresses[index].String(), port)
+		var connection net.Conn
+		if g.upstream == nil {
+			connection, lastErr = g.dialContext(ctx, "tcp", target)
+		} else {
+			connection, lastErr = g.connectThroughUpstream(ctx, target)
+		}
+		if lastErr == nil {
+			return connection, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("public destination has no validated address")
+	}
+	return nil, lastErr
 }
 
 func writeBlockedResponse(w http.ResponseWriter, message string) {

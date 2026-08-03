@@ -41,6 +41,9 @@ runtime boundaries are stabilizing.
   bundle the checksum-pinned OpenLinker Plugin v0.1.2, and publish
   dual-architecture image, SBOM, and provenance evidence. The optional Google
   Chrome image remains operator-built and amd64-only.
+- The Egress Gateway now tries a bounded set of already validated public DNS
+  addresses before failing an HTTPS CONNECT. It never re-resolves during the
+  fallback and rejects the complete answer set if any address is non-public.
 - Made native Codex MCP calls accept Codex client `_meta`, added a validated
   OpenAI-compatible Base URL setting, and allowed new or resumed sessions to
   run from non-Git workspaces.
