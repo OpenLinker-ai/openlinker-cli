@@ -66,6 +66,9 @@ The gate builds the current Browser, Egress, fixture, client, and packet
 observer images, then proves:
 
 - the Browser container has one internal network and no published ports;
+- the dual-homed Egress Gateway starts on its public network before its
+  internal attachment, and a secure-DNS probe from the exact Gateway network
+  namespace proves that its default route is public;
 - Browser preflight starts Chromium and checks the real Gateway;
 - preflight reports the repository-locked Browser version, locale, timezone,
   distribution, and font-manifest evidence;

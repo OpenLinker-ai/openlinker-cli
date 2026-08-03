@@ -426,8 +426,7 @@ sleep 2
 
 docker run -d \
   --name "$egress_container" \
-  --network "$internal_network" \
-  --network-alias openlinker-egress-gateway \
+  --network "$public_network" \
   --read-only \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
@@ -436,7 +435,10 @@ docker run -d \
   -e OPENLINKER_EGRESS_DOH_URL=https://1.1.1.1/dns-query \
   "$egress_image" \
   >/dev/null
-docker network connect "$public_network" "$egress_container"
+docker network connect \
+  --alias openlinker-egress-gateway \
+  "$internal_network" \
+  "$egress_container"
 egress_internal_ip=$(
   docker inspect "$egress_container" \
     --format "{{(index .NetworkSettings.Networks \"${internal_network}\").IPAddress}}"
@@ -447,6 +449,48 @@ case "$egress_internal_ip" in
     exit 1
     ;;
 esac
+
+# The Gateway must keep its default route on the public network. Starting it
+# on the internal network first can leave Linux Docker with an internal default
+# route even after the public network is attached. Probe DoH from the exact
+# Gateway network namespace so that failure is diagnosed before Chromium.
+if ! docker run --rm \
+  --network "container:${egress_container}" \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --entrypoint node \
+  "$observer_image" \
+  -e '
+    const https = require("node:https");
+    const host = process.argv[1];
+    const request = https.get(
+      {
+        hostname: "1.1.1.1",
+        path: `/dns-query?name=${encodeURIComponent(host)}&type=A`,
+        headers: { accept: "application/dns-json" },
+      },
+      (response) => {
+        let raw = "";
+        response.on("data", (chunk) => { raw += chunk; });
+        response.on("end", () => {
+          try {
+            const body = JSON.parse(raw);
+            const resolved = body.Answer?.some((answer) => answer.type === 1);
+            process.exit(response.statusCode === 200 && resolved ? 0 : 1);
+          } catch {
+            process.exit(1);
+          }
+        });
+      },
+    );
+    request.setTimeout(10_000, () => request.destroy());
+    request.on("error", () => process.exit(1));
+  ' \
+  "$fixture_host"; then
+  echo "Egress Gateway public-route secure-DNS preflight failed" >&2
+  exit 1
+fi
 
 docker run -d \
   --name "$runtime_container" \
