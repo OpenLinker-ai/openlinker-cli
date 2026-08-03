@@ -13,9 +13,10 @@ Run from the CLI repository:
 ./test/browser-image/run.sh
 ```
 
-The workflow runs that exact entry point for both release architectures. A
-local Docker installation with the corresponding native support or QEMU/binfmt
-registration can replay either half explicitly:
+The workflow runs that exact entry point on matching native GitHub-hosted
+amd64 and arm64 runners for both release architectures. A local Docker
+installation with the corresponding native support or QEMU/binfmt registration
+can replay either half explicitly:
 
 ```sh
 DOCKER_DEFAULT_PLATFORM=linux/amd64 ./test/browser-image/run.sh
@@ -143,9 +144,10 @@ all interfaces while real Chromium:
 The live observer uses libpcap immediate mode to avoid capture buffering. It
 is a test-only image and is built for the Docker server's native architecture,
 then joins the target Browser container with `--network container:<runtime>`.
-Therefore an ARM64 Browser/Egress/client/fixture matrix on an x86_64 runner
-still executes those production and behavioral components through QEMU, while
-the observer uses the host PF_PACKET ABI instead of an unsupported QEMU
+CI runs both the observer and production Browser/Egress/client/fixture matrix
+natively on their matching architecture. A local cross-architecture replay
+may still execute the production and behavioral components through QEMU while
+keeping the observer on the host PF_PACKET ABI, avoiding unsupported QEMU
 TPACKET translation. The resulting pcap contains the target Browser network
 namespace's real packets and is read back by the same three assertions below.
 

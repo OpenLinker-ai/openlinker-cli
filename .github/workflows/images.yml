@@ -31,22 +31,20 @@ permissions:
 jobs:
   browser-acceptance:
     name: Real Chromium no-bypass acceptance (${{ matrix.platform }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
+            runner: ubuntu-24.04
             live_provider: true
           - platform: linux/arm64
+            runner: ubuntu-24.04-arm
             live_provider: false
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v3
-        with:
-          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
-          platforms: arm64
       - name: Self-test release evidence rejection
         run: ./test/release-images/verify.test.sh
       - name: Self-test credential-backed matrix verifier
@@ -57,8 +55,8 @@ jobs:
       - name: Run deterministic production Browser and Egress images
         if: (github.ref_type != 'tag' && github.event_name != 'workflow_dispatch') || matrix.live_provider == false
         env:
-          # Keep the target platform scoped below QEMU setup. A job-level value
-          # makes setup-qemu pull its own installer for the emulated architecture.
+          # Keep the asserted image platform explicit even though each acceptance
+          # leg runs natively on the matching GitHub-hosted architecture.
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: ./test/browser-image/run.sh
       - name: Prepare credential-backed Provider gate
