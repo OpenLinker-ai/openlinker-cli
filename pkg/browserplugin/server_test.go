@@ -120,7 +120,15 @@ func TestServerListsOnlyClientOwnedBrowserTool(t *testing.T) {
 		"agent_id",
 		"principal_scope_id",
 		"conversation_id",
+		"browser_session_id",
+		"session_epoch",
 		"attachment_id",
+		"control_epoch",
+		"controller",
+		"browser_interaction_policy",
+		"browser_interaction_policy_generation",
+		"browser_mutation_origins",
+		"browser_mutation_origins_sha256",
 		"channel_credential",
 		"api_key",
 	} {
@@ -467,11 +475,13 @@ func TestServerCheckpointRequestsNoFullObservation(t *testing.T) {
 	}
 }
 
-func TestServerRejectsCallerIdentityAndUnsafeBatch(t *testing.T) {
+func TestServerRejectsCallerAuthorityAndUnsafeBatch(t *testing.T) {
 	executor := &fakeExecutor{}
 	input := strings.NewReader(
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"observe","run_id":"11111111-1111-4111-8111-111111111111"}}}` + "\n" +
-			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"act","actions":[{"kind":"click","x":1,"y":2},{"kind":"wait","duration_ms":1}]}}}` + "\n",
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"observe","browser_interaction_policy":"full"}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"observe","browser_mutation_origins":["https://example.com"]}}}` + "\n" +
+			`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"browser_session","arguments":{"operation":"act","actions":[{"kind":"click","x":1,"y":2},{"kind":"wait","duration_ms":1}]}}}` + "\n",
 	)
 	var output bytes.Buffer
 	server := &Server{
@@ -485,7 +495,7 @@ func TestServerRejectsCallerIdentityAndUnsafeBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	responses := decodeResponses(t, output.String())
-	for _, id := range []string{"1", "2"} {
+	for _, id := range []string{"1", "2", "3", "4"} {
 		result := responses[id]["result"].(map[string]any)
 		if result["isError"] != true {
 			t.Fatalf("response %s = %#v", id, responses[id])
