@@ -61,11 +61,18 @@ run_observer() {
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ]; then
+    # Only dump logs for containers that were actually created. Otherwise the
+    # daemon's "No such container" errors bury the real failure line.
     for diagnostic_container in \
       "$runtime_container" \
       "$egress_container" \
       "$observer_container"; do
-      docker logs "$diagnostic_container" >&2 || true
+      if docker container inspect "$diagnostic_container" >/dev/null 2>&1; then
+        echo "--- docker logs ${diagnostic_container} ---" >&2
+        docker logs "$diagnostic_container" >&2 || true
+      else
+        echo "--- ${diagnostic_container} was never started ---" >&2
+      fi
     done
     if [ "${OPENLINKER_BROWSER_ACCEPTANCE_KEEP_ON_FAILURE:-0}" = "1" ]; then
       echo "Browser image acceptance resources preserved with prefix ${prefix}" >&2
@@ -207,9 +214,14 @@ case "$fixture_url" in
             sed -n 's,.*\(https://[-a-z0-9]*\.trycloudflare\.com\).*,\1,p' |
             tail -1
         )
+        # A registered tunnel only proves cloudflared is connected. Require the
+        # URL to actually serve the fixture, so a healthy tunnel in front of a
+        # broken fixture is not mistaken for readiness.
         if [ -n "$fixture_url" ] &&
           docker logs "$tunnel_container" 2>&1 |
-            grep -q "Registered tunnel connection"; then
+            grep -q "Registered tunnel connection" &&
+          curl -fsS --max-time 10 "$fixture_url/" 2>/dev/null |
+            grep -q "OpenLinker Browser Acceptance"; then
           break
         fi
         fixture_url=
@@ -224,6 +236,29 @@ case "$fixture_url" in
         sleep $((tunnel_attempt * 20))
       fi
     done
+    if [ -z "$fixture_url" ]; then
+      # The temporary tunnel is an external dependency and is the usual cause of
+      # a red run here. Distinguish "no public URL at all" from "URL published
+      # but not servable", because the latter is an egress restriction on this
+      # host rather than a product defect.
+      last_tunnel_url=$(
+        docker logs "$tunnel_container" 2>&1 |
+          sed -n 's,.*\(https://[-a-z0-9]*\.trycloudflare\.com\).*,\1,p' |
+          tail -1
+      )
+      if [ -n "$last_tunnel_url" ]; then
+        echo "temporary HTTPS acceptance fixture published ${last_tunnel_url} but never served content after ${tunnel_attempt} tunnel attempt(s)" >&2
+        echo "Check the connectivity pre-checks below: a blocked outbound TCP 7844 leaves cloudflared on degraded transport." >&2
+      else
+        echo "temporary HTTPS acceptance fixture never published a public URL after ${tunnel_attempt} tunnel attempt(s)" >&2
+      fi
+      # cloudflared reports on stderr, so merge both streams before forwarding.
+      echo "--- cloudflared log tail ---" >&2
+      docker logs --tail 40 "$tunnel_container" 2>&1 | sed 's/^/  /' >&2 || true
+      echo "--- fixture log tail ---" >&2
+      docker logs --tail 40 "$fixture_container" 2>&1 | sed 's/^/  /' >&2 || true
+      echo "Set OPENLINKER_BROWSER_ACCEPTANCE_FIXTURE_URL to a reachable HTTPS fixture to bypass the temporary tunnel." >&2
+    fi
     ;;
   https://*)
     if ! curl -fsS --max-time 10 "$fixture_url/" 2>/dev/null |
