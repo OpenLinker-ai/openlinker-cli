@@ -49,8 +49,20 @@ type GateResponse = {
   error?: string;
 };
 
+type GateAuthority = {
+  browser_session_id: string;
+  session_epoch: number;
+  attachment_id: string;
+  control_epoch: number;
+  interaction_policy: string;
+  interaction_policy_generation: number;
+  mutation_origins_sha256: string;
+};
+
 export class NativeChromeGate {
   private activationPage?: Page;
+  private authority?: GateAuthority;
+  private hostProcessGenerationNonce?: string;
 
   private constructor(private readonly config: GateConfig) {}
 
@@ -118,7 +130,7 @@ export class NativeChromeGate {
           this.config.socketPath,
           Math.max(1, Math.min(2_000, deadline - Date.now())),
         );
-        await this.preflight();
+        this.hostProcessGenerationNonce = await this.preflight();
         this.activationPage = activation;
         return;
       } catch (error) {
@@ -130,7 +142,7 @@ export class NativeChromeGate {
     throw lastError;
   }
 
-  async preflight(): Promise<void> {
+  async preflight(): Promise<string> {
     const result = await this.request("preflight", {
       asset_manifest_sha256: this.config.assetManifestSHA256,
       extension_id: this.config.extensionID,
@@ -143,42 +155,66 @@ export class NativeChromeGate {
       result.extension_version !== this.config.extensionVersion ||
       result.native_host_protocol !== this.config.nativeHostProtocol ||
       result.asset_manifest_sha256 !== this.config.assetManifestSHA256 ||
+      typeof result.host_process_generation_nonce !== "string" ||
+      !/^[0-9a-f-]{36}$/.test(result.host_process_generation_nonce) ||
       !sameStringArray(result.capabilities, REQUIRED_CAPABILITIES)
     ) {
       throw new Error("official Chrome Native Host preflight evidence is invalid");
     }
+    return result.host_process_generation_nonce;
   }
 
   async authorize(request: EngineRequest): Promise<void> {
-    const result = await this.request("authorize_action", {
-      browser_session_id: request.identity.browser_session_id,
-      session_epoch: request.identity.session_epoch,
-      attachment_id: request.identity.attachment_id,
-      control_epoch: request.identity.control_epoch,
-      interaction_policy: request.identity.browser_interaction_policy,
-      interaction_policy_generation:
-        request.identity.browser_interaction_policy_generation,
-      mutation_origins_sha256:
-        request.identity.browser_mutation_origins_sha256,
+    const authority = authorityFromRequest(request);
+    const hostProcessGenerationNonce = await this.prepareHost(
+      authority,
+      request.action.kind === "preflight",
+    );
+    const params = {
+      ...authority,
       action_kind: request.action.kind,
-    });
+    };
+    const result = await this.request("authorize_action", params);
     this.requireAuthorization(result);
+    this.authority = authority;
+    this.hostProcessGenerationNonce = hostProcessGenerationNonce;
   }
 
   async authorizeViewer(request: EngineViewerRequest): Promise<void> {
+    const authority = authorityFromRequest(request);
+    const hostProcessGenerationNonce = await this.prepareHost(authority);
     const result = await this.request("authorize_viewer", {
-      browser_session_id: request.identity.browser_session_id,
-      session_epoch: request.identity.session_epoch,
-      attachment_id: request.identity.attachment_id,
-      control_epoch: request.identity.control_epoch,
-      interaction_policy: request.identity.browser_interaction_policy,
-      interaction_policy_generation:
-        request.identity.browser_interaction_policy_generation,
-      mutation_origins_sha256:
-        request.identity.browser_mutation_origins_sha256,
+      ...authority,
       viewer_operation: request.operation,
     });
     this.requireAuthorization(result);
+    this.authority = authority;
+    this.hostProcessGenerationNonce = hostProcessGenerationNonce;
+  }
+
+  private async prepareHost(
+    authority: GateAuthority,
+    callerBindsAuthority = false,
+  ): Promise<string> {
+    const hostProcessGenerationNonce = await this.preflight();
+    if (
+      this.hostProcessGenerationNonce === undefined ||
+      hostProcessGenerationNonce === this.hostProcessGenerationNonce
+    ) {
+      return hostProcessGenerationNonce;
+    }
+    if (this.authority === undefined || !sameAuthority(authority, this.authority)) {
+      throw new Error(
+        "official Chrome Native Host reconnected with changed Browser authority",
+      );
+    }
+    if (callerBindsAuthority) return hostProcessGenerationNonce;
+    const result = await this.request("authorize_action", {
+      ...authority,
+      action_kind: "preflight",
+    });
+    this.requireAuthorization(result);
+    return hostProcessGenerationNonce;
   }
 
   private requireAuthorization(result: Record<string, unknown>): void {
@@ -218,6 +254,35 @@ export class NativeChromeGate {
     }
     return response.result;
   }
+}
+
+function authorityFromRequest(
+  request: EngineRequest | EngineViewerRequest,
+): GateAuthority {
+  return {
+    browser_session_id: request.identity.browser_session_id,
+    session_epoch: request.identity.session_epoch,
+    attachment_id: request.identity.attachment_id,
+    control_epoch: request.identity.control_epoch,
+    interaction_policy: request.identity.browser_interaction_policy,
+    interaction_policy_generation:
+      request.identity.browser_interaction_policy_generation,
+    mutation_origins_sha256:
+      request.identity.browser_mutation_origins_sha256,
+  };
+}
+
+function sameAuthority(left: GateAuthority, right: GateAuthority): boolean {
+  return (
+    left.browser_session_id === right.browser_session_id &&
+    left.session_epoch === right.session_epoch &&
+    left.attachment_id === right.attachment_id &&
+    left.control_epoch === right.control_epoch &&
+    left.interaction_policy === right.interaction_policy &&
+    left.interaction_policy_generation ===
+      right.interaction_policy_generation &&
+    left.mutation_origins_sha256 === right.mutation_origins_sha256
+  );
 }
 
 function exchange(

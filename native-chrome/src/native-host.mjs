@@ -224,9 +224,6 @@ function createAuthorityFence() {
         recentRequestIDs.delete(requestOrder.shift());
       }
       if (request.method === "preflight") {
-        if (preflightComplete || authority !== undefined) {
-          throw new Error("Native Host preflight is stale");
-        }
         preflightComplete = true;
         return;
       }
@@ -293,12 +290,20 @@ function startNativeHost(environment = process.env) {
   const pending = new Map();
   let nextRequestID = 1;
   const authorityFence = createAuthorityFence();
+  const hostProcessGenerationNonce = randomUUID();
   const controlSockets = new Set();
   let server;
   let shuttingDown = false;
+  let socketIdentity;
 
   const removeSocket = () => {
-    if (existsSync(config.socketPath) && lstatSync(config.socketPath).isSocket()) {
+    if (!existsSync(config.socketPath) || socketIdentity === undefined) return;
+    const status = lstatSync(config.socketPath);
+    if (
+      status.isSocket() &&
+      status.dev === socketIdentity.dev &&
+      status.ino === socketIdentity.ino
+    ) {
       unlinkSync(config.socketPath);
     }
   };
@@ -435,7 +440,6 @@ function startNativeHost(environment = process.env) {
       let validated;
       try {
         validated = validateControlRequest(JSON.parse(raw));
-        authorityFence.admit(validated.request, validated.params);
       } catch (error) {
         socket.end(
           `${JSON.stringify({
@@ -470,15 +474,18 @@ function startNativeHost(environment = process.env) {
             ) {
               throw new Error("preflight capability evidence is invalid");
             }
+            authorityFence.admit(request, params);
             complete({
               asset_manifest_sha256: config.assetManifestSHA256,
               extension_id: config.extensionID,
               extension_version: config.extensionVersion,
+              host_process_generation_nonce: hostProcessGenerationNonce,
               native_host_protocol: config.nativeHostProtocol,
               capabilities: REQUIRED_CAPABILITIES,
             });
             return;
           }
+          authorityFence.admit(request, params);
           complete({ authorized: true, nonce: randomUUID() });
         })
         .catch((error) => {
@@ -493,7 +500,11 @@ function startNativeHost(environment = process.env) {
         });
     });
   });
-  server.listen(config.socketPath, () => chmodSync(config.socketPath, 0o600));
+  server.listen(config.socketPath, () => {
+    chmodSync(config.socketPath, 0o600);
+    const status = lstatSync(config.socketPath);
+    socketIdentity = { dev: status.dev, ino: status.ino };
+  });
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
