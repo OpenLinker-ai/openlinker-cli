@@ -37,6 +37,7 @@ const (
 	defaultBrowserTimezone     = "UTC"
 	defaultFontContractVersion = "openlinker.browser.fonts.v1"
 	defaultEgressLabel         = "default"
+	defaultOfficialChromeLock  = "/opt/openlinker/native-chrome/assets.lock.json"
 	maxCredentialBytes         = 4096
 )
 
@@ -64,7 +65,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	engine, err := browserruntime.NewProfileEngine(browserruntime.ProfileEngineOptions{
+	isolated, err := browserruntime.NewProfileEngine(browserruntime.ProfileEngineOptions{
 		Process: browserruntime.ProcessEngineOptions{
 			Command:     []string{defaultEngineExecutable, defaultEngineScript},
 			Environment: browserEngineEnvironment(profileEnvironment),
@@ -80,12 +81,59 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	assets, unavailableReason := browserruntime.LoadOfficialChromeAssets(
+		browserruntime.OfficialChromeAssetOptions{
+			ManifestPath:     value("OPENLINKER_NATIVE_CHROME_ASSET_LOCK", defaultOfficialChromeLock),
+			RequireRootOwned: true,
+		},
+	)
+	var official browserruntime.BrowserBackend
+	var officialEvidence browserprotocol.BackendSelectionEvidence
+	if unavailableReason == "" {
+		officialBackend, officialErr := browserruntime.NewOfficialChromeBackend(
+			browserruntime.OfficialChromeBackendOptions{
+				Assets:             assets,
+				BaseEnvironment:    browserEngineEnvironment(profileEnvironment),
+				Locale:             profileEnvironment.Evidence.BrowserLocale,
+				Timezone:           profileEnvironment.Evidence.BrowserTimezone,
+				FontContract:       profileEnvironment.Evidence.FontContractVersion,
+				FontManifestSHA256: profileEnvironment.Evidence.FontManifestSHA256,
+				EgressLabel:        value("OPENLINKER_BROWSER_EGRESS_LABEL", defaultEgressLabel),
+				EgressProxy:        strings.TrimSpace(os.Getenv("OPENLINKER_BROWSER_EGRESS_PROXY")),
+				StoreRoot:          filepath.Join(value("OPENLINKER_BROWSER_PROFILE_STORE", defaultProfileStore), "official_chrome_extension"),
+				WorkRoot:           filepath.Join(value("OPENLINKER_BROWSER_PROFILE_WORK_ROOT", defaultProfileWorkRoot), "official_chrome_extension"),
+				RootKeyFile:        value("OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE", defaultProfileRootKey),
+			},
+		)
+		if officialErr != nil {
+			unavailableReason = "official_profile_preflight_failed"
+		} else {
+			official = officialBackend
+			officialEvidence = browserprotocol.BackendSelectionEvidence{
+				AssetManifestSHA256: assets.ManifestSHA256,
+				ExtensionID:         assets.Lock.ExtensionID,
+				ExtensionVersion:    assets.Lock.ExtensionVersion,
+				NativeHostProtocol:  assets.Lock.NativeHostProtocol,
+			}
+		}
+	}
+	engine, err := browserruntime.NewBackendSelector(
+		browserruntime.BackendSelectorOptions{
+			Official:                  official,
+			OfficialEvidence:          officialEvidence,
+			OfficialUnavailableReason: unavailableReason,
+			Isolated:                  isolated,
+		},
+	)
+	if err != nil {
+		return errors.Join(err, isolated.Close())
+	}
 	humanControlAvailable, err := booleanValue(
 		"OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED",
 		false,
 	)
 	if err != nil {
-		return err
+		return errors.Join(err, engine.Close())
 	}
 	server, err := browserruntime.NewServer(browserruntime.ServerOptions{
 		SocketPath:            socketPath,

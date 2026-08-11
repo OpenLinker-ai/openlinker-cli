@@ -29,9 +29,10 @@ const (
 )
 
 type browserExecutionProvider struct {
-	base      Provider
-	config    ProviderConfig
-	preflight func(context.Context, *browserRunLease) error
+	base        Provider
+	config      ProviderConfig
+	preflight   func(context.Context, *browserRunLease) error
+	repreflight func(context.Context, *browserRunLease) error
 }
 
 type browserSessionState struct {
@@ -62,6 +63,7 @@ type browserRunLease struct {
 	mu           sync.Mutex
 	runtimeUsed  bool
 	environment  *browserprotocol.EnvironmentEvidence
+	backend      *browserprotocol.BackendSelectionEvidence
 	closed       bool
 }
 
@@ -95,9 +97,10 @@ func newBrowserExecutionProvider(base Provider, config ProviderConfig) (Provider
 		)
 	}
 	return &browserExecutionProvider{
-		base:      base,
-		config:    config,
-		preflight: preflightBrowserRuntime,
+		base:        base,
+		config:      config,
+		preflight:   preflightBrowserRuntime,
+		repreflight: preflightSelectedBrowserRuntime,
 	}, nil
 }
 
@@ -113,7 +116,7 @@ func (provider *browserExecutionProvider) Run(
 	}
 	err = provider.preflight(ctx, lease)
 	if err != nil {
-		runtimeErr := lease.closeBrowserRuntime()
+		runtimeErr := lease.closeBrowserRuntimeWithFailureFence()
 		leaseErr := lease.Close()
 		emitBrowserLifecycle(run.Emit, "failed", "failed")
 		return openlinker.RuntimeResult{}, errors.Join(err, runtimeErr, leaseErr)
@@ -135,7 +138,7 @@ func (provider *browserExecutionProvider) Run(
 		mutationJournal,
 	)
 	if err != nil {
-		runtimeErr := lease.closeBrowserRuntime()
+		runtimeErr := lease.closeBrowserRuntimeWithFailureFence()
 		leaseErr := lease.Close()
 		emitBrowserLifecycle(run.Emit, "failed", "failed")
 		return openlinker.RuntimeResult{}, errors.Join(err, runtimeErr, leaseErr)
@@ -143,19 +146,30 @@ func (provider *browserExecutionProvider) Run(
 	run.Browser = &BrowserRunContext{
 		PluginBin:  provider.config.BrowserPluginBin,
 		ToolSocket: broker.SocketPath(),
-		Rotate:     lease.Rotate,
 	}
+	refreshBrowserRunContext(run.Browser, lease)
+	run.Browser.Rotate = func() error {
+		if err := lease.Rotate(); err != nil {
+			return err
+		}
+		if err := provider.repreflight(ctx, lease); err != nil {
+			return err
+		}
+		refreshBrowserRunContext(run.Browser, lease)
+		return nil
+	}
+	runConfig := providerConfigForBrowserRun(provider.config, run.Browser)
 	emitBrowserLifecycle(
 		run.Emit,
 		"ready",
 		"",
-		browserClientEvidence(provider.config),
+		browserClientEvidence(runConfig),
 		browserAuthorityEvidence(lease.identity),
 	)
 	status := "failed"
 	defer func() {
 		brokerErr := broker.Close()
-		runtimeErr := lease.closeBrowserRuntime()
+		runtimeErr := lease.closeBrowserRuntimeWithFailureFence()
 		leaseErr := lease.Close()
 		if cleanupErr := errors.Join(brokerErr, runtimeErr, leaseErr); cleanupErr != nil {
 			status = "failed"
@@ -177,7 +191,8 @@ func (provider *browserExecutionProvider) Run(
 		status = "success"
 	}
 	if output, ok := result.Output.(map[string]any); ok {
-		evidence := browserClientEvidence(provider.config)
+		finalRunConfig := providerConfigForBrowserRun(provider.config, run.Browser)
+		evidence := browserClientEvidence(finalRunConfig)
 		copied := make(map[string]any, len(output)+2+len(evidence))
 		for key, value := range output {
 			copied[key] = value
@@ -209,6 +224,29 @@ func preflightBrowserRuntime(
 	ctx context.Context,
 	lease *browserRunLease,
 ) error {
+	return preflightBrowserRuntimeMode(
+		ctx,
+		lease,
+		lease.config.BrowserBackendModeRequested,
+	)
+}
+
+func preflightSelectedBrowserRuntime(
+	ctx context.Context,
+	lease *browserRunLease,
+) error {
+	return preflightBrowserRuntimeMode(ctx, lease, "")
+}
+
+func preflightBrowserRuntimeMode(
+	ctx context.Context,
+	lease *browserRunLease,
+	backendMode string,
+) error {
+	lease.mu.Lock()
+	lease.environment = nil
+	lease.backend = nil
+	lease.mu.Unlock()
 	client, err := lease.browserClient()
 	if err != nil {
 		return err
@@ -216,6 +254,7 @@ func preflightBrowserRuntime(
 	observation, failure := client.Execute(ctx, browserprotocol.Action{
 		Kind:        browserprotocol.ActionPreflight,
 		Observation: browserprotocol.ObservationSemantic,
+		BackendMode: backendMode,
 	})
 	if failure != nil {
 		return failure
@@ -227,10 +266,39 @@ func preflightBrowserRuntime(
 	if failure := environment.Validate(); failure != nil {
 		return failure
 	}
+	backend := observation.BackendSelection
+	if backend == nil && requestedBackendMode(backendMode) == "isolated" {
+		backend = &browserprotocol.BackendSelectionEvidence{
+			RequestedMode:   "isolated",
+			SelectedBackend: "isolated_chromium",
+		}
+	}
+	if backend == nil || backend.Validate() != nil {
+		return errors.New("Browser preflight did not return valid backend selection evidence")
+	}
 	lease.mu.Lock()
 	lease.environment = &environment
+	selection := *backend
+	lease.backend = &selection
 	lease.mu.Unlock()
 	return nil
+}
+
+func refreshBrowserRunContext(run *BrowserRunContext, lease *browserRunLease) {
+	if run == nil || lease == nil {
+		return
+	}
+	selection := lease.backendSelection()
+	lease.mu.Lock()
+	generation := lease.identity.SessionEpoch
+	lease.mu.Unlock()
+	run.BackendSelected = selection.SelectedBackend
+	run.BackendFallbackReason = selection.FallbackReason
+	run.SelectionGeneration = generation
+	run.AssetManifestSHA256 = selection.AssetManifestSHA256
+	run.ExtensionID = selection.ExtensionID
+	run.ExtensionVersion = selection.ExtensionVersion
+	run.NativeHostProtocol = selection.NativeHostProtocol
 }
 
 func (lease *browserRunLease) browserEvidenceSnapshot() (
@@ -239,13 +307,14 @@ func (lease *browserRunLease) browserEvidenceSnapshot() (
 ) {
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	if lease.closed || lease.environment == nil {
+	if lease.closed || lease.environment == nil || lease.backend == nil {
 		return browserplugin.EvidenceSnapshot{}, errors.New(
 			"Browser attachment evidence is unavailable",
 		)
 	}
 	return browserplugin.EvidenceSnapshot{
 		Environment:                        *lease.environment,
+		BackendSelection:                   *lease.backend,
 		BrowserSessionID:                   lease.identity.BrowserSessionID,
 		SessionEpoch:                       lease.identity.SessionEpoch,
 		ControlEpoch:                       lease.identity.ControlEpoch,
@@ -254,6 +323,15 @@ func (lease *browserRunLease) browserEvidenceSnapshot() (
 		BrowserMutationOrigins:             append([]string{}, lease.identity.BrowserMutationOrigins...),
 		BrowserMutationOriginsSHA256:       lease.identity.BrowserMutationOriginsSHA256,
 	}, nil
+}
+
+func (lease *browserRunLease) backendSelection() browserprotocol.BackendSelectionEvidence {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.backend == nil {
+		return browserprotocol.BackendSelectionEvidence{}
+	}
+	return *lease.backend
 }
 
 func emitBrowserLifecycle(
@@ -303,8 +381,9 @@ func (lease *browserRunLease) closeBrowserRuntime() error {
 	lease.mu.Lock()
 	used := lease.runtimeUsed
 	closed := lease.closed
+	selected := lease.backend != nil
 	lease.mu.Unlock()
-	if !used || closed {
+	if !used || closed || !selected {
 		return nil
 	}
 	identity, err := lease.identitySnapshot()
@@ -340,6 +419,14 @@ func (lease *browserRunLease) closeBrowserRuntime() error {
 		return failure
 	}
 	return nil
+}
+
+func (lease *browserRunLease) closeBrowserRuntimeWithFailureFence() error {
+	err := lease.closeBrowserRuntime()
+	if err == nil {
+		return nil
+	}
+	return errors.Join(err, lease.Rotate())
 }
 
 func acquireBrowserRunLease(

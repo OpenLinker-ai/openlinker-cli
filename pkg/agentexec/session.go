@@ -140,6 +140,9 @@ func providerSessionClientMode(config ProviderConfig) string {
 		return "standard"
 	}
 	if nativeBrowserClientEnabled(config) {
+		if strings.TrimSpace(config.BrowserBackendSelected) == "official_chrome_extension" {
+			return "browser_native_official_chrome"
+		}
 		return "browser_native"
 	}
 	return "browser_mcp"

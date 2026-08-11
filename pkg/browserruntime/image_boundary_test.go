@@ -117,15 +117,21 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 	}
 	if !strings.Contains(
 		combinedBrowserSource,
-		`ignoreDefaultArgs: ["--disable-back-forward-cache"]`,
+		`ignoreDefaultArgs: [`,
+	) || !strings.Contains(
+		combinedBrowserSource,
+		`"--disable-back-forward-cache"`,
 	) {
 		t.Error("Browser Engine does not enable the real BFCache lifecycle contract")
 	}
 	if !strings.Contains(
 		combinedBrowserSource,
-		`channel: browserEnvironment.engine === "chrome" ? "chrome" : "chromium"`,
+		`launchOptions.channel =`,
 	) {
 		t.Error("Browser Engine does not select the pinned full Browser channel")
+	}
+	if !strings.Contains(combinedBrowserSource, "launchOptions.executablePath") {
+		t.Error("Browser Engine does not support the image-locked Official Chrome executable")
 	}
 	chromeDockerfile, err := os.ReadFile(
 		filepath.Join(root, "Dockerfile.browser.chrome"),

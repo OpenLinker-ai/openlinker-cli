@@ -139,6 +139,7 @@ type Request struct {
 type Action struct {
 	Kind        ActionKind      `json:"kind"`
 	Observation ObservationMode `json:"observation,omitempty"`
+	BackendMode string          `json:"backend_mode,omitempty"`
 	URL         string          `json:"url,omitempty"`
 	X           *int            `json:"x,omitempty"`
 	Y           *int            `json:"y,omitempty"`
@@ -149,6 +150,16 @@ type Action struct {
 	Value       string          `json:"value,omitempty"`
 	DurationMS  *int            `json:"duration_ms,omitempty"`
 	Actions     []Action        `json:"actions,omitempty"`
+}
+
+type BackendSelectionEvidence struct {
+	RequestedMode       string `json:"requested_mode"`
+	SelectedBackend     string `json:"selected_backend"`
+	FallbackReason      string `json:"fallback_reason,omitempty"`
+	AssetManifestSHA256 string `json:"asset_manifest_sha256,omitempty"`
+	ExtensionID         string `json:"extension_id,omitempty"`
+	ExtensionVersion    string `json:"extension_version,omitempty"`
+	NativeHostProtocol  string `json:"native_host_protocol,omitempty"`
 }
 
 type Screenshot struct {
@@ -175,24 +186,25 @@ type EnvironmentEvidence struct {
 }
 
 type Observation struct {
-	PageStateID                 string               `json:"page_state_id"`
-	Viewport                    *Viewport            `json:"viewport,omitempty"`
-	NavigationGeneration        uint64               `json:"navigation_generation,omitempty"`
-	Screenshot                  *Screenshot          `json:"screenshot,omitempty"`
-	AXTree                      json.RawMessage      `json:"ax_tree,omitempty"`
-	DOMDiff                     json.RawMessage      `json:"dom_diff,omitempty"`
-	AXTreeTimedOut              bool                 `json:"ax_tree_timed_out,omitempty"`
-	DOMDiffTimedOut             bool                 `json:"dom_diff_timed_out,omitempty"`
-	Origin                      string               `json:"origin,omitempty"`
-	Title                       string               `json:"title,omitempty"`
-	ClickEffect                 ClickEffect          `json:"click_effect,omitempty"`
-	TargetCategory              TargetCategory       `json:"target_category,omitempty"`
-	Environment                 *EnvironmentEvidence `json:"environment,omitempty"`
-	SiteOutcome                 ErrorCode            `json:"site_outcome,omitempty"`
-	ClassifierRulesVersion      string               `json:"classifier_rules_version,omitempty"`
-	ChallengeReleaseUnavailable bool                 `json:"challenge_release_unavailable,omitempty"`
-	BlockedMutationRequests     int                  `json:"blocked_mutation_requests,omitempty"`
-	MutationRequestsObserved    int                  `json:"mutation_requests_observed,omitempty"`
+	PageStateID                 string                    `json:"page_state_id"`
+	Viewport                    *Viewport                 `json:"viewport,omitempty"`
+	NavigationGeneration        uint64                    `json:"navigation_generation,omitempty"`
+	Screenshot                  *Screenshot               `json:"screenshot,omitempty"`
+	AXTree                      json.RawMessage           `json:"ax_tree,omitempty"`
+	DOMDiff                     json.RawMessage           `json:"dom_diff,omitempty"`
+	AXTreeTimedOut              bool                      `json:"ax_tree_timed_out,omitempty"`
+	DOMDiffTimedOut             bool                      `json:"dom_diff_timed_out,omitempty"`
+	Origin                      string                    `json:"origin,omitempty"`
+	Title                       string                    `json:"title,omitempty"`
+	ClickEffect                 ClickEffect               `json:"click_effect,omitempty"`
+	TargetCategory              TargetCategory            `json:"target_category,omitempty"`
+	Environment                 *EnvironmentEvidence      `json:"environment,omitempty"`
+	BackendSelection            *BackendSelectionEvidence `json:"backend_selection,omitempty"`
+	SiteOutcome                 ErrorCode                 `json:"site_outcome,omitempty"`
+	ClassifierRulesVersion      string                    `json:"classifier_rules_version,omitempty"`
+	ChallengeReleaseUnavailable bool                      `json:"challenge_release_unavailable,omitempty"`
+	BlockedMutationRequests     int                       `json:"blocked_mutation_requests,omitempty"`
+	MutationRequestsObserved    int                       `json:"mutation_requests_observed,omitempty"`
 
 	// EngineInstanceID is Runtime-owned process metadata. It never crosses the
 	// Browser wire contract and cannot be supplied by Chromium or page content.

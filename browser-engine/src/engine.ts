@@ -66,6 +66,7 @@ import {
   parseRetryAfter,
 } from "./site-classifier.js";
 import { DocumentGenerationTracker } from "./document-generation.js";
+import { NativeChromeGate } from "./native-chrome-gate.js";
 
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 const MAX_VIEWER_FRAME_BYTES = 1024 * 1024;
@@ -160,6 +161,7 @@ export class BrowserEngine {
     originBudget: OriginBudgetStore | undefined,
     documentTrackerFactory: DocumentTrackerFactory,
     controlState: ControlState,
+    private readonly nativeChromeGate?: NativeChromeGate,
   ) {
     this.context = context;
     this.page = page;
@@ -177,26 +179,50 @@ export class BrowserEngine {
     const profileDirectory = requireProfileDirectory(
       environment.OPENLINKER_BROWSER_PROFILE_DIR,
     );
-    const context = await chromium.launchPersistentContext(profileDirectory, {
+    const nativeChromeGate = NativeChromeGate.fromEnvironment(environment);
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
       acceptDownloads: false,
       args: [...CHROMIUM_FLAGS],
-      channel: browserEnvironment.engine === "chrome" ? "chrome" : "chromium",
-      headless: true,
+      headless: nativeChromeGate === undefined,
       // Playwright disables BFCache by default to make request interception
       // deterministic. The Runtime's challenge-release contract needs real
       // BFCache restores, while the Egress Gateway remains the authoritative
       // network boundary for any navigation that does issue a request.
-      ignoreDefaultArgs: ["--disable-back-forward-cache"],
+      ignoreDefaultArgs: [
+        "--disable-back-forward-cache",
+        ...(nativeChromeGate?.ignoredDefaultArguments() ?? []),
+      ],
       locale: browserEnvironment.locale,
       proxy: { server: proxy },
       serviceWorkers: "block",
       timezoneId: browserEnvironment.timezone,
       viewport: VIEWPORT,
-    });
+    };
+    if (browserEnvironment.executablePath !== undefined) {
+      launchOptions.executablePath = browserEnvironment.executablePath;
+    } else {
+      launchOptions.channel =
+        browserEnvironment.engine === "chrome" ? "chrome" : "chromium";
+    }
+    const context = await chromium.launchPersistentContext(
+      profileDirectory,
+      launchOptions,
+    );
     const browserVersion = context.browser()?.version();
     if (browserVersion === undefined) {
       await context.close();
       throw new Error("Browser version is unavailable");
+    }
+    let lockedEnvironment: EnvironmentEvidence;
+    try {
+      lockedEnvironment = environmentEvidence(
+        browserEnvironment,
+        browserVersion,
+      );
+      await nativeChromeGate?.activate(context);
+    } catch (error) {
+      await context.close().catch(() => undefined);
+      throw error;
     }
     const controlState: ControlState = {
       controller: "agent",
@@ -224,7 +250,9 @@ export class BrowserEngine {
       await routePageWebSocket(controlState, webSocket);
     });
     await context.clearPermissions();
-    const pages = context.pages();
+    const pages = context
+      .pages()
+      .filter((candidate) => !nativeChromeGate?.isInternalPage(candidate));
     const page = pages[0] ?? (await context.newPage());
     const originBudget = new OriginBudgetStore({
       profileDirectory,
@@ -239,17 +267,37 @@ export class BrowserEngine {
       page,
       new PageContinuationStore(profileDirectory),
       (timeout) => probeEgressGateway(proxy, timeout),
-      environmentEvidence(browserEnvironment, browserVersion),
+      lockedEnvironment,
       originBudget,
       (trackedPage) => DocumentGenerationTracker.create(context, trackedPage),
       controlState,
+      nativeChromeGate,
     );
-    for (const existingPage of context.pages()) {
+    for (const existingPage of pages) {
       engine.configurePage(existingPage);
     }
     context.on("page", (newPage) => {
       engine.configurePage(newPage);
-      if (context.pages().length > MAX_PAGES) {
+      if (nativeChromeGate?.isInternalPage(newPage)) {
+        return;
+      }
+      const selectModelPage = () => {
+        if (nativeChromeGate?.isInternalPage(newPage)) {
+          return;
+        }
+        if (engine.modelPages().length > MAX_PAGES) {
+          void newPage.close();
+          return;
+        }
+        engine.page = newPage;
+      };
+      if (nativeChromeGate !== undefined && newPage.url() === "about:blank") {
+        newPage.on("framenavigated", (frame) => {
+          if (frame === newPage.mainFrame()) selectModelPage();
+        });
+        return;
+      }
+      if (engine.modelPages().length > MAX_PAGES) {
         void newPage.close();
         return;
       }
@@ -261,6 +309,7 @@ export class BrowserEngine {
   async execute(request: EngineRequest): Promise<EngineResponse> {
     try {
       const timeout = remainingTimeout(request.deadline);
+      await this.nativeChromeGate?.authorize(request);
       await this.bindSession(request, timeout);
       this.admitMutationRecoveryAction(request.action);
       this.refreshSuspectedSticky();
@@ -435,6 +484,7 @@ export class BrowserEngine {
   ): Promise<EngineViewerResponse> {
     try {
       const timeout = remainingTimeout(request.deadline);
+    await this.nativeChromeGate?.authorizeViewer(request);
       const sessionKey = pageContinuationSessionKey(request.identity);
       const attachmentKey = viewerAttachmentKey(request.identity);
       if (request.operation === "enter") {
@@ -1073,7 +1123,7 @@ export class BrowserEngine {
     this.freshObservationRequired = false;
     this.boundSessionKey = "";
     this.boundAttachmentKey = "";
-    const pages = this.context.pages().filter((page) => !page.isClosed());
+    const pages = this.modelPages();
     for (const extra of pages.slice(1)) {
       await extra.close();
     }
@@ -1125,6 +1175,15 @@ export class BrowserEngine {
       }
     }
     this.boundSessionKey = sessionKey;
+  }
+
+  private modelPages(): Page[] {
+    return this.context
+      .pages()
+      .filter(
+        (page) =>
+          !page.isClosed() && !this.nativeChromeGate?.isInternalPage(page),
+      );
   }
 
   private async classifyTunnelFailure(

@@ -88,14 +88,26 @@ provider-specific `OPENLINKER_CODEX_MODEL` / `OPENLINKER_CLAUDE_MODEL`, web
 search, sandbox, and permission variables. See
 [`deploy/.env.providers.example`](./deploy/.env.providers.example).
 
-The packaged Browser profile adds
-`OPENLINKER_BROWSER_CLIENT_MODE=auto|native|mcp`. Existing generic CLI
-configuration defaults to legacy-compatible `mcp`; the official Codex and
-Claude Browser Compose overlays explicitly use `auto`. `native` loads only the
-image-owned Browser Plugin, while `mcp` uses the direct Runtime-injected MCP
-configuration. “Native” is the Provider Plugin/Skill/Command experience; its
-tool transport is still MCP, and both modes use the same isolated Browser
-Runtime. One Provider Session generation exposes exactly one surface.
+The packaged Browser profile accepts
+`OPENLINKER_BROWSER_CLIENT_MODE=auto|official-chrome|isolated-native|isolated-mcp|native|mcp`.
+For Linux Codex, an omitted value defaults to `auto` and tries, before the
+Provider starts: image-baked Official Chrome with the native Plugin, isolated
+Chromium with the native Plugin, then isolated Chromium with direct MCP.
+`official-chrome`, `isolated-native`, and `isolated-mcp` are strict modes;
+`native` and `mcp` remain strict aliases for the two isolated modes. Claude and
+non-Linux defaults retain their existing behavior. A Provider Session still
+receives exactly one `browser_session` surface, and a selected backend never
+changes after preflight.
+
+Official Chrome is supplied only as an immutable build input. Use
+[`Dockerfile.browser.native-chrome`](./Dockerfile.browser.native-chrome) and
+[`deploy/compose.codex.native-chrome.yml`](./deploy/compose.codex.native-chrome.yml)
+to bake the locked Chrome, signed extension CRX, Native Messaging Host, and
+asset manifest into an operator image. Chrome installs the extension from the
+image-local Linux external-extension manifest. None of those native assets is
+mounted or downloaded at runtime; encrypted Profiles continue to use the
+existing persistent Browser-state volume. If the locked native assets or startup handshake are
+unavailable, `auto` selects the next backend; strict `official-chrome` fails.
 
 Packaged Browser Agents require the Agent Token and Provider API key but not a
 User Token. `OPENLINKER_USER_TOKEN` is rejected by the official Browser

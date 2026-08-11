@@ -176,7 +176,7 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().Var(&allowedTools, "allowed-tool", "Claude allowed tool; repeatable")
 	command.Flags().StringVar(&executionProfile, "execution-profile", "standard", "Agent execution profile: standard or browser")
 	command.Flags().StringVar(&browserInteractionPolicy, "browser-interaction-policy", "restricted", "Browser interaction policy: restricted or full")
-	command.Flags().StringVar(&browserClientMode, "browser-client-mode", "mcp", "Browser client mode: auto, native, or mcp")
+	command.Flags().StringVar(&browserClientMode, "browser-client-mode", "mcp", "Browser client mode: auto, official-chrome, isolated-native, isolated-mcp, native, or mcp")
 	command.Flags().StringVar(&browserPluginBin, "browser-plugin-bin", "", "OpenLinker CLI binary used for the Browser-only tool server")
 	command.Flags().StringVar(&browserNativePlugin, "browser-native-plugin", "", "absolute Runtime-owned native Browser Plugin path")
 	command.Flags().StringVar(&browserSocket, "browser-socket", "", "private Browser Runtime Unix socket")
@@ -374,11 +374,16 @@ func validateExecutionProfile(config Config) error {
 		return errors.New("Browser execution profile requires --session-reuse")
 	}
 	if !validBrowserClientMode(config.BrowserClientMode) {
-		return errors.New("--browser-client-mode must be auto, native, or mcp")
+		return errors.New("--browser-client-mode must be auto, official-chrome, isolated-native, isolated-mcp, native, or mcp")
 	}
 	selected := config.browserSelectedMode
 	if selected == "" && config.BrowserClientMode != "auto" {
-		selected = config.BrowserClientMode
+		switch config.BrowserClientMode {
+		case "native", "isolated-native", "official-chrome":
+			selected = "native"
+		case "mcp", "isolated-mcp":
+			selected = "mcp"
+		}
 	}
 	selected = firstNonEmpty(selected, "mcp")
 	if selected != "native" && selected != "mcp" {
@@ -407,7 +412,7 @@ func validateExecutionProfile(config Config) error {
 
 func validBrowserClientMode(value string) bool {
 	switch firstNonEmpty(strings.TrimSpace(value), "mcp") {
-	case "auto", "native", "mcp":
+	case "auto", "official-chrome", "isolated-native", "isolated-mcp", "native", "mcp":
 		return true
 	default:
 		return false

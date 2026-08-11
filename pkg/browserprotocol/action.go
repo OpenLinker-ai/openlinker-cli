@@ -80,6 +80,13 @@ func (action Action) ValidateForPolicy(policy string) *Failure {
 		return nil
 	case ActionBack, ActionForward, ActionScreenshot, ActionCheckpoint, ActionClose,
 		ActionPreflight:
+		if action.Kind == ActionPreflight && action.BackendMode != "" {
+			if action.BackendMode != "auto" && action.BackendMode != "official-chrome" &&
+				action.BackendMode != "isolated" {
+				return NewFailure(ErrorProtocolInvalid, "browser backend mode is invalid", false)
+			}
+			return action.requireOnly("backend_mode")
+		}
 		return action.requireOnly()
 	case ActionBatch:
 		if failure := action.requireOnly("actions"); failure != nil {
@@ -141,16 +148,17 @@ func (action Action) allowOnly(fields ...string) *Failure {
 
 func (action Action) presentFields() map[string]bool {
 	return map[string]bool{
-		"url":         action.URL != "",
-		"x":           action.X != nil,
-		"y":           action.Y != nil,
-		"delta_x":     action.DeltaX != nil,
-		"delta_y":     action.DeltaY != nil,
-		"text":        action.Text != "",
-		"key":         action.Key != "",
-		"value":       action.Value != "",
-		"duration_ms": action.DurationMS != nil,
-		"actions":     len(action.Actions) != 0,
+		"url":          action.URL != "",
+		"backend_mode": action.BackendMode != "",
+		"x":            action.X != nil,
+		"y":            action.Y != nil,
+		"delta_x":      action.DeltaX != nil,
+		"delta_y":      action.DeltaY != nil,
+		"text":         action.Text != "",
+		"key":          action.Key != "",
+		"value":        action.Value != "",
+		"duration_ms":  action.DurationMS != nil,
+		"actions":      len(action.Actions) != 0,
 	}
 }
 

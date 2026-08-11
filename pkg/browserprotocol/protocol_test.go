@@ -437,6 +437,73 @@ func TestEnvironmentEvidenceIsStrictAndEngineBound(t *testing.T) {
 	}
 }
 
+func TestBackendSelectionEvidenceIsStrictAndRedacted(t *testing.T) {
+	t.Parallel()
+	official := BackendSelectionEvidence{
+		RequestedMode:       "auto",
+		SelectedBackend:     "official_chrome_extension",
+		AssetManifestSHA256: strings.Repeat("a", 64),
+		ExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
+		ExtensionVersion:    "1.2.3.4",
+		NativeHostProtocol:  "openlinker.native-chrome.v1",
+	}
+	if failure := official.Validate(); failure != nil {
+		t.Fatalf("valid official backend evidence rejected: %v", failure)
+	}
+	isolatedFallback := BackendSelectionEvidence{
+		RequestedMode:   "auto",
+		SelectedBackend: "isolated_chromium",
+		FallbackReason:  "official_extension_unavailable",
+	}
+	if failure := isolatedFallback.Validate(); failure != nil {
+		t.Fatalf("valid isolated fallback evidence rejected: %v", failure)
+	}
+	invalid := []BackendSelectionEvidence{
+		{RequestedMode: "auto", SelectedBackend: "official_chrome_extension"},
+		{RequestedMode: "official-chrome", SelectedBackend: "isolated_chromium"},
+		{RequestedMode: "official-chrome", SelectedBackend: "isolated_chromium", FallbackReason: "official_extension_unavailable"},
+		{
+			RequestedMode:       "isolated",
+			SelectedBackend:     "official_chrome_extension",
+			AssetManifestSHA256: official.AssetManifestSHA256,
+			ExtensionID:         official.ExtensionID,
+			ExtensionVersion:    official.ExtensionVersion,
+			NativeHostProtocol:  official.NativeHostProtocol,
+		},
+		{RequestedMode: "auto", SelectedBackend: "isolated_chromium", FallbackReason: "BROWSER_TARGET_BLOCKED"},
+		{RequestedMode: "isolated", SelectedBackend: "isolated_chromium", ExtensionID: official.ExtensionID},
+	}
+	for _, evidence := range invalid {
+		if failure := evidence.Validate(); failure == nil ||
+			failure.Code != ErrorOutputInvalid {
+			t.Errorf("invalid backend evidence accepted: %#v", evidence)
+		}
+	}
+}
+
+func TestBackendModeIsAllowedOnlyOnPreflight(t *testing.T) {
+	t.Parallel()
+	if failure := (Action{
+		Kind:        ActionPreflight,
+		BackendMode: "official-chrome",
+	}).Validate(); failure != nil {
+		t.Fatalf("valid backend preflight rejected: %v", failure)
+	}
+	if failure := (Action{
+		Kind:        ActionPreflight,
+		BackendMode: "unknown",
+	}).Validate(); failure == nil || failure.Code != ErrorProtocolInvalid {
+		t.Fatalf("invalid backend mode failure = %#v", failure)
+	}
+	if failure := (Action{
+		Kind:        ActionNavigate,
+		URL:         "https://example.com",
+		BackendMode: "isolated",
+	}).Validate(); failure == nil || failure.Code != ErrorProtocolInvalid {
+		t.Fatalf("non-preflight backend mode failure = %#v", failure)
+	}
+}
+
 func TestObservationModeDefaultsToSemanticAndRejectsUnknownValues(t *testing.T) {
 	t.Parallel()
 	if got := ObservationDefault.Effective(); got != ObservationSemantic {

@@ -80,12 +80,23 @@ API Key；官方生产镜像要求 Provider API Key。Agent Mode 配置文件从
 和 permission 变量。完整示例见
 [`deploy/.env.providers.example`](./deploy/.env.providers.example)。
 
-封装 Browser Profile 新增
-`OPENLINKER_BROWSER_CLIENT_MODE=auto|native|mcp`。通用 CLI 省略该配置时保留旧的
-`mcp` 行为；官方 Codex 与 Claude Browser Compose Overlay 显式使用 `auto`。
-`native` 只加载镜像内 Browser Plugin，`mcp` 使用 Runtime 直接注入的 MCP 配置。
-“原生”指 Provider 的 Plugin/Skill/Command 体验；工具传输仍是 MCP，两种模式使用
-同一个隔离 Browser Runtime。一个 Provider Session Generation 只暴露一个入口。
+封装 Browser Profile 支持
+`OPENLINKER_BROWSER_CLIENT_MODE=auto|official-chrome|isolated-native|isolated-mcp|native|mcp`。
+Linux Codex 省略该配置时默认使用 `auto`，并在 Provider 启动前依次尝试：镜像内置
+Official Chrome + Native Plugin、隔离 Chromium + Native Plugin、隔离 Chromium +
+Direct MCP。`official-chrome`、`isolated-native`、`isolated-mcp` 都是严格模式；
+`native` 与 `mcp` 保留为后两种隔离模式的严格别名。Claude 与非 Linux 的默认行为
+不变。一个 Provider Session 仍只暴露一个 `browser_session`，preflight 选定后不会
+在会话中途切换后端。
+
+Official Chrome 只作为不可变构建输入提供。使用
+[`Dockerfile.browser.native-chrome`](./Dockerfile.browser.native-chrome) 与
+[`deploy/compose.codex.native-chrome.yml`](./deploy/compose.codex.native-chrome.yml)
+可把锁定的 Chrome、签名扩展 CRX、Native Messaging Host 和资产清单打包进 Operator
+镜像；Chrome 通过镜像内 Linux external-extension manifest 安装扩展。运行时不挂载、
+不下载这些原生资产；加密 Profile 继续使用既有 Browser 状态持久卷。
+`auto` 在锁定资产或启动握手不可用时才会在 Provider 启动前选择下一候选；严格
+`official-chrome` 会直接失败。
 
 封装 Browser Agent 需要 Agent Token 和 Provider API Key，但不需要 User Token。
 官方 Browser Entrypoint 会拒绝 `OPENLINKER_USER_TOKEN`，也不会把它转发给子

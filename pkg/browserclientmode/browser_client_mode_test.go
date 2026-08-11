@@ -2,8 +2,10 @@ package browserclientmode
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,10 +25,85 @@ func TestSelectDefaultsEmptyRequestToMCPWithoutHostCommand(t *testing.T) {
 	}
 	if selection.Requested != "mcp" ||
 		selection.Selected != "mcp" ||
+		selection.BackendRequested != BackendIsolated ||
 		selection.PluginPath != "" ||
 		selection.FallbackReason != "" ||
 		hostCalls != 0 {
 		t.Fatalf("empty selection = %#v, host calls = %d", selection, hostCalls)
+	}
+}
+
+func TestSelectMapsNativeChromeModesToOneSurfaceAndBackendPreference(
+	t *testing.T,
+) {
+	tests := []struct {
+		requested string
+		surface   string
+		backend   string
+		calls     int
+	}{
+		{ModeAuto, SurfacePluginNative, BackendAuto, 1},
+		{ModeOfficialChrome, SurfacePluginNative, BackendOfficialChrome, 1},
+		{ModeIsolatedNative, SurfacePluginNative, BackendIsolated, 1},
+		{ModeNativeAlias, SurfacePluginNative, BackendIsolated, 1},
+		{ModeIsolatedMCP, SurfaceDirectMCP, BackendIsolated, 0},
+		{ModeMCPAlias, SurfaceDirectMCP, BackendIsolated, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.requested, func(t *testing.T) {
+			calls := 0
+			selection, err := Select(Options{
+				Provider:   "codex",
+				Platform:   "linux",
+				Requested:  test.requested,
+				PluginPath: "/opt/openlinker/plugin",
+				NativePreflight: func() (string, error) {
+					calls++
+					return "", nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selection.Selected != test.surface ||
+				selection.BackendRequested != test.backend ||
+				calls != test.calls {
+				t.Fatalf("selection = %#v, native calls = %d", selection, calls)
+			}
+		})
+	}
+}
+
+func TestSelectAutoFallsDirectlyToIsolatedMCPWhenPluginIsUnavailable(
+	t *testing.T,
+) {
+	selection, err := Select(Options{
+		Provider:  "codex",
+		Platform:  "linux",
+		Requested: ModeAuto,
+		NativePreflight: func() (string, error) {
+			return "native_activation_failed", errors.New("activation failed")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Selected != SurfaceDirectMCP ||
+		selection.BackendRequested != BackendIsolated ||
+		selection.FallbackReason != "native_activation_failed" {
+		t.Fatalf("selection = %#v", selection)
+	}
+}
+
+func TestSelectOfficialChromeRejectsUnsupportedProviderOrPlatform(t *testing.T) {
+	for _, options := range []Options{
+		{Provider: "claude", Platform: "linux", Requested: ModeOfficialChrome},
+		{Provider: "codex", Platform: "darwin", Requested: ModeOfficialChrome},
+	} {
+		if _, err := Select(options); err == nil ||
+			!strings.Contains(err.Error(), "official_platform_unsupported") {
+			t.Fatalf("unsupported official Chrome error = %v", err)
+		}
 	}
 }
 

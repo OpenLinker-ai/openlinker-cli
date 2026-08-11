@@ -9,7 +9,24 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+)
+
+const (
+	ModeAuto           = "auto"
+	ModeOfficialChrome = "official-chrome"
+	ModeIsolatedNative = "isolated-native"
+	ModeIsolatedMCP    = "isolated-mcp"
+	ModeNativeAlias    = "native"
+	ModeMCPAlias       = "mcp"
+
+	SurfacePluginNative = "native"
+	SurfaceDirectMCP    = "mcp"
+
+	BackendAuto           = "auto"
+	BackendOfficialChrome = "official-chrome"
+	BackendIsolated       = "isolated"
 )
 
 type RunHostCommand func(args ...string) ([]byte, error)
@@ -20,59 +37,92 @@ type Options struct {
 	PluginPath       string
 	RequireImmutable bool
 	RunHostCommand   RunHostCommand
+	Platform         string
+	NativePreflight  func() (string, error)
 }
 
 type Selection struct {
-	Requested      string
-	Selected       string
-	PluginPath     string
-	FallbackReason string
+	Requested        string
+	Selected         string
+	BackendRequested string
+	PluginPath       string
+	FallbackReason   string
 }
 
 func Select(options Options) (Selection, error) {
 	selection := Selection{
-		Requested:  strings.TrimSpace(options.Requested),
-		Selected:   strings.TrimSpace(options.Requested),
-		PluginPath: filepath.Clean(strings.TrimSpace(options.PluginPath)),
+		Requested:        strings.TrimSpace(options.Requested),
+		Selected:         strings.TrimSpace(options.Requested),
+		BackendRequested: BackendIsolated,
+		PluginPath:       filepath.Clean(strings.TrimSpace(options.PluginPath)),
 	}
 	if selection.Requested == "" {
-		selection.Requested = "mcp"
-		selection.Selected = "mcp"
+		selection.Requested = ModeMCPAlias
+		selection.Selected = SurfaceDirectMCP
 	}
 	switch selection.Requested {
-	case "mcp":
+	case ModeMCPAlias, ModeIsolatedMCP:
+		selection.Selected = SurfaceDirectMCP
 		selection.PluginPath = ""
 		return selection, nil
-	case "native", "auto":
+	case ModeNativeAlias, ModeIsolatedNative:
+		selection.Selected = SurfacePluginNative
+	case ModeOfficialChrome:
+		selection.Selected = SurfacePluginNative
+		selection.BackendRequested = BackendOfficialChrome
+		if !officialChromePlatform(options.Provider, options.Platform) {
+			return Selection{}, errors.New(
+				"strict official Chrome Browser client is unavailable (official_platform_unsupported)",
+			)
+		}
+	case ModeAuto:
+		selection.Selected = SurfacePluginNative
+		if officialChromePlatform(options.Provider, options.Platform) {
+			selection.BackendRequested = BackendAuto
+		}
 	default:
 		return Selection{}, errors.New(
-			"OPENLINKER_BROWSER_CLIENT_MODE must be auto, native, or mcp",
+			"OPENLINKER_BROWSER_CLIENT_MODE must be auto, official-chrome, isolated-native, isolated-mcp, native, or mcp",
 		)
 	}
-	if options.RunHostCommand == nil {
+	if options.NativePreflight == nil && options.RunHostCommand == nil {
 		return Selection{}, errors.New("Browser Plugin host command runner is unavailable")
 	}
 
-	reason, err := prepareNativeBrowserPlugin(
-		options.Provider,
-		selection.PluginPath,
-		options.RequireImmutable,
-		options.RunHostCommand,
-	)
+	var reason string
+	var err error
+	if options.NativePreflight != nil {
+		reason, err = options.NativePreflight()
+	} else {
+		reason, err = prepareNativeBrowserPlugin(
+			options.Provider,
+			selection.PluginPath,
+			options.RequireImmutable,
+			options.RunHostCommand,
+		)
+	}
 	if err == nil {
-		selection.Selected = "native"
+		selection.Selected = SurfacePluginNative
 		return selection, nil
 	}
-	if selection.Requested == "native" {
+	if selection.Requested != ModeAuto {
 		return Selection{}, fmt.Errorf(
 			"strict native Browser client is unavailable (%s)",
 			reason,
 		)
 	}
-	selection.Selected = "mcp"
+	selection.Selected = SurfaceDirectMCP
+	selection.BackendRequested = BackendIsolated
 	selection.PluginPath = ""
 	selection.FallbackReason = reason
 	return selection, nil
+}
+
+func officialChromePlatform(provider, platform string) bool {
+	if platform = strings.TrimSpace(platform); platform == "" {
+		platform = runtime.GOOS
+	}
+	return strings.TrimSpace(provider) == "codex" && platform == "linux"
 }
 
 func prepareNativeBrowserPlugin(

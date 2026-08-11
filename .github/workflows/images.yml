@@ -6,7 +6,9 @@ on:
       - "Dockerfile.providers"
       - "Dockerfile.browser"
       - "Dockerfile.browser.chrome"
+      - "Dockerfile.browser.native-chrome"
       - "browser-engine/**"
+      - "native-chrome/**"
       - "deploy/**"
       - "cmd/**"
       - "pkg/**"
@@ -52,6 +54,8 @@ jobs:
           sh -n ./test/browser-provider-live/run.sh
           sh -n ./test/browser-provider-live/matrix.sh
           node --test ./test/browser-provider-live/verify-results.test.mjs
+      - name: Test native Chrome image and Native Messaging contracts
+        run: node --test ./native-chrome/test/*.test.mjs ./test/browser-image/native-chrome-image.test.mjs
       - name: Run deterministic production Browser and Egress images
         if: (github.ref_type != 'tag' && github.event_name != 'workflow_dispatch') || matrix.live_provider == false
         env:

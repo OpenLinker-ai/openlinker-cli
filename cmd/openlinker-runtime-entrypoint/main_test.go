@@ -233,6 +233,21 @@ func TestBrowserClientModeSelectionIsStrictAndBounded(t *testing.T) {
 	}
 }
 
+func TestLinuxCodexDefaultsToAutoWithoutChangingOtherProviders(t *testing.T) {
+	if got := defaultBrowserClientMode("codex", "linux"); got != "auto" {
+		t.Fatalf("Linux Codex default = %q", got)
+	}
+	for _, input := range [][2]string{
+		{"claude", "linux"},
+		{"codex", "darwin"},
+		{"codex", "windows"},
+	} {
+		if got := defaultBrowserClientMode(input[0], input[1]); got != "mcp" {
+			t.Fatalf("default for %s/%s = %q", input[0], input[1], got)
+		}
+	}
+}
+
 func TestCodexNativeBrowserPluginActivationRequiresExactHostList(t *testing.T) {
 	root := writeTestAgentRuntimePlugin(t, "codex")
 	original := runBrowserClientHostCommand

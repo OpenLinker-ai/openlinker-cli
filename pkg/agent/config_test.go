@@ -96,6 +96,7 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 		"OPENLINKER_BROWSER_INTERACTION_POLICY":      "full",
 		"OPENLINKER_BROWSER_CLIENT_MODE":             "auto",
 		"OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE":   "native",
+		"OPENLINKER_BROWSER_BACKEND_MODE":            "auto",
 		"OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH":      "/opt/openlinker/agent-runtime-plugin/codex",
 		"OPENLINKER_BROWSER_SOCKET":                  "/browser/control.sock",
 		"OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE": "/browser/channel",
@@ -115,6 +116,7 @@ func TestApplyRuntimeEnvironmentUsesProviderSpecificSettings(t *testing.T) {
 		config.BrowserBrokerRoot != "/browser/broker" ||
 		config.BrowserClientMode != "auto" ||
 		config.browserSelectedMode != "native" ||
+		config.browserBackendMode != "auto" ||
 		config.BrowserNativePlugin != "/opt/openlinker/agent-runtime-plugin/codex" {
 		t.Fatalf("Browser environment overrides = %#v", config)
 	}
@@ -163,6 +165,21 @@ func TestBrowserExecutionProfileIsExplicitAndSingleCapacity(t *testing.T) {
 	if err := validateNonSecretConfig(config); err == nil ||
 		!strings.Contains(err.Error(), "standard execution profile") {
 		t.Fatalf("ordinary Agent accepted full Browser policy: %v", err)
+	}
+}
+
+func TestDefaultBrowserClientModePrefersNativeChromeOnlyForLinuxCodex(t *testing.T) {
+	if got := defaultBrowserClientMode("codex", "linux"); got != "auto" {
+		t.Fatalf("Linux Codex Browser default = %q, want auto", got)
+	}
+	for _, input := range [][2]string{
+		{"codex", "darwin"},
+		{"codex", "windows"},
+		{"claude", "linux"},
+	} {
+		if got := defaultBrowserClientMode(input[0], input[1]); got != "mcp" {
+			t.Fatalf("defaultBrowserClientMode(%q, %q) = %q, want mcp", input[0], input[1], got)
+		}
 	}
 }
 
