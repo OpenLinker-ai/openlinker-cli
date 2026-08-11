@@ -90,7 +90,7 @@ func TestBackendSelectorAutoPrefersOfficialAndLocksSelection(t *testing.T) {
 	}
 }
 
-func TestBackendSelectorReleasesSelectionOnlyAfterSuccessfulClose(t *testing.T) {
+func TestBackendSelectorKeepsSelectionAcrossCloseAndContinuation(t *testing.T) {
 	official := &selectorTestBackend{}
 	isolated := &selectorTestBackend{}
 	selector, err := NewBackendSelector(BackendSelectorOptions{
@@ -101,7 +101,11 @@ func TestBackendSelectorReleasesSelectionOnlyAfterSuccessfulClose(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := browserprotocol.Identity{}
+	identity := browserprotocol.Identity{
+		BrowserSessionID: "session",
+		SessionEpoch:     1,
+		AttachmentID:     "first",
+	}
 	if _, failure := selector.Execute(
 		context.Background(),
 		identity,
@@ -116,19 +120,20 @@ func TestBackendSelectorReleasesSelectionOnlyAfterSuccessfulClose(t *testing.T) 
 	); failure != nil {
 		t.Fatal(failure)
 	}
+	continued := identity
+	continued.AttachmentID = "second"
 	observation, failure := selector.Execute(
 		context.Background(),
-		identity,
-		browserprotocol.Action{Kind: browserprotocol.ActionPreflight, BackendMode: "isolated"},
+		continued,
+		browserprotocol.Action{Kind: browserprotocol.ActionWait, DurationMS: selectorIntPointer(1)},
 	)
 	if failure != nil {
 		t.Fatal(failure)
 	}
-	if observation.BackendSelection == nil ||
-		observation.BackendSelection.SelectedBackend != BackendIsolated ||
-		len(official.calls) != 2 || len(isolated.calls) != 1 {
+	if observation.BackendSelection != nil ||
+		len(official.calls) != 3 || len(isolated.calls) != 0 {
 		t.Fatalf(
-			"second selection = %#v, official=%d isolated=%d",
+			"continuation = %#v, official=%d isolated=%d",
 			observation.BackendSelection,
 			len(official.calls),
 			len(isolated.calls),

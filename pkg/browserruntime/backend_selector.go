@@ -98,25 +98,28 @@ func (selector *BackendSelector) Execute(
 		)
 	}
 	if selector.selected != nil {
-		if action.Kind == browserprotocol.ActionPreflight &&
-			action.BackendMode == "" && !selector.scope.matches(identity) {
+		if action.BackendMode == "" && !selector.scope.matches(identity) {
 			observation, failure := selector.selected.Execute(ctx, identity, action)
 			if failure != nil {
-				if selector.selected.AbortStartup() != nil {
-					return browserprotocol.Observation{}, browserprotocol.NewFailure(
-						browserprotocol.ErrorRuntimeUnavailable,
-						"rotated Browser backend preflight cleanup failed",
-						false,
-					)
+				if action.Kind == browserprotocol.ActionPreflight {
+					if selector.selected.AbortStartup() != nil {
+						return browserprotocol.Observation{}, browserprotocol.NewFailure(
+							browserprotocol.ErrorRuntimeUnavailable,
+							"rotated Browser backend preflight cleanup failed",
+							false,
+						)
+					}
+					selector.selected = nil
+					selector.evidence = browserprotocol.BackendSelectionEvidence{}
+					selector.scope = backendSelectionScope{}
 				}
-				selector.selected = nil
-				selector.evidence = browserprotocol.BackendSelectionEvidence{}
-				selector.scope = backendSelectionScope{}
 				return browserprotocol.Observation{}, failure
 			}
 			selector.scope = newBackendSelectionScope(identity)
-			evidence := selector.evidence
-			observation.BackendSelection = &evidence
+			if action.Kind == browserprotocol.ActionPreflight {
+				evidence := selector.evidence
+				observation.BackendSelection = &evidence
+			}
 			return observation, nil
 		}
 		if action.BackendMode != "" {
@@ -148,13 +151,7 @@ func (selector *BackendSelector) Execute(
 			)
 		}
 		if selector.selected != nil {
-			observation, failure := selector.selected.Execute(ctx, identity, action)
-			if failure == nil && action.Kind == browserprotocol.ActionClose {
-				selector.selected = nil
-				selector.evidence = browserprotocol.BackendSelectionEvidence{}
-				selector.scope = backendSelectionScope{}
-			}
-			return observation, failure
+			return selector.selected.Execute(ctx, identity, action)
 		}
 	}
 	if action.Kind != browserprotocol.ActionPreflight {
