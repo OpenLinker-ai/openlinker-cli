@@ -33,6 +33,8 @@ require_workflow_value '    runs-on: ${{ matrix.runner }}' 1
 require_workflow_line "            runner: ubuntu-24.04" 1
 require_workflow_line "            runner: ubuntu-24.04-arm" 1
 require_workflow_value '      - "Dockerfile.browser.chrome"' 1
+require_workflow_value '      - "Dockerfile.browser.native-chrome"' 1
+require_workflow_value '      - "native-chrome/**"' 1
 require_workflow_value '      - "cmd/**"' 1
 require_workflow_value '      - "pkg/**"' 1
 require_workflow_value "live_provider: true" 1

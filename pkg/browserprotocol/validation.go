@@ -145,6 +145,11 @@ func (observation Observation) ValidateEngine() *Failure {
 			return failure
 		}
 	}
+	if observation.BackendSelection != nil {
+		if failure := observation.BackendSelection.Validate(); failure != nil {
+			return failure
+		}
+	}
 	if observation.BlockedMutationRequests < 0 || observation.BlockedMutationRequests > 1024 {
 		return NewFailure(ErrorOutputInvalid, "blocked mutation request count is invalid", false)
 	}
@@ -183,6 +188,7 @@ func (observation Observation) ValidateClosed() *Failure {
 		observation.ClickEffect != "" ||
 		observation.TargetCategory != "" ||
 		observation.Environment != nil ||
+		observation.BackendSelection != nil ||
 		observation.SiteOutcome != "" ||
 		observation.ClassifierRulesVersion != "" ||
 		observation.ChallengeReleaseUnavailable ||
@@ -191,6 +197,77 @@ func (observation Observation) ValidateClosed() *Failure {
 		return NewFailure(ErrorOutputInvalid, "closed observation contains Engine fields", false)
 	}
 	return nil
+}
+
+func (evidence BackendSelectionEvidence) Validate() *Failure {
+	if evidence.RequestedMode != "auto" &&
+		evidence.RequestedMode != "official-chrome" &&
+		evidence.RequestedMode != "isolated" {
+		return NewFailure(ErrorOutputInvalid, "browser backend request evidence is invalid", false)
+	}
+	if evidence.SelectedBackend != "official_chrome_extension" &&
+		evidence.SelectedBackend != "isolated_chromium" {
+		return NewFailure(ErrorOutputInvalid, "browser backend selection evidence is invalid", false)
+	}
+	if (evidence.RequestedMode == "official-chrome" &&
+		evidence.SelectedBackend != "official_chrome_extension") ||
+		(evidence.RequestedMode == "isolated" &&
+			evidence.SelectedBackend != "isolated_chromium") {
+		return NewFailure(ErrorOutputInvalid, "strict browser backend selection evidence is invalid", false)
+	}
+	if evidence.FallbackReason != "" {
+		if evidence.RequestedMode != "auto" ||
+			evidence.SelectedBackend != "isolated_chromium" ||
+			!validBackendFallbackReason(evidence.FallbackReason) {
+			return NewFailure(ErrorOutputInvalid, "browser backend fallback evidence is invalid", false)
+		}
+	}
+	if evidence.SelectedBackend == "isolated_chromium" {
+		if evidence.AssetManifestSHA256 != "" || evidence.ExtensionID != "" ||
+			evidence.ExtensionVersion != "" || evidence.NativeHostProtocol != "" {
+			return NewFailure(ErrorOutputInvalid, "isolated backend contains native Chrome evidence", false)
+		}
+		return nil
+	}
+	if !validLowerHex(evidence.AssetManifestSHA256, 64) ||
+		!validChromeExtensionID(evidence.ExtensionID) ||
+		!validBrowserVersion(evidence.ExtensionVersion) ||
+		!validOpaqueID(evidence.NativeHostProtocol, 64) {
+		return NewFailure(ErrorOutputInvalid, "official Chrome backend evidence is invalid", false)
+	}
+	return nil
+}
+
+func validBackendFallbackReason(value string) bool {
+	switch value {
+	case "official_assets_unavailable",
+		"official_assets_invalid",
+		"official_platform_unsupported",
+		"official_sandbox_unavailable",
+		"official_chrome_start_failed",
+		"official_extension_unavailable",
+		"official_native_host_unavailable",
+		"official_protocol_mismatch",
+		"official_capability_incomplete",
+		"official_profile_preflight_failed",
+		"official_policy_enforcement_unavailable",
+		"official_egress_preflight_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func validChromeExtensionID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, character := range value {
+		if character < 'a' || character > 'p' {
+			return false
+		}
+	}
+	return true
 }
 
 func (observation Observation) validateCommon() *Failure {

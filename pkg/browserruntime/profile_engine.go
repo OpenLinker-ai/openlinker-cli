@@ -280,6 +280,22 @@ func (engine *ProfileEngine) Close() error {
 	return errors.Join(checkpointErr, storeErr, workErr)
 }
 
+func (engine *ProfileEngine) AbortActive() error {
+	if engine == nil {
+		return nil
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if engine.closed {
+		return nil
+	}
+	return engine.discardActive()
+}
+
+func (engine *ProfileEngine) AbortStartup() error {
+	return engine.AbortActive()
+}
+
 func (engine *ProfileEngine) activate(identity browserprotocol.Identity) *browserprotocol.Failure {
 	profileIdentity := browserprofile.Identity{
 		AgentID:           identity.AgentID,

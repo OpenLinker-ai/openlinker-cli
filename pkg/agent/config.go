@@ -43,6 +43,7 @@ type Config struct {
 	BrowserLeaseRoot         string   `json:"browser_lease_root,omitempty"`
 	BrowserBrokerRoot        string   `json:"browser_broker_root,omitempty"`
 	browserSelectedMode      string
+	browserBackendMode       string
 	browserFallbackReason    string
 }
 
@@ -256,6 +257,7 @@ func applyRuntimeEnvironment(config *Config, getenv func(string) string) error {
 	config.BrowserLeaseRoot = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_LEASE_ROOT"), config.BrowserLeaseRoot)
 	config.BrowserBrokerRoot = firstNonEmpty(envValue(getenv, "OPENLINKER_BROWSER_BROKER_ROOT"), config.BrowserBrokerRoot)
 	config.browserSelectedMode = strings.TrimSpace(envValue(getenv, "OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE"))
+	config.browserBackendMode = strings.TrimSpace(envValue(getenv, "OPENLINKER_BROWSER_BACKEND_MODE"))
 	config.browserFallbackReason = strings.TrimSpace(envValue(getenv, "OPENLINKER_BROWSER_CLIENT_FALLBACK_REASON"))
 	if value := strings.TrimSpace(envValue(getenv, "OPENLINKER_CLAUDE_ALLOWED_TOOLS")); value != "" {
 		config.AllowedTools = splitNonEmpty(value)

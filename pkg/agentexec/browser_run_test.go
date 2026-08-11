@@ -371,9 +371,10 @@ func TestBrowserClientEvidenceIsBoundedAndUsesCanonicalNames(t *testing.T) {
 		BrowserClientMode:           "mcp",
 		BrowserClientFallbackReason: "native_bundle_unavailable",
 	})
-	if len(evidence) != 3 ||
+	if len(evidence) != 4 ||
 		evidence["browser_client_mode_requested"] != "auto" ||
 		evidence["browser_client_mode_selected"] != "direct_mcp" ||
+		evidence["browser_backend_selected"] != "isolated_chromium" ||
 		evidence["browser_client_mode_fallback_reason"] !=
 			"native_bundle_unavailable" {
 		t.Fatalf("direct-MCP evidence = %#v", evidence)
@@ -383,8 +384,9 @@ func TestBrowserClientEvidenceIsBoundedAndUsesCanonicalNames(t *testing.T) {
 		BrowserClientModeRequested: "native",
 		BrowserClientMode:          "native",
 	})
-	if len(native) != 2 ||
-		native["browser_client_mode_selected"] != "plugin_native" {
+	if len(native) != 3 ||
+		native["browser_client_mode_selected"] != "plugin_native" ||
+		native["browser_backend_selected"] != "isolated_chromium" {
 		t.Fatalf("native evidence = %#v", native)
 	}
 	for _, values := range []map[string]any{evidence, native} {
@@ -405,6 +407,41 @@ func TestBrowserClientEvidenceIsBoundedAndUsesCanonicalNames(t *testing.T) {
 			if strings.Contains(string(encoded), forbidden) {
 				t.Fatalf("Browser client evidence leaked %q: %s", forbidden, encoded)
 			}
+		}
+	}
+}
+
+func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
+	evidence := browserClientEvidence(ProviderConfig{
+		ExecutionProfile:           "browser",
+		BrowserClientModeRequested: "auto",
+		BrowserClientMode:          "native",
+		BrowserBackendSelected:     "official_chrome_extension",
+		BrowserSelectionGeneration: 3,
+		BrowserAssetManifestSHA256: strings.Repeat("a", 64),
+		BrowserExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
+		BrowserExtensionVersion:    "1.2.3.4",
+		BrowserNativeHostProtocol:  "openlinker.native-chrome.v1",
+	})
+	for key, expected := range map[string]any{
+		"browser_backend_selected":      "official_chrome_extension",
+		"browser_selection_generation":  uint64(3),
+		"browser_asset_manifest_sha256": strings.Repeat("a", 64),
+		"browser_extension_id":          "abcdefghijklmnopabcdefghijklmnop",
+		"browser_extension_version":     "1.2.3.4",
+		"browser_native_host_protocol":  "openlinker.native-chrome.v1",
+	} {
+		if evidence[key] != expected {
+			t.Fatalf("official evidence %s = %#v, want %#v", key, evidence[key], expected)
+		}
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"/opt/", "/browser-", "profile", "cookie", "https://"} {
+		if strings.Contains(strings.ToLower(string(encoded)), forbidden) {
+			t.Fatalf("official evidence leaked %q: %s", forbidden, encoded)
 		}
 	}
 }
@@ -699,12 +736,14 @@ func stubBrowserPreflight(t *testing.T, provider Provider) {
 	if !ok {
 		t.Fatalf("provider = %T, want *browserExecutionProvider", provider)
 	}
-	browserProvider.preflight = func(
+	preflight := func(
 		context.Context,
 		*browserRunLease,
 	) error {
 		return nil
 	}
+	browserProvider.preflight = preflight
+	browserProvider.repreflight = preflight
 }
 
 func browserProviderTestConfig(root string) ProviderConfig {

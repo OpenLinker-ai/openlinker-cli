@@ -47,6 +47,7 @@ type Server struct {
 
 type EvidenceSnapshot struct {
 	Environment                        browserprotocol.EnvironmentEvidence
+	BackendSelection                   browserprotocol.BackendSelectionEvidence
 	BrowserSessionID                   string
 	SessionEpoch                       uint64
 	ControlEpoch                       uint64
@@ -403,12 +404,23 @@ func (server *Server) ensureDirectEvidence(
 	if observation.Environment == nil || observation.Environment.Validate() != nil {
 		return errors.New("Browser preflight did not return valid environment evidence")
 	}
+	backend := observation.BackendSelection
+	if backend == nil {
+		backend = &browserprotocol.BackendSelectionEvidence{
+			RequestedMode:   "isolated",
+			SelectedBackend: "isolated_chromium",
+		}
+	}
+	if backend.Validate() != nil {
+		return errors.New("Browser preflight did not return valid backend selection evidence")
+	}
 	identity := client.Identity()
 	if failure := identity.Validate(); failure != nil {
 		return failure
 	}
 	snapshot := &EvidenceSnapshot{
 		Environment:                        *observation.Environment,
+		BackendSelection:                   *backend,
 		BrowserSessionID:                   identity.BrowserSessionID,
 		SessionEpoch:                       identity.SessionEpoch,
 		ControlEpoch:                       identity.ControlEpoch,
@@ -434,7 +446,7 @@ func addAttachmentEvidence(
 	if !ok {
 		return
 	}
-	structured["attachment_evidence"] = map[string]any{
+	attachment := map[string]any{
 		"browser_engine":                        evidence.Environment.BrowserEngine,
 		"browser_distribution":                  evidence.Environment.BrowserDistribution,
 		"browser_major_version":                 evidence.Environment.BrowserMajorVersion,
@@ -448,6 +460,13 @@ func addAttachmentEvidence(
 		"browser_mutation_origins_sha256":       evidence.BrowserMutationOriginsSHA256,
 		"browser_contract_id":                   browserprotocol.ContractID,
 	}
+	if backend := evidence.BackendSelection.SelectedBackend; backend != "" {
+		attachment["browser_backend_selected"] = backend
+	}
+	if fallback := evidence.BackendSelection.FallbackReason; fallback != "" {
+		attachment["browser_backend_fallback_reason"] = fallback
+	}
+	structured["attachment_evidence"] = attachment
 }
 
 func (server *Server) callBrowser(

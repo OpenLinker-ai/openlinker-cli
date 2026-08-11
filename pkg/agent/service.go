@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -354,6 +355,13 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	if config.ExecutionProfile == "" {
 		config.ExecutionProfile = "standard"
 	}
+	if config.ExecutionProfile == "browser" &&
+		strings.TrimSpace(config.BrowserClientMode) == "" {
+		config.BrowserClientMode = defaultBrowserClientMode(
+			config.Provider,
+			runtime.GOOS,
+		)
+	}
 	if config.Capacity > 1024 {
 		return resolvedRuntime{}, errors.New("OPENLINKER_AGENT_CAPACITY must not exceed 1024")
 	}
@@ -418,8 +426,7 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	}
 	if config.ExecutionProfile == "browser" &&
 		config.browserSelectedMode == "" &&
-		(config.BrowserClientMode == "auto" ||
-			config.BrowserClientMode == "native") {
+		browserModeRequiresNativePreflight(config.BrowserClientMode) {
 		selection, selectErr := browserclientmode.Select(
 			browserclientmode.Options{
 				Provider:   config.Provider,
@@ -444,6 +451,7 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 			return resolvedRuntime{}, selectErr
 		}
 		config.browserSelectedMode = selection.Selected
+		config.browserBackendMode = selection.BackendRequested
 		config.browserFallbackReason = selection.FallbackReason
 		config.BrowserNativePlugin = selection.PluginPath
 		if err := validateExecutionProfile(config); err != nil {
@@ -486,12 +494,16 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 			"mcp",
 		),
 		BrowserClientFallbackReason: config.browserFallbackReason,
-		BrowserPluginBin:            browserPluginBin,
-		BrowserNativePlugin:         config.BrowserNativePlugin,
-		BrowserSocket:               config.BrowserSocket,
-		BrowserCredentialFile:       config.BrowserCredentialFile,
-		BrowserLeaseRoot:            config.BrowserLeaseRoot,
-		BrowserBrokerRoot:           config.BrowserBrokerRoot,
+		BrowserBackendModeRequested: firstNonEmpty(
+			config.browserBackendMode,
+			browserBackendMode(config.BrowserClientMode),
+		),
+		BrowserPluginBin:      browserPluginBin,
+		BrowserNativePlugin:   config.BrowserNativePlugin,
+		BrowserSocket:         config.BrowserSocket,
+		BrowserCredentialFile: config.BrowserCredentialFile,
+		BrowserLeaseRoot:      config.BrowserLeaseRoot,
+		BrowserBrokerRoot:     config.BrowserBrokerRoot,
 	})
 	if err != nil {
 		return resolvedRuntime{}, err
@@ -504,6 +516,33 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 	}
 	keepLock = true
 	return resolved, nil
+}
+
+func browserModeRequiresNativePreflight(mode string) bool {
+	switch strings.TrimSpace(mode) {
+	case "auto", "native", "isolated-native", "official-chrome":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultBrowserClientMode(provider, platform string) string {
+	if strings.TrimSpace(provider) == "codex" && strings.TrimSpace(platform) == "linux" {
+		return "auto"
+	}
+	return "mcp"
+}
+
+func browserBackendMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "auto":
+		return "auto"
+	case "official-chrome":
+		return "official-chrome"
+	default:
+		return "isolated"
+	}
 }
 
 func browserClientModeHostRunner(

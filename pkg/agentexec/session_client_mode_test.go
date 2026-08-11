@@ -90,3 +90,40 @@ func TestLegacyBrowserSessionIsDirectMCPGeneration(t *testing.T) {
 		)
 	}
 }
+
+func TestOfficialChromeUsesAnIndependentProviderSessionGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	workspace := t.TempDir()
+	if mode := providerSessionClientMode(ProviderConfig{
+		ExecutionProfile:       "browser",
+		BrowserClientMode:      "native",
+		BrowserBackendSelected: "official_chrome_extension",
+	}); mode != "browser_native_official_chrome" {
+		t.Fatalf("official Chrome Provider mode = %q", mode)
+	}
+	if err := saveSessionForClientMode(
+		path,
+		"codex",
+		workspace,
+		"conversation",
+		"isolated-session",
+		"browser_native",
+		2,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if sessionID, generation, changed := loadSessionForClientMode(
+		path,
+		"codex",
+		workspace,
+		"conversation",
+		"browser_native_official_chrome",
+	); sessionID != "" || generation != 3 || !changed {
+		t.Fatalf(
+			"official Chrome transition = %q generation=%d changed=%v",
+			sessionID,
+			generation,
+			changed,
+		)
+	}
+}

@@ -12,32 +12,40 @@ import (
 )
 
 type ProviderConfig struct {
-	Provider                    string
-	Bin                         string
-	Workspace                   string
-	Model                       string
-	Sandbox                     string
-	Permission                  string
-	AllowedTools                []string
-	Timeout                     time.Duration
-	SessionReuse                bool
-	SessionStore                string
-	WebSearch                   bool
-	CodexApproval               string
-	CodexBaseURL                string
-	Env                         []string
-	EnvAllowlist                []string
-	ExecutionProfile            string
-	BrowserInteractionPolicy    string
-	BrowserClientModeRequested  string
-	BrowserClientMode           string
-	BrowserClientFallbackReason string
-	BrowserPluginBin            string
-	BrowserNativePlugin         string
-	BrowserSocket               string
-	BrowserCredentialFile       string
-	BrowserLeaseRoot            string
-	BrowserBrokerRoot           string
+	Provider                     string
+	Bin                          string
+	Workspace                    string
+	Model                        string
+	Sandbox                      string
+	Permission                   string
+	AllowedTools                 []string
+	Timeout                      time.Duration
+	SessionReuse                 bool
+	SessionStore                 string
+	WebSearch                    bool
+	CodexApproval                string
+	CodexBaseURL                 string
+	Env                          []string
+	EnvAllowlist                 []string
+	ExecutionProfile             string
+	BrowserInteractionPolicy     string
+	BrowserClientModeRequested   string
+	BrowserClientMode            string
+	BrowserClientFallbackReason  string
+	BrowserBackendModeRequested  string
+	BrowserBackendSelected       string
+	BrowserBackendFallbackReason string
+	BrowserSelectionGeneration   uint64
+	BrowserAssetManifestSHA256   string
+	BrowserExtensionID           string
+	BrowserExtensionVersion      string
+	BrowserNativeHostProtocol    string
+	BrowserPluginBin             string
+	BrowserNativePlugin          string
+	BrowserSocket                string
+	BrowserCredentialFile        string
+	BrowserLeaseRoot             string
+	BrowserBrokerRoot            string
 }
 
 type ConversationContext struct {
@@ -78,9 +86,16 @@ type RunContext struct {
 }
 
 type BrowserRunContext struct {
-	PluginBin  string
-	ToolSocket string
-	Rotate     func() error
+	PluginBin             string
+	ToolSocket            string
+	BackendSelected       string
+	BackendFallbackReason string
+	SelectionGeneration   uint64
+	AssetManifestSHA256   string
+	ExtensionID           string
+	ExtensionVersion      string
+	NativeHostProtocol    string
+	Rotate                func() error
 }
 
 type Provider interface {

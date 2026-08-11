@@ -22,6 +22,7 @@ export interface BrowserEnvironmentConfig {
   profileGeneration: number;
   maxActionsPerOriginMinute: number;
   maxNavigationsPerOriginMinute: number;
+  executablePath?: string;
 }
 
 export function parseBrowserEnvironment(
@@ -88,6 +89,10 @@ export function parseBrowserEnvironment(
     60,
     "OPENLINKER_BROWSER_MAX_NAVIGATIONS_PER_ORIGIN_MINUTE",
   );
+  const executablePath = configuredExecutablePath(
+    environment.OPENLINKER_BROWSER_EXECUTABLE_PATH,
+    engine,
+  );
   return {
     engine,
     distribution: distribution as BrowserEnvironmentConfig["distribution"],
@@ -99,7 +104,24 @@ export function parseBrowserEnvironment(
     profileGeneration,
     maxActionsPerOriginMinute,
     maxNavigationsPerOriginMinute,
+    ...(executablePath === undefined ? {} : { executablePath }),
   };
+}
+
+function configuredExecutablePath(
+  raw: string | undefined,
+  engine: "chromium" | "chrome",
+): string | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  if (
+    engine !== "chrome" ||
+    !raw.startsWith("/") ||
+    raw.includes("\0") ||
+    raw.split("/").includes("..")
+  ) {
+    throw new Error("OPENLINKER_BROWSER_EXECUTABLE_PATH is invalid");
+  }
+  return raw;
 }
 
 function configuredInteger(

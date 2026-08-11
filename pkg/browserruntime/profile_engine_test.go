@@ -178,6 +178,44 @@ func TestProfileEnginePreflightPersistsAndReopensNewProfileBeforeReady(
 	}
 }
 
+func TestProfileEngineStartupAbortDiscardsOnlyUncommittedActiveState(
+	t *testing.T,
+) {
+	t.Parallel()
+	engine := newFixtureProfileEngine(t, t.TempDir(), t.TempDir())
+	defer engine.Close()
+	identity := profileEngineIdentity("principal-abort")
+	engine.processFactory = fixtureProfileFactory(new(bool))
+	if _, failure := engine.Execute(
+		context.Background(),
+		identity,
+		browserprotocol.Action{
+			Kind: browserprotocol.ActionNavigate,
+			URL:  "https://example.com",
+		},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+	if err := engine.AbortStartup(); err != nil {
+		t.Fatal(err)
+	}
+	if engine.active != nil {
+		t.Fatalf("aborted Profile remained active: %#v", engine.active)
+	}
+	loaded := false
+	engine.processFactory = fixtureProfileFactory(&loaded)
+	if _, failure := engine.Execute(
+		context.Background(),
+		identity,
+		browserprotocol.Action{Kind: browserprotocol.ActionScreenshot},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+	if loaded {
+		t.Fatal("startup abort checkpointed uncommitted Browser state")
+	}
+}
+
 func TestProfileEngineUpgradeIsTransactionalAndDowngradeIsRejectedBeforeLaunch(
 	t *testing.T,
 ) {

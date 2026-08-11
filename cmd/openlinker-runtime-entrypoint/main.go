@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -193,7 +194,7 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 	if browserProfile {
 		requested, present := os.LookupEnv("OPENLINKER_BROWSER_CLIENT_MODE")
 		if !present {
-			requested = "mcp"
+			requested = defaultBrowserClientMode(provider, runtime.GOOS)
 		} else if requested = strings.TrimSpace(requested); requested == "" {
 			return errors.New(
 				"OPENLINKER_BROWSER_CLIENT_MODE cannot be empty when explicitly set",
@@ -220,6 +221,7 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 		for key, value := range map[string]string{
 			"OPENLINKER_BROWSER_CLIENT_MODE":            selection.Requested,
 			"OPENLINKER_BROWSER_CLIENT_MODE_EFFECTIVE":  selection.Selected,
+			"OPENLINKER_BROWSER_BACKEND_MODE":           selection.BackendRequested,
 			"OPENLINKER_BROWSER_NATIVE_PLUGIN_PATH":     selection.PluginPath,
 			"OPENLINKER_BROWSER_CLIENT_FALLBACK_REASON": selection.FallbackReason,
 		} {
@@ -233,6 +235,13 @@ func configure(provider, runtimeDir, workspace string, requireMount bool) error 
 	}
 	_ = os.Unsetenv("OPENLINKER_USER_TOKEN")
 	return nil
+}
+
+func defaultBrowserClientMode(provider, platform string) string {
+	if provider == "codex" && platform == "linux" {
+		return "auto"
+	}
+	return "mcp"
 }
 
 func validateRuntimeDir(path string, requireMount bool) error {

@@ -1,0 +1,8 @@
+{
+  "activation_path": "/codex-sidepanel/index.html",
+  "extension_id": "hehggadaopoacecdllhhajmbjkdcmajg",
+  "filename": "native-chrome-extension.tar",
+  "sha256": "replace-with-lowercase-sha256-of-native-chrome-extension.tar",
+  "source_reference": "operator-recorded-authorized-acquisition-reference",
+  "version": "replace-with-full-extension-version"
+}
