@@ -50,10 +50,29 @@ test("deterministic ZIP/tar encoders are stable and reject unsafe paths", () => 
       ["root/tool", true],
     ],
   );
+  assert.equal(
+    readZipEntries(
+      deterministicZip([{ path: "root/no-explicit-root", data: Buffer.from("x") }]),
+      "root/",
+    )[0].path,
+    "root/no-explicit-root",
+  );
   assert.throws(
     () => deterministicZip([{ path: "../escape", data: Buffer.alloc(0) }]),
     /entry/,
   );
+
+  const storedWithDeflateHint = Buffer.from(firstZip);
+  storedWithDeflateHint.writeUInt16LE(0x0004, 6);
+  const centralOffset = storedWithDeflateHint.readUInt32LE(
+    storedWithDeflateHint.length - 22 + 16,
+  );
+  storedWithDeflateHint.writeUInt16LE(0x0004, centralOffset + 8);
+  assert.doesNotThrow(() => readZipEntries(storedWithDeflateHint, "root/"));
+  const encrypted = Buffer.from(firstZip);
+  encrypted.writeUInt16LE(0x0001, 6);
+  encrypted.writeUInt16LE(0x0001, centralOffset + 8);
+  assert.throws(() => readZipEntries(encrypted, "root/"), /features/);
 
   const tarEntries = [
     { path: "root/", type: "directory", mode: 0o555 },

@@ -201,6 +201,7 @@ func (observation Observation) ValidateClosed() *Failure {
 
 func (evidence BackendSelectionEvidence) Validate() *Failure {
 	if evidence.RequestedMode != "auto" &&
+		evidence.RequestedMode != "openlinker-native-chrome" &&
 		evidence.RequestedMode != "official-chrome" &&
 		evidence.RequestedMode != "isolated" {
 		return NewFailure(ErrorOutputInvalid, "browser backend request evidence is invalid", false)
@@ -209,7 +210,8 @@ func (evidence BackendSelectionEvidence) Validate() *Failure {
 		evidence.SelectedBackend != "isolated_chromium" {
 		return NewFailure(ErrorOutputInvalid, "browser backend selection evidence is invalid", false)
 	}
-	if (evidence.RequestedMode == "official-chrome" &&
+	if ((evidence.RequestedMode == "openlinker-native-chrome" ||
+		evidence.RequestedMode == "official-chrome") &&
 		evidence.SelectedBackend != "official_chrome_extension") ||
 		(evidence.RequestedMode == "isolated" &&
 			evidence.SelectedBackend != "isolated_chromium") {
@@ -224,7 +226,8 @@ func (evidence BackendSelectionEvidence) Validate() *Failure {
 	}
 	if evidence.SelectedBackend == "isolated_chromium" {
 		if evidence.AssetManifestSHA256 != "" || evidence.ExtensionID != "" ||
-			evidence.ExtensionVersion != "" || evidence.NativeHostProtocol != "" {
+			evidence.ExtensionVersion != "" || evidence.NativeHostProtocol != "" ||
+			evidence.ProfileGeneration != 0 || evidence.SessionRecovered {
 			return NewFailure(ErrorOutputInvalid, "isolated backend contains native Chrome evidence", false)
 		}
 		return nil
@@ -232,7 +235,8 @@ func (evidence BackendSelectionEvidence) Validate() *Failure {
 	if !validLowerHex(evidence.AssetManifestSHA256, 64) ||
 		!validChromeExtensionID(evidence.ExtensionID) ||
 		!validBrowserVersion(evidence.ExtensionVersion) ||
-		!validOpaqueID(evidence.NativeHostProtocol, 64) {
+		!validOpaqueID(evidence.NativeHostProtocol, 64) ||
+		evidence.ProfileGeneration == 0 {
 		return NewFailure(ErrorOutputInvalid, "official Chrome backend evidence is invalid", false)
 	}
 	return nil

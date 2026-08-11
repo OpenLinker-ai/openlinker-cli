@@ -10,11 +10,21 @@ import (
 )
 
 type selectorTestBackend struct {
-	failure        *browserprotocol.Failure
-	fallbackReason string
-	calls          []browserprotocol.Action
-	closed         bool
-	aborted        bool
+	failure           *browserprotocol.Failure
+	fallbackReason    string
+	calls             []browserprotocol.Action
+	closed            bool
+	aborted           bool
+	profileGeneration uint64
+	sessionRecovered  bool
+}
+
+func (backend *selectorTestBackend) ProfileSelectionEvidence() (uint64, bool, bool) {
+	generation := backend.profileGeneration
+	if generation == 0 {
+		generation = 7
+	}
+	return generation, backend.sessionRecovered, true
 }
 
 func (backend *selectorTestBackend) Execute(
@@ -290,7 +300,7 @@ func TestBackendSelectorStrictOfficialReturnsCompleteSelectionEvidence(t *testin
 		t.Fatal(failure)
 	}
 	if observation.BackendSelection == nil ||
-		observation.BackendSelection.RequestedMode != "official-chrome" ||
+		observation.BackendSelection.RequestedMode != ModeOpenLinkerNativeChrome ||
 		observation.BackendSelection.SelectedBackend != BackendOfficialChrome ||
 		observation.BackendSelection.Validate() != nil {
 		t.Fatalf("strict official evidence = %#v", observation.BackendSelection)
@@ -356,6 +366,7 @@ func validOfficialSelectionEvidence() browserprotocol.BackendSelectionEvidence {
 		ExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
 		ExtensionVersion:    "1.2.3.4",
 		NativeHostProtocol:  "openlinker.native-chrome.v1",
+		ProfileGeneration:   7,
 	}
 }
 

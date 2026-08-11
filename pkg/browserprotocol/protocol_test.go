@@ -446,6 +446,7 @@ func TestBackendSelectionEvidenceIsStrictAndRedacted(t *testing.T) {
 		ExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
 		ExtensionVersion:    "1.2.3.4",
 		NativeHostProtocol:  "openlinker.native-chrome.v1",
+		ProfileGeneration:   7,
 	}
 	if failure := official.Validate(); failure != nil {
 		t.Fatalf("valid official backend evidence rejected: %v", failure)
@@ -469,6 +470,7 @@ func TestBackendSelectionEvidenceIsStrictAndRedacted(t *testing.T) {
 			ExtensionID:         official.ExtensionID,
 			ExtensionVersion:    official.ExtensionVersion,
 			NativeHostProtocol:  official.NativeHostProtocol,
+			ProfileGeneration:   official.ProfileGeneration,
 		},
 		{RequestedMode: "auto", SelectedBackend: "isolated_chromium", FallbackReason: "BROWSER_TARGET_BLOCKED"},
 		{RequestedMode: "isolated", SelectedBackend: "isolated_chromium", ExtensionID: official.ExtensionID},
@@ -483,6 +485,12 @@ func TestBackendSelectionEvidenceIsStrictAndRedacted(t *testing.T) {
 
 func TestBackendModeIsAllowedOnlyOnPreflight(t *testing.T) {
 	t.Parallel()
+	if failure := (Action{
+		Kind:        ActionPreflight,
+		BackendMode: "openlinker-native-chrome",
+	}).Validate(); failure != nil {
+		t.Fatalf("valid canonical backend preflight rejected: %v", failure)
+	}
 	if failure := (Action{
 		Kind:        ActionPreflight,
 		BackendMode: "official-chrome",

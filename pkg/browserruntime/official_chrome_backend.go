@@ -38,7 +38,7 @@ func NewOfficialChromeBackend(
 		EgressLabel:       options.EgressLabel,
 		Evidence: browserprotocol.EnvironmentEvidence{
 			BrowserEngine:       "chrome",
-			BrowserDistribution: "google_chrome",
+			BrowserDistribution: lock.ChromeDistribution,
 			BrowserVersion:      lock.ChromeVersion,
 			BrowserMajorVersion: mustOfficialChromeMajor(lock.ChromeVersion),
 			BrowserLocale:       options.Locale,
@@ -69,7 +69,7 @@ func NewOfficialChromeBackend(
 				"OPENLINKER_BROWSER_EGRESS_PROXY=" + options.EgressProxy,
 				"OPENLINKER_BROWSER_PROFILE_DIR=" + filepath.Join(options.WorkRoot, "active"),
 				"OPENLINKER_BROWSER_ENGINE=chrome",
-				"OPENLINKER_BROWSER_DISTRIBUTION=google_chrome",
+				"OPENLINKER_BROWSER_DISTRIBUTION=" + lock.ChromeDistribution,
 				"OPENLINKER_BROWSER_VERSION=" + lock.ChromeVersion,
 				"OPENLINKER_BROWSER_LOCALE=" + options.Locale,
 				"OPENLINKER_BROWSER_TIMEZONE=" + options.Timezone,
@@ -118,6 +118,13 @@ func (backend *OfficialChromeBackend) Close() error {
 		return nil
 	}
 	return backend.engine.Close()
+}
+
+func (backend *OfficialChromeBackend) ProfileSelectionEvidence() (uint64, bool, bool) {
+	if backend == nil || backend.engine == nil {
+		return 0, false, false
+	}
+	return backend.engine.ProfileSelectionEvidence()
 }
 
 func (backend *OfficialChromeBackend) StartupFallbackReason(

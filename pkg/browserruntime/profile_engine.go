@@ -39,10 +39,26 @@ type activeBrowserProfile struct {
 	session                    string
 	owner                      browserprotocol.Identity
 	exists                     bool
+	recovered                  bool
 	process                    managedBrowserEngine
 	upgradePending             bool
 	preflightValidated         bool
 	environmentAdoptionPending bool
+}
+
+// ProfileSelectionEvidence reports the exact Profile binding used by the
+// successful preflight. It intentionally does not infer recovery from Browser
+// Session epochs: recovery is true only when Store.Load restored a checkpoint.
+func (engine *ProfileEngine) ProfileSelectionEvidence() (uint64, bool, bool) {
+	if engine == nil {
+		return 0, false, false
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if engine.closed || engine.active == nil || !engine.active.preflightValidated {
+		return 0, false, false
+	}
+	return engine.active.identity.ProfileGeneration, engine.active.recovered, true
 }
 
 type ProfileEngine struct {
@@ -417,6 +433,7 @@ func (engine *ProfileEngine) activate(identity browserprotocol.Identity) *browse
 		session:                    session,
 		owner:                      identity,
 		exists:                     exists,
+		recovered:                  exists,
 		upgradePending:             upgradePending,
 		environmentAdoptionPending: environmentAdoptionPending,
 	}
@@ -459,7 +476,11 @@ func (engine *ProfileEngine) ensureProcess() (managedBrowserEngine, *browserprot
 	options.Environment = withBrowserProfileDirectory(options.Environment, engine.workDirectory)
 	process, err := engine.processFactory(options)
 	if err != nil {
-		return nil, profileRuntimeFailure(err)
+		return nil, browserprotocol.NewFailure(
+			browserprotocol.ErrorRuntimeUnavailable,
+			"Browser Profile engine configuration failed",
+			true,
+		)
 	}
 	engine.active.process = process
 	return process, nil

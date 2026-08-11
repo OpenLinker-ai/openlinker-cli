@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	BackendOfficialChrome = "official_chrome_extension"
-	BackendIsolated       = "isolated_chromium"
+	BackendOfficialChrome      = "official_chrome_extension"
+	BackendIsolated            = "isolated_chromium"
+	ModeOpenLinkerNativeChrome = "openlinker-native-chrome"
+	ModeOfficialChromeAlias    = "official-chrome"
 )
 
 type BrowserBackend interface {
@@ -23,6 +25,10 @@ type BrowserBackend interface {
 
 type StartupFailureClassifier interface {
 	StartupFallbackReason(*browserprotocol.Failure) string
+}
+
+type ProfileSelectionEvidenceProvider interface {
+	ProfileSelectionEvidence() (profileGeneration uint64, sessionRecovered bool, ok bool)
 }
 
 type BackendSelectorOptions struct {
@@ -61,8 +67,11 @@ func NewBackendSelector(options BackendSelectorOptions) (*BackendSelector, error
 		return nil, errors.New("official Chrome evidence requires an available backend")
 	}
 	if options.Official != nil {
+		if _, ok := options.Official.(ProfileSelectionEvidenceProvider); !ok {
+			return nil, errors.New("official Chrome backend must report Profile selection evidence")
+		}
 		evidence := options.OfficialEvidence
-		evidence.RequestedMode = "official-chrome"
+		evidence.RequestedMode = ModeOpenLinkerNativeChrome
 		evidence.SelectedBackend = BackendOfficialChrome
 		evidence.FallbackReason = ""
 		if failure := evidence.Validate(); failure != nil {
@@ -118,6 +127,16 @@ func (selector *BackendSelector) Execute(
 			selector.scope = newBackendSelectionScope(identity)
 			if action.Kind == browserprotocol.ActionPreflight {
 				evidence := selector.evidence
+				if evidence.SelectedBackend == BackendOfficialChrome {
+					if selectionFailure := bindProfileSelectionEvidence(selector.selected, &evidence); selectionFailure != nil {
+						_ = selector.selected.AbortStartup()
+						selector.selected = nil
+						selector.evidence = browserprotocol.BackendSelectionEvidence{}
+						selector.scope = backendSelectionScope{}
+						return browserprotocol.Observation{}, selectionFailure
+					}
+					selector.evidence = evidence
+				}
 				observation.BackendSelection = &evidence
 			}
 			return observation, nil
@@ -151,7 +170,19 @@ func (selector *BackendSelector) Execute(
 			)
 		}
 		if selector.selected != nil {
-			return selector.selected.Execute(ctx, identity, action)
+			observation, failure := selector.selected.Execute(ctx, identity, action)
+			if failure != nil || action.Kind != browserprotocol.ActionPreflight {
+				return observation, failure
+			}
+			evidence := selector.evidence
+			if evidence.SelectedBackend == BackendOfficialChrome {
+				if selectionFailure := bindProfileSelectionEvidence(selector.selected, &evidence); selectionFailure != nil {
+					return browserprotocol.Observation{}, selectionFailure
+				}
+				selector.evidence = evidence
+			}
+			observation.BackendSelection = &evidence
+			return observation, nil
 		}
 	}
 	if action.Kind != browserprotocol.ActionPreflight {
@@ -178,7 +209,7 @@ func (selector *BackendSelector) Execute(
 				SelectedBackend: BackendIsolated,
 			},
 		)
-	case "official-chrome":
+	case ModeOpenLinkerNativeChrome, ModeOfficialChromeAlias:
 		if selector.options.Official == nil {
 			return browserprotocol.Observation{}, browserprotocol.NewFailure(
 				browserprotocol.ErrorEngineUnavailable,
@@ -187,7 +218,7 @@ func (selector *BackendSelector) Execute(
 			)
 		}
 		evidence := selector.options.OfficialEvidence
-		evidence.RequestedMode = mode
+		evidence.RequestedMode = ModeOpenLinkerNativeChrome
 		return selector.selectBackend(
 			ctx,
 			identity,
@@ -222,6 +253,10 @@ func (selector *BackendSelector) selectAuto(
 			evidence.RequestedMode = "auto"
 			evidence.SelectedBackend = BackendOfficialChrome
 			evidence.FallbackReason = ""
+			if failure := bindProfileSelectionEvidence(selector.options.Official, &evidence); failure != nil {
+				_ = selector.abortOfficialStartup()
+				return browserprotocol.Observation{}, failure
+			}
 			selector.selected = selector.options.Official
 			selector.evidence = evidence
 			selector.scope = newBackendSelectionScope(identity)
@@ -281,12 +316,47 @@ func (selector *BackendSelector) selectBackend(
 		}
 		return browserprotocol.Observation{}, failure
 	}
+	if evidence.SelectedBackend == BackendOfficialChrome {
+		if failure := bindProfileSelectionEvidence(backend, &evidence); failure != nil {
+			_ = backend.AbortStartup()
+			return browserprotocol.Observation{}, failure
+		}
+	}
 	selector.selected = backend
 	selector.evidence = evidence
 	selector.scope = newBackendSelectionScope(identity)
 	selection := selector.evidence
 	observation.BackendSelection = &selection
 	return observation, nil
+}
+
+func bindProfileSelectionEvidence(
+	backend BrowserBackend,
+	evidence *browserprotocol.BackendSelectionEvidence,
+) *browserprotocol.Failure {
+	provider, ok := backend.(ProfileSelectionEvidenceProvider)
+	if !ok || evidence == nil {
+		return browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"official Chrome backend did not report Profile selection evidence",
+			false,
+		)
+	}
+	generation, recovered, ok := provider.ProfileSelectionEvidence()
+	if !ok || generation == 0 ||
+		(evidence.ProfileGeneration != 0 && evidence.ProfileGeneration != generation) {
+		return browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"official Chrome Profile selection evidence did not match the locked assets",
+			false,
+		)
+	}
+	evidence.ProfileGeneration = generation
+	evidence.SessionRecovered = recovered
+	if failure := evidence.Validate(); failure != nil {
+		return failure
+	}
+	return nil
 }
 
 func (selector *BackendSelector) ExecuteViewer(

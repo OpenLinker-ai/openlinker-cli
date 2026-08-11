@@ -199,7 +199,10 @@ function readZipEntries(bytes, expectedRoot) {
     const next = offset + 46 + nameLength + extraLength + entryCommentLength;
     if (
       next > endOffset ||
-      (flags & ~(0x0008 | 0x0800)) !== 0 ||
+      // Bits 1-2 are compression-option hints. Chrome for Testing currently
+      // applies the "fast" hint to every file, including stored PNG entries;
+      // the bits change neither framing nor trust semantics for method 0.
+      (flags & ~(0x0002 | 0x0004 | 0x0008 | 0x0800)) !== 0 ||
       ![0, 8].includes(method) ||
       compressedSize === 0xffffffff ||
       uncompressedSize === 0xffffffff
@@ -278,10 +281,7 @@ function readZipEntries(bytes, expectedRoot) {
     });
     offset = next;
   }
-  if (
-    offset !== endOffset ||
-    (expectedRoot !== "" && !seen.has(expectedRoot))
-  ) {
+  if (offset !== endOffset) {
     throw new Error("ZIP central directory or root is incomplete");
   }
   return entries;

@@ -42,6 +42,20 @@ type result struct {
 	ScreenshotSHA256   string                   `json:"screenshot_sha256,omitempty"`
 	ContinuationOrigin string                   `json:"continuation_origin,omitempty"`
 	ActionLatency      *actionLatencyComparison `json:"action_latency,omitempty"`
+	BackendSelected    string                   `json:"browser_backend_selected,omitempty"`
+	ExtensionID        string                   `json:"browser_extension_id,omitempty"`
+	ExtensionVersion   string                   `json:"browser_extension_version,omitempty"`
+	ProfileGeneration  uint64                   `json:"browser_profile_generation,omitempty"`
+	SessionRecovered   *bool                    `json:"browser_session_recovered,omitempty"`
+}
+
+type runtimeExpectation struct {
+	BrowserEngine       string
+	BrowserDistribution string
+	BackendMode         string
+	ExtensionID         string
+	ExtensionVersion    string
+	ProfileGeneration   uint64
 }
 
 type actionLatencyComparison struct {
@@ -89,6 +103,20 @@ func main() {
 		"",
 		"locked font manifest expected from preflight",
 	)
+	expectedBrowserEngine := flag.String(
+		"expected-browser-engine",
+		"chromium",
+		"locked Browser engine expected from preflight",
+	)
+	expectedBrowserDistribution := flag.String(
+		"expected-browser-distribution",
+		"playwright_chromium",
+		"locked Browser distribution expected from preflight",
+	)
+	backendMode := flag.String("backend-mode", "", "strict Browser backend mode")
+	expectedExtensionID := flag.String("expected-extension-id", "", "locked extension ID")
+	expectedExtensionVersion := flag.String("expected-extension-version", "", "locked extension version")
+	expectedProfileGeneration := flag.Uint64("expected-profile-generation", 0, "locked Profile generation")
 	controlRoot := flag.String("control-root", defaultControlRoot, "Browser control volume")
 	flag.Parse()
 
@@ -101,6 +129,14 @@ func main() {
 		strings.TrimSpace(*expectedBrowserVersion),
 		strings.TrimSpace(*expectedFontSHA256),
 		filepath.Clean(strings.TrimSpace(*controlRoot)),
+		runtimeExpectation{
+			BrowserEngine:       strings.TrimSpace(*expectedBrowserEngine),
+			BrowserDistribution: strings.TrimSpace(*expectedBrowserDistribution),
+			BackendMode:         strings.TrimSpace(*backendMode),
+			ExtensionID:         strings.TrimSpace(*expectedExtensionID),
+			ExtensionVersion:    strings.TrimSpace(*expectedExtensionVersion),
+			ProfileGeneration:   *expectedProfileGeneration,
+		},
 	)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "browser image acceptance:", err)
@@ -123,6 +159,7 @@ func run(
 	expectedBrowserVersion,
 	expectedFontSHA256,
 	controlRoot string,
+	expected runtimeExpectation,
 ) (result, error) {
 	if mode != "full" && mode != "mcp-evidence" && mode != "gateway-down" {
 		return result{}, errors.New("unsupported acceptance mode")
@@ -205,6 +242,7 @@ func run(
 		preflight, failure := execute(client, browserprotocol.Action{
 			Kind:        browserprotocol.ActionPreflight,
 			Observation: browserprotocol.ObservationSemantic,
+			BackendMode: expected.BackendMode,
 		})
 		if failure != nil {
 			return result{}, fmt.Errorf("MCP evidence preflight failed: %w", failure)
@@ -213,7 +251,11 @@ func run(
 			preflight.Environment,
 			expectedBrowserVersion,
 			expectedFontSHA256,
+			expected,
 		); err != nil {
+			return result{}, err
+		}
+		if err := validateBackendSelection(preflight.BackendSelection, expected, false); err != nil {
 			return result{}, err
 		}
 		if err := validateMCPEvidenceRecovery(
@@ -239,6 +281,7 @@ func run(
 	preflight, failure := execute(first, browserprotocol.Action{
 		Kind:        browserprotocol.ActionPreflight,
 		Observation: browserprotocol.ObservationSemantic,
+		BackendMode: expected.BackendMode,
 	})
 	if failure != nil {
 		return result{}, fmt.Errorf("preflight failed: %w", failure)
@@ -247,7 +290,11 @@ func run(
 		preflight.Environment,
 		expectedBrowserVersion,
 		expectedFontSHA256,
+		expected,
 	); err != nil {
+		return result{}, err
+	}
+	if err := validateBackendSelection(preflight.BackendSelection, expected, false); err != nil {
 		return result{}, err
 	}
 	if primeURL != "" {
@@ -504,6 +551,16 @@ func run(
 	if err != nil {
 		return result{}, err
 	}
+	resumedPreflight, failure := execute(resumed, browserprotocol.Action{
+		Kind:        browserprotocol.ActionPreflight,
+		Observation: browserprotocol.ObservationSemantic,
+	})
+	if failure != nil {
+		return result{}, fmt.Errorf("same-Session continuation preflight failed: %w", failure)
+	}
+	if err := validateBackendSelection(resumedPreflight.BackendSelection, expected, true); err != nil {
+		return result{}, err
+	}
 	resumedObservation, failure := execute(resumed, browserprotocol.Action{
 		Kind:        browserprotocol.ActionScreenshot,
 		Observation: browserprotocol.ObservationSemantic,
@@ -592,7 +649,7 @@ func run(
 		return result{}, err
 	}
 
-	return result{
+	output := result{
 		Status:             "passed",
 		Mode:               mode,
 		Origin:             observation.Origin,
@@ -600,7 +657,17 @@ func run(
 		ScreenshotSHA256:   hex.EncodeToString(screenshotDigest[:]),
 		ContinuationOrigin: resumedObservation.Origin,
 		ActionLatency:      &actionLatency,
-	}, nil
+	}
+	if selection := preflight.BackendSelection; selection != nil {
+		output.BackendSelected = selection.SelectedBackend
+		output.ExtensionID = selection.ExtensionID
+		output.ExtensionVersion = selection.ExtensionVersion
+		output.ProfileGeneration = selection.ProfileGeneration
+		recovered := resumedPreflight.BackendSelection != nil &&
+			resumedPreflight.BackendSelection.SessionRecovered
+		output.SessionRecovered = &recovered
+	}
+	return output, nil
 }
 
 func runPolicyFencingFixtures(
@@ -1476,6 +1543,7 @@ func validateEnvironmentEvidence(
 	evidence *browserprotocol.EnvironmentEvidence,
 	expectedVersion,
 	expectedFontSHA256 string,
+	expected runtimeExpectation,
 ) error {
 	if expectedVersion == "" || expectedFontSHA256 == "" {
 		return errors.New("locked Browser and font versions are required")
@@ -1483,8 +1551,8 @@ func validateEnvironmentEvidence(
 	if evidence == nil {
 		return errors.New("preflight returned no Browser environment evidence")
 	}
-	if evidence.BrowserEngine != "chromium" ||
-		evidence.BrowserDistribution != "playwright_chromium" ||
+	if evidence.BrowserEngine != expected.BrowserEngine ||
+		evidence.BrowserDistribution != expected.BrowserDistribution ||
 		evidence.BrowserVersion != expectedVersion ||
 		evidence.BrowserMajorVersion <= 0 ||
 		!strings.HasPrefix(
@@ -1499,6 +1567,29 @@ func validateEnvironmentEvidence(
 			"preflight Browser environment evidence is invalid: %#v",
 			evidence,
 		)
+	}
+	return nil
+}
+
+func validateBackendSelection(
+	evidence *browserprotocol.BackendSelectionEvidence,
+	expected runtimeExpectation,
+	requireRecovered bool,
+) error {
+	if expected.BackendMode == "" {
+		return nil
+	}
+	if evidence == nil || evidence.Validate() != nil {
+		return errors.New("preflight returned no valid Browser backend evidence")
+	}
+	if evidence.RequestedMode != "openlinker-native-chrome" ||
+		evidence.SelectedBackend != "official_chrome_extension" ||
+		evidence.FallbackReason != "" ||
+		evidence.ExtensionID != expected.ExtensionID ||
+		evidence.ExtensionVersion != expected.ExtensionVersion ||
+		evidence.ProfileGeneration != expected.ProfileGeneration ||
+		(requireRecovered && !evidence.SessionRecovered) {
+		return fmt.Errorf("native Browser backend evidence is invalid: %#v", evidence)
 	}
 	return nil
 }

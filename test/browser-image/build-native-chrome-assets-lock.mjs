@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, open, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { readZipEntries } from "./deterministic-archive.mjs";
+import { verifyCRX3 } from "./crx3.mjs";
 
 const CAPABILITIES = [
   "act",
@@ -24,6 +27,7 @@ const CAPABILITIES = [
   "type_non_secret",
   "wait",
 ];
+const NATIVE_MESSAGING_HOST_NAME = "ai.openlinker.browser";
 
 async function regularFiles(root) {
   const result = [];
@@ -96,9 +100,10 @@ async function validateExtensionManifest(options, extensionLock) {
   if (!activationStatus.isFile() || activationStatus.isSymbolicLink()) {
     throw new Error("native Chrome extension activation file is invalid");
   }
+  return manifest;
 }
 
-async function validateExtensionCRX(extensionRoot) {
+async function validateExtensionCRX(extensionRoot, extensionLock, manifest) {
   const crxPath = path.join(extensionRoot, "extension.crx");
   const status = await lstat(crxPath);
   if (
@@ -109,15 +114,30 @@ async function validateExtensionCRX(extensionRoot) {
   ) {
     throw new Error("native Chrome extension CRX is invalid");
   }
-  const handle = await open(crxPath, "r");
-  try {
-    const header = Buffer.alloc(4);
-    const { bytesRead } = await handle.read(header, 0, header.length, 0);
-    if (bytesRead !== header.length || header.toString("ascii") !== "Cr24") {
-      throw new Error("native Chrome extension CRX is invalid");
+  const verified = verifyCRX3(await readFile(crxPath));
+  if (
+    verified.extensionID !== extensionLock.extension_id ||
+    verified.publicKeyDER.toString("base64") !== manifest.key
+  ) {
+    throw new Error("native Chrome extension CRX identity is invalid");
+  }
+  const zipEntries = readZipEntries(verified.zip, "");
+  const zipFiles = new Map(
+    zipEntries
+      .filter((entry) => !entry.isDirectory)
+      .map((entry) => [entry.path, entry.data]),
+  );
+  const unpacked = (await regularFiles(extensionRoot))
+    .filter((file) => file !== crxPath);
+  if (zipFiles.size !== unpacked.length) {
+    throw new Error("native Chrome extension CRX payload is incomplete");
+  }
+  for (const file of unpacked) {
+    const relative = path.relative(extensionRoot, file).split(path.sep).join("/");
+    const archived = zipFiles.get(relative);
+    if (archived === undefined || !archived.equals(await readFile(file))) {
+      throw new Error("native Chrome extension CRX payload does not match unpacked files");
     }
-  } finally {
-    await handle.close();
   }
   return crxPath;
 }
@@ -127,8 +147,12 @@ async function buildAssetsLock(options) {
   const extensionLock = JSON.parse(
     await readFile(options.extensionLockPath, "utf8"),
   );
-  await validateExtensionManifest(options, extensionLock);
-  const extensionCRXPath = await validateExtensionCRX(options.extensionRoot);
+  const manifest = await validateExtensionManifest(options, extensionLock);
+  const extensionCRXPath = await validateExtensionCRX(
+    options.extensionRoot,
+    extensionLock,
+    manifest,
+  );
   const extensionInstallManifest = {
     external_crx: extensionCRXPath,
     external_version: extensionLock.version,
@@ -139,10 +163,30 @@ async function buildAssetsLock(options) {
     { mode: 0o444 },
   );
   await chmod(options.extensionInstallManifestPath, 0o444);
+  const extensionCRXURL = pathToFileURL(extensionCRXPath).href;
+  const extensionUpdateURL = pathToFileURL(
+    options.extensionUpdateManifestPath,
+  ).href;
+  const extensionUpdateManifest =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">' +
+    `<app appid="${extensionLock.extension_id}">` +
+    `<updatecheck codebase="${extensionCRXURL}" version="${extensionLock.version}"/>` +
+    "</app></gupdate>";
+  await writeFile(
+    options.extensionUpdateManifestPath,
+    extensionUpdateManifest,
+    { mode: 0o444 },
+  );
+  await chmod(options.extensionUpdateManifestPath, 0o444);
   const extensionPolicy = {
     ExtensionSettings: {
       "*": { installation_mode: "blocked" },
-      [extensionLock.extension_id]: { installation_mode: "allowed" },
+      [extensionLock.extension_id]: {
+        installation_mode: "force_installed",
+        override_update_url: true,
+        update_url: extensionUpdateURL,
+      },
     },
   };
   await writeFile(
@@ -152,8 +196,8 @@ async function buildAssetsLock(options) {
   );
   await chmod(options.extensionPolicyPath, 0o444);
   const nativeManifest = {
-    name: "com.openai.codexextension",
-    description: "OpenLinker locked Native Chrome Host",
+    name: NATIVE_MESSAGING_HOST_NAME,
+    description: "OpenLinker Browser Runtime Native Messaging Host",
     path: options.nativeHostPath,
     type: "stdio",
     allowed_origins: [`chrome-extension://${extensionLock.extension_id}/`],
@@ -174,6 +218,7 @@ async function buildAssetsLock(options) {
     ...chromeFiles,
     ...extensionFiles,
     options.extensionInstallManifestPath,
+    options.extensionUpdateManifestPath,
     options.extensionPolicyPath,
     options.nativeHostPath,
     options.nativeHostSourcePath,
@@ -211,6 +256,7 @@ async function buildAssetsLock(options) {
     platform: "linux",
     architecture: options.architecture,
     chrome_path: options.chromePath,
+    chrome_distribution: chromeLock.distribution,
     chrome_version: chromeLock.version,
     extension_root: options.extensionRoot,
     extension_id: extensionLock.extension_id,
@@ -218,6 +264,7 @@ async function buildAssetsLock(options) {
     extension_activation_path: extensionLock.activation_path,
     extension_crx_path: extensionCRXPath,
     extension_install_manifest_path: options.extensionInstallManifestPath,
+    extension_update_manifest_path: options.extensionUpdateManifestPath,
     extension_policy_path: options.extensionPolicyPath,
     native_host_path: options.nativeHostPath,
     native_host_protocol: options.nativeHostProtocol,
@@ -240,6 +287,7 @@ if (path.resolve(process.argv[1] ?? "") === path.resolve(fileURLToPath(import.me
     chromePath,
     extensionRoot,
     extensionInstallManifestPath,
+    extensionUpdateManifestPath,
     extensionPolicyPath,
     nativeHostPath,
     nativeHostSourcePath,
@@ -260,6 +308,7 @@ if (path.resolve(process.argv[1] ?? "") === path.resolve(fileURLToPath(import.me
       chromePath,
       extensionRoot,
       extensionInstallManifestPath,
+      extensionUpdateManifestPath,
       extensionPolicyPath,
       nativeHostPath,
       nativeHostSourcePath,
@@ -282,6 +331,7 @@ if (path.resolve(process.argv[1] ?? "") === path.resolve(fileURLToPath(import.me
     chromePath,
     extensionRoot,
     extensionInstallManifestPath,
+    extensionUpdateManifestPath,
     extensionPolicyPath,
     nativeHostPath,
     nativeHostSourcePath,
@@ -295,4 +345,9 @@ if (path.resolve(process.argv[1] ?? "") === path.resolve(fileURLToPath(import.me
   });
 }
 
-export { buildAssetsLock, CAPABILITIES, extensionIDFromKey };
+export {
+  buildAssetsLock,
+  CAPABILITIES,
+  NATIVE_MESSAGING_HOST_NAME,
+  extensionIDFromKey,
+};

@@ -43,6 +43,7 @@ func TestSelectMapsNativeChromeModesToOneSurfaceAndBackendPreference(
 		calls     int
 	}{
 		{ModeAuto, SurfacePluginNative, BackendAuto, 1},
+		{ModeOpenLinkerNativeChrome, SurfacePluginNative, BackendOfficialChrome, 1},
 		{ModeOfficialChrome, SurfacePluginNative, BackendOfficialChrome, 1},
 		{ModeIsolatedNative, SurfacePluginNative, BackendIsolated, 1},
 		{ModeNativeAlias, SurfacePluginNative, BackendIsolated, 1},
@@ -67,6 +68,8 @@ func TestSelectMapsNativeChromeModesToOneSurfaceAndBackendPreference(
 			}
 			if selection.Selected != test.surface ||
 				selection.BackendRequested != test.backend ||
+				(test.requested == ModeOfficialChromeAlias &&
+					selection.Requested != ModeOpenLinkerNativeChrome) ||
 				calls != test.calls {
 				t.Fatalf("selection = %#v, native calls = %d", selection, calls)
 			}

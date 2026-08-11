@@ -418,6 +418,8 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 		BrowserClientMode:          "native",
 		BrowserBackendSelected:     "official_chrome_extension",
 		BrowserSelectionGeneration: 3,
+		BrowserProfileGeneration:   7,
+		BrowserSessionRecovered:    false,
 		BrowserAssetManifestSHA256: strings.Repeat("a", 64),
 		BrowserExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
 		BrowserExtensionVersion:    "1.2.3.4",
@@ -430,6 +432,8 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 		"browser_extension_id":          "abcdefghijklmnopabcdefghijklmnop",
 		"browser_extension_version":     "1.2.3.4",
 		"browser_native_host_protocol":  "openlinker.native-chrome.v1",
+		"browser_profile_generation":    uint64(7),
+		"browser_session_recovered":     false,
 	} {
 		if evidence[key] != expected {
 			t.Fatalf("official evidence %s = %#v, want %#v", key, evidence[key], expected)
@@ -439,7 +443,7 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"/opt/", "/browser-", "profile", "cookie", "https://"} {
+	for _, forbidden := range []string{"/opt/", "/browser-", "profile_path", "cookie", "https://"} {
 		if strings.Contains(strings.ToLower(string(encoded)), forbidden) {
 			t.Fatalf("official evidence leaked %q: %s", forbidden, encoded)
 		}

@@ -199,17 +199,41 @@ func (engine *ProcessEngine) Execute(
 				runtimeUnavailable("browser engine output failed"),
 			)
 		}
-		response, failure := decodeEngineResponse(output.value, actionID)
+		response, failure, rejectionReason := decodeEngineResponse(output.value, actionID)
 		if failure != nil {
+			writeEngineRejectionDiagnostic(
+				process,
+				"response_envelope",
+				browserprotocol.NewFailure(
+					browserprotocol.ErrorOutputInvalid,
+					rejectionReason,
+					false,
+				),
+				"",
+			)
 			engine.resetProcess()
 			return browserprotocol.Observation{}, processResetFailure(failure)
 		}
 		if response.Error != nil {
-			failure := normalizeEngineFailure(response.Error)
+			failure, rejection := normalizeEngineFailure(response.Error)
+			if rejection != nil {
+				writeEngineRejectionDiagnostic(
+					process,
+					"structured_failure",
+					rejection,
+					string(response.Error.Code),
+				)
+			}
 			failure.EngineInstanceID = process.instanceID
 			return browserprotocol.Observation{}, failure
 		}
 		if validationFailure := response.Observation.ValidateEngine(); validationFailure != nil {
+			writeEngineRejectionDiagnostic(
+				process,
+				"observation",
+				validationFailure,
+				"",
+			)
 			engine.resetProcess()
 			return browserprotocol.Observation{}, processResetFailure(validationFailure)
 		}
@@ -317,13 +341,32 @@ func (engine *ProcessEngine) ExecuteViewer(
 				runtimeUnavailable("browser engine viewer output failed"),
 			)
 		}
-		response, failure := decodeEngineViewerResponse(output.value, actionID)
+		response, failure, rejectionReason := decodeEngineViewerResponse(output.value, actionID)
 		if failure != nil {
+			writeEngineRejectionDiagnostic(
+				process,
+				"viewer_response_envelope",
+				browserprotocol.NewFailure(
+					browserprotocol.ErrorOutputInvalid,
+					rejectionReason,
+					false,
+				),
+				"",
+			)
 			engine.resetProcess()
 			return nil, processResetFailure(failure)
 		}
 		if response.Error != nil {
-			return nil, normalizeEngineFailure(response.Error)
+			failure, rejection := normalizeEngineFailure(response.Error)
+			if rejection != nil {
+				writeEngineRejectionDiagnostic(
+					process,
+					"viewer_structured_failure",
+					rejection,
+					string(response.Error.Code),
+				)
+			}
+			return nil, failure
 		}
 		if response.Frame != nil {
 			if validationFailure := response.Frame.Validate(); validationFailure != nil {
@@ -505,66 +548,69 @@ func (writer *engineDiagnosticWriter) flushLocked() {
 	writer.pending = writer.pending[:0]
 }
 
-func decodeEngineResponse(raw []byte, actionID string) (engineResponse, *browserprotocol.Failure) {
+func decodeEngineResponse(
+	raw []byte,
+	actionID string,
+) (engineResponse, *browserprotocol.Failure, string) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var response engineResponse
 	if err := decoder.Decode(&response); err != nil {
-		return engineResponse{}, invalidEngineOutput()
+		return engineResponse{}, invalidEngineOutput(), "response JSON shape is invalid: " + err.Error()
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return engineResponse{}, invalidEngineOutput()
+		return engineResponse{}, invalidEngineOutput(), "response contains trailing JSON"
 	}
 	if response.ContractID != engineContractID || response.ActionID != actionID {
-		return engineResponse{}, invalidEngineOutput()
+		return engineResponse{}, invalidEngineOutput(), "response authority fields do not match"
 	}
 	switch response.Status {
 	case "ok":
 		if response.Observation == nil || response.Error != nil {
-			return engineResponse{}, invalidEngineOutput()
+			return engineResponse{}, invalidEngineOutput(), "success response payload is invalid"
 		}
 	case "error":
 		if response.Error == nil || response.Observation != nil {
-			return engineResponse{}, invalidEngineOutput()
+			return engineResponse{}, invalidEngineOutput(), "error response payload is invalid"
 		}
 	default:
-		return engineResponse{}, invalidEngineOutput()
+		return engineResponse{}, invalidEngineOutput(), "response status is invalid"
 	}
-	return response, nil
+	return response, nil, ""
 }
 
 func decodeEngineViewerResponse(
 	raw []byte,
 	actionID string,
-) (engineViewerResponse, *browserprotocol.Failure) {
+) (engineViewerResponse, *browserprotocol.Failure, string) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var response engineViewerResponse
 	if err := decoder.Decode(&response); err != nil {
-		return engineViewerResponse{}, invalidEngineOutput()
+		return engineViewerResponse{}, invalidEngineOutput(), "viewer response JSON shape is invalid: " + err.Error()
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return engineViewerResponse{}, invalidEngineOutput()
+		return engineViewerResponse{}, invalidEngineOutput(), "viewer response contains trailing JSON"
 	}
 	if response.ContractID != engineViewerContractID ||
 		response.ActionID != actionID {
-		return engineViewerResponse{}, invalidEngineOutput()
+		return engineViewerResponse{}, invalidEngineOutput(), "viewer response authority fields do not match"
 	}
 	switch response.Status {
 	case "ok":
 		if response.Error != nil {
-			return engineViewerResponse{}, invalidEngineOutput()
+			return engineViewerResponse{}, invalidEngineOutput(), "viewer success payload is invalid"
 		}
 	case "error":
 		if response.Error == nil || response.Frame != nil {
-			return engineViewerResponse{}, invalidEngineOutput()
+			return engineViewerResponse{}, invalidEngineOutput(), "viewer error payload is invalid"
 		}
 	default:
-		return engineViewerResponse{}, invalidEngineOutput()
+		return engineViewerResponse{}, invalidEngineOutput(), "viewer response status is invalid"
 	}
-	return response, nil
+	return response, nil, ""
 }
 
 var errEngineOutputTooLarge = errors.New("browser engine output is too large")
@@ -611,6 +657,7 @@ func validateEngineEnvironment(environment []string) error {
 		"NO_PROXY":                                             true,
 		"OPENLINKER_BROWSER_EGRESS_PROXY":                      true,
 		"OPENLINKER_BROWSER_PROFILE_DIR":                       true,
+		"OPENLINKER_BROWSER_EXECUTABLE_PATH":                   true,
 		"OPENLINKER_BROWSER_ENGINE":                            true,
 		"OPENLINKER_BROWSER_DISTRIBUTION":                      true,
 		"OPENLINKER_BROWSER_VERSION":                           true,
@@ -624,6 +671,17 @@ func validateEngineEnvironment(environment []string) error {
 		"PLAYWRIGHT_BROWSERS_PATH":                             true,
 		"TMPDIR":                                               true,
 		"TZ":                                                   true,
+		"OPENLINKER_NATIVE_CHROME_BINARY":                      true,
+		"OPENLINKER_NATIVE_CHROME_EXTENSION_ROOT":              true,
+		"OPENLINKER_NATIVE_CHROME_EXTENSION_ID":                true,
+		"OPENLINKER_NATIVE_CHROME_EXTENSION_VERSION":           true,
+		"OPENLINKER_NATIVE_CHROME_ACTIVATION_PATH":             true,
+		"OPENLINKER_NATIVE_CHROME_HOST":                        true,
+		"OPENLINKER_NATIVE_CHROME_PROTOCOL":                    true,
+		"OPENLINKER_NATIVE_CHROME_ASSET_MANIFEST_SHA256":       true,
+		"OPENLINKER_NATIVE_CHROME_ENABLED":                     true,
+		"OPENLINKER_NATIVE_CHROME_REQUIRE_ORIGIN":              true,
+		"OPENLINKER_NATIVE_CHROME_SOCKET":                      true,
 	}
 	seen := make(map[string]bool, len(environment))
 	for _, item := range environment {
@@ -635,7 +693,10 @@ func validateEngineEnvironment(environment []string) error {
 			return errors.New("browser engine NO_PROXY must be empty")
 		}
 		switch key {
-		case "HOME", "TMPDIR", "OPENLINKER_BROWSER_PROFILE_DIR", "PLAYWRIGHT_BROWSERS_PATH":
+		case "HOME", "TMPDIR", "OPENLINKER_BROWSER_PROFILE_DIR", "PLAYWRIGHT_BROWSERS_PATH",
+			"OPENLINKER_BROWSER_EXECUTABLE_PATH",
+			"OPENLINKER_NATIVE_CHROME_BINARY", "OPENLINKER_NATIVE_CHROME_EXTENSION_ROOT",
+			"OPENLINKER_NATIVE_CHROME_HOST", "OPENLINKER_NATIVE_CHROME_SOCKET":
 			if !filepath.IsAbs(value) || filepath.Clean(value) != value {
 				return errors.New("browser engine environment path must be absolute and clean")
 			}
@@ -645,23 +706,75 @@ func validateEngineEnvironment(environment []string) error {
 				proxy.Path != "" || proxy.RawQuery != "" || proxy.Fragment != "" {
 				return errors.New("browser engine egress proxy must be an HTTP origin without credentials")
 			}
+		case "OPENLINKER_NATIVE_CHROME_EXTENSION_ID":
+			if !validExtensionID(value) {
+				return errors.New("browser engine native Chrome extension ID is invalid")
+			}
+		case "OPENLINKER_NATIVE_CHROME_EXTENSION_VERSION":
+			if !validLockedVersion(value) {
+				return errors.New("browser engine native Chrome extension version is invalid")
+			}
+		case "OPENLINKER_NATIVE_CHROME_ACTIVATION_PATH":
+			if value != openLinkerActivationPath {
+				return errors.New("browser engine native Chrome activation path is invalid")
+			}
+		case "OPENLINKER_NATIVE_CHROME_PROTOCOL":
+			if !validBoundedOpaque(value, 64) {
+				return errors.New("browser engine native Chrome protocol is invalid")
+			}
+		case "OPENLINKER_NATIVE_CHROME_ASSET_MANIFEST_SHA256":
+			if len(value) != 64 || strings.Trim(value, "0123456789abcdef") != "" {
+				return errors.New("browser engine native Chrome asset digest is invalid")
+			}
+		case "OPENLINKER_NATIVE_CHROME_ENABLED", "OPENLINKER_NATIVE_CHROME_REQUIRE_ORIGIN":
+			if value != "true" {
+				return errors.New("browser engine native Chrome gate must be enabled")
+			}
 		}
 		seen[key] = true
 	}
 	return nil
 }
 
-func normalizeEngineFailure(failure *browserprotocol.Failure) *browserprotocol.Failure {
-	if failure == nil ||
-		browserprotocol.ValidateFailure(failure) != nil ||
-		failure.BlockedClickNavigationAttemptsRemaining != nil ||
-		failure.BlockedClickRunAttemptsRemaining != nil ||
-		!allowedEngineErrorCode(failure.Code) {
-		return invalidEngineOutput()
+func normalizeEngineFailure(
+	failure *browserprotocol.Failure,
+) (*browserprotocol.Failure, *browserprotocol.Failure) {
+	if failure == nil {
+		rejection := browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"browser engine failure is missing",
+			false,
+		)
+		return invalidEngineOutput(), rejection
+	}
+	if rejection := browserprotocol.ValidateFailure(failure); rejection != nil {
+		return invalidEngineOutput(), rejection
+	}
+	if failure.BlockedClickNavigationAttemptsRemaining != nil ||
+		failure.BlockedClickRunAttemptsRemaining != nil {
+		rejection := browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"browser engine failure contains supervisor-owned retry evidence",
+			false,
+		)
+		return invalidEngineOutput(), rejection
+	}
+	if !allowedEngineErrorCode(failure.Code) {
+		rejection := browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"browser engine failure code is not allowed",
+			false,
+		)
+		return invalidEngineOutput(), rejection
 	}
 	if failure.TargetCategory != "" &&
 		failure.Code != browserprotocol.ErrorHighImpactActionBlocked {
-		return invalidEngineOutput()
+		rejection := browserprotocol.NewFailure(
+			browserprotocol.ErrorOutputInvalid,
+			"browser engine failure contains unexpected target evidence",
+			false,
+		)
+		return invalidEngineOutput(), rejection
 	}
 	normalized := browserprotocol.NewFailure(failure.Code, failure.Message, failure.Recoverable)
 	if failure.ActionIndex != nil {
@@ -716,7 +829,23 @@ func normalizeEngineFailure(failure *browserprotocol.Failure) *browserprotocol.F
 			failure.BrowserMutationOrigins...,
 		)
 	}
-	return normalized
+	return normalized, nil
+}
+
+func writeEngineRejectionDiagnostic(
+	process *engineProcess,
+	stage string,
+	failure *browserprotocol.Failure,
+	engineCode string,
+) {
+	if process == nil || process.diagnostic == nil || failure == nil {
+		return
+	}
+	line := "supervisor rejected " + stage + ": " + failure.Message
+	if engineCode != "" {
+		line += " (engine_code=" + engineCode + ")"
+	}
+	_, _ = process.diagnostic.Write([]byte(line + "\n"))
 }
 
 func allowedEngineErrorCode(code browserprotocol.ErrorCode) bool {

@@ -171,6 +171,9 @@ func TestProcessEngineRejectsForbiddenEnvironment(t *testing.T) {
 		{"HOME=/tmp", "HOME=/other"},
 		{"HOME=relative"},
 		{"OPENLINKER_BROWSER_EGRESS_PROXY=http://user:secret@proxy:3128"},
+		{"OPENLINKER_NATIVE_CHROME_ENABLED=false"},
+		{"OPENLINKER_NATIVE_CHROME_EXTENSION_ID=invalid"},
+		{"OPENLINKER_NATIVE_CHROME_ASSET_MANIFEST_SHA256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
 	} {
 		if _, err := NewProcessEngine(ProcessEngineOptions{
 			Command:     command,
@@ -178,6 +181,45 @@ func TestProcessEngineRejectsForbiddenEnvironment(t *testing.T) {
 		}); err == nil {
 			t.Fatalf("NewProcessEngine(%q) succeeded", environment)
 		}
+	}
+}
+
+func TestProcessEngineAcceptsLockedNativeChromeEnvironment(t *testing.T) {
+	t.Parallel()
+	command := []string{os.Args[0], "-test.run=^TestProcessEngineHelper$", "--", "browser-engine-helper"}
+	environment := []string{
+		"HOME=/browser-home",
+		"TMPDIR=/browser-tmp",
+		"NO_PROXY=",
+		"OPENLINKER_BROWSER_EGRESS_PROXY=http://172.18.0.2:3128",
+		"OPENLINKER_BROWSER_PROFILE_DIR=/browser-tmp/profiles/official_chrome_extension/active",
+		"OPENLINKER_BROWSER_EXECUTABLE_PATH=/opt/google/chrome/chrome",
+		"OPENLINKER_BROWSER_ENGINE=chrome",
+		"OPENLINKER_BROWSER_DISTRIBUTION=chrome_for_testing",
+		"OPENLINKER_BROWSER_VERSION=151.0.7922.77",
+		"OPENLINKER_BROWSER_LOCALE=en-US",
+		"OPENLINKER_BROWSER_TIMEZONE=UTC",
+		"OPENLINKER_BROWSER_FONT_CONTRACT_VERSION=openlinker.browser.fonts.v1",
+		"OPENLINKER_BROWSER_FONT_MANIFEST_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"OPENLINKER_BROWSER_PROFILE_GENERATION=2",
+		"OPENLINKER_BROWSER_MAX_ACTIONS_PER_ORIGIN_MINUTE=120",
+		"OPENLINKER_BROWSER_MAX_NAVIGATIONS_PER_ORIGIN_MINUTE=20",
+		"PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
+		"LANG=C.UTF-8",
+		"OPENLINKER_NATIVE_CHROME_BINARY=/opt/google/chrome/chrome",
+		"OPENLINKER_NATIVE_CHROME_EXTENSION_ROOT=/opt/openlinker/native-chrome/extension",
+		"OPENLINKER_NATIVE_CHROME_EXTENSION_ID=abcdefghijklmnopabcdefghijklmnop",
+		"OPENLINKER_NATIVE_CHROME_EXTENSION_VERSION=1.2.3.4",
+		"OPENLINKER_NATIVE_CHROME_ACTIVATION_PATH=/openlinker-runtime/index.html",
+		"OPENLINKER_NATIVE_CHROME_HOST=/opt/openlinker/native-chrome/bin/openlinker-native-chrome-host",
+		"OPENLINKER_NATIVE_CHROME_PROTOCOL=openlinker.native-chrome.v1",
+		"OPENLINKER_NATIVE_CHROME_ASSET_MANIFEST_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"OPENLINKER_NATIVE_CHROME_ENABLED=true",
+		"OPENLINKER_NATIVE_CHROME_REQUIRE_ORIGIN=true",
+		"OPENLINKER_NATIVE_CHROME_SOCKET=/browser-tmp/profiles/official_chrome_extension/native-host.sock",
+	}
+	if _, err := NewProcessEngine(ProcessEngineOptions{Command: command, Environment: environment}); err != nil {
+		t.Fatal(err)
 	}
 }
 

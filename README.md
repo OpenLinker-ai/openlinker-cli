@@ -103,8 +103,10 @@ Official Chrome is supplied only as an immutable build input. Use
 [`Dockerfile.browser.native-chrome`](./Dockerfile.browser.native-chrome) and
 [`deploy/compose.codex.native-chrome.yml`](./deploy/compose.codex.native-chrome.yml)
 to bake the locked Chrome, signed extension CRX, Native Messaging Host, and
-asset manifest into an operator image. Chrome installs the extension from the
-image-local Linux external-extension manifest. None of those native assets is
+asset manifest into an operator image. Chrome force-installs the extension from
+the image-local CRX through an image-local Omaha update manifest and managed
+policy; the Linux external-extension manifest remains independently verified.
+None of those native assets is
 mounted or downloaded at runtime; encrypted Profiles continue to use the
 existing persistent Browser-state volume. If the locked native assets or startup handshake are
 unavailable, `auto` selects the next backend; strict `official-chrome` fails.

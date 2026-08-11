@@ -160,6 +160,8 @@ type BackendSelectionEvidence struct {
 	ExtensionID         string `json:"extension_id,omitempty"`
 	ExtensionVersion    string `json:"extension_version,omitempty"`
 	NativeHostProtocol  string `json:"native_host_protocol,omitempty"`
+	ProfileGeneration   uint64 `json:"profile_generation,omitempty"`
+	SessionRecovered    bool   `json:"session_recovered"`
 }
 
 type Screenshot struct {

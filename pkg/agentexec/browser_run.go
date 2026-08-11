@@ -295,6 +295,8 @@ func refreshBrowserRunContext(run *BrowserRunContext, lease *browserRunLease) {
 	run.BackendSelected = selection.SelectedBackend
 	run.BackendFallbackReason = selection.FallbackReason
 	run.SelectionGeneration = generation
+	run.ProfileGeneration = selection.ProfileGeneration
+	run.SessionRecovered = selection.SessionRecovered
 	run.AssetManifestSHA256 = selection.AssetManifestSHA256
 	run.ExtensionID = selection.ExtensionID
 	run.ExtensionVersion = selection.ExtensionVersion

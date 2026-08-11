@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+const openLinkerTestExtensionID = "abcdefghijklmnopabcdefghijklmnop"
+
 func TestOfficialChromeAssetsRequireCanonicalLockedCompleteImageFiles(
 	t *testing.T,
 ) {
@@ -20,13 +22,14 @@ func TestOfficialChromeAssetsRequireCanonicalLockedCompleteImageFiles(
 		ManifestPath:         lockPath,
 		Platform:             "linux",
 		Architecture:         "amd64",
-		ExtensionInstallRoot: filepath.Join(root, "opt", "google", "chrome", "extensions"),
-		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome", "policies", "managed", "openlinker-native-chrome.json"),
+		ExtensionInstallRoot: filepath.Join(root, "usr", "share", "chromium", "extensions"),
+		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "policies", "managed", "openlinker-native-chrome.json"),
+		NativeMessagingPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "native-messaging-hosts", "ai.openlinker.browser.json"),
 	})
 	if reason != "" {
 		t.Fatalf("valid assets unavailable: %s", reason)
 	}
-	if assets.Lock.ExtensionID != officialCodexExtensionID ||
+	if assets.Lock.ExtensionID != openLinkerTestExtensionID ||
 		len(assets.ManifestSHA256) != 64 {
 		t.Fatalf("assets = %#v", assets)
 	}
@@ -41,8 +44,9 @@ func TestOfficialChromeAssetsRequireCanonicalLockedCompleteImageFiles(
 		ManifestPath:         lockPath,
 		Platform:             "linux",
 		Architecture:         "amd64",
-		ExtensionInstallRoot: filepath.Join(root, "opt", "google", "chrome", "extensions"),
-		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome", "policies", "managed", "openlinker-native-chrome.json"),
+		ExtensionInstallRoot: filepath.Join(root, "usr", "share", "chromium", "extensions"),
+		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "policies", "managed", "openlinker-native-chrome.json"),
+		NativeMessagingPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "native-messaging-hosts", "ai.openlinker.browser.json"),
 	}); reason != "official_assets_invalid" {
 		t.Fatalf("tampered asset reason = %q", reason)
 	}
@@ -57,8 +61,9 @@ func TestOfficialChromeAssetsRejectUnsupportedPlatformAndNonCanonicalLock(
 		ManifestPath:         lockPath,
 		Platform:             "linux",
 		Architecture:         "arm64",
-		ExtensionInstallRoot: filepath.Join(root, "opt", "google", "chrome", "extensions"),
-		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome", "policies", "managed", "openlinker-native-chrome.json"),
+		ExtensionInstallRoot: filepath.Join(root, "usr", "share", "chromium", "extensions"),
+		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "policies", "managed", "openlinker-native-chrome.json"),
+		NativeMessagingPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "native-messaging-hosts", "ai.openlinker.browser.json"),
 	}); reason != "official_platform_unsupported" {
 		t.Fatalf("unsupported platform reason = %q", reason)
 	}
@@ -77,8 +82,9 @@ func TestOfficialChromeAssetsRejectUnsupportedPlatformAndNonCanonicalLock(
 		ManifestPath:         lockPath,
 		Platform:             "linux",
 		Architecture:         "amd64",
-		ExtensionInstallRoot: filepath.Join(root, "opt", "google", "chrome", "extensions"),
-		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome", "policies", "managed", "openlinker-native-chrome.json"),
+		ExtensionInstallRoot: filepath.Join(root, "usr", "share", "chromium", "extensions"),
+		ExtensionPolicyPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "policies", "managed", "openlinker-native-chrome.json"),
+		NativeMessagingPath:  filepath.Join(root, "etc", "opt", "chrome_for_testing", "native-messaging-hosts", "ai.openlinker.browser.json"),
 	}); reason != "official_assets_invalid" {
 		t.Fatalf("non-canonical lock reason = %q", reason)
 	}
@@ -101,39 +107,43 @@ func writeOfficialChromeAssetFixture(
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		filepath.Join(root, "chrome"):                                 []byte("chrome-binary"),
-		filepath.Join(root, "chrome-sandbox"):                         []byte("chrome-sandbox"),
-		filepath.Join(extensionRoot, "manifest.json"):                 []byte(`{"name":"Locked extension"}`),
-		filepath.Join(extensionRoot, "codex-sidepanel", "index.html"): []byte("activation"),
-		filepath.Join(extensionRoot, "extension.crx"):                 append([]byte("Cr24"), make([]byte, 12)...),
-		filepath.Join(root, "native-host"):                            []byte("native-host-binary"),
-		filepath.Join(root, "native-engine"):                          []byte("native-engine-binary"),
+		filepath.Join(root, "chrome"):                                    []byte("chrome-binary"),
+		filepath.Join(root, "chrome-sandbox"):                            []byte("chrome-sandbox"),
+		filepath.Join(extensionRoot, "manifest.json"):                    []byte(`{"name":"Locked extension"}`),
+		filepath.Join(extensionRoot, "openlinker-runtime", "index.html"): []byte("activation"),
+		filepath.Join(extensionRoot, "extension.crx"):                    append([]byte("Cr24"), make([]byte, 12)...),
+		filepath.Join(root, "native-host"):                               []byte("native-host-binary"),
+		filepath.Join(root, "native-engine"):                             []byte("native-engine-binary"),
 	}
-	if err := os.Mkdir(filepath.Join(extensionRoot, "codex-sidepanel"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(extensionRoot, "openlinker-runtime"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	nativeManifestPath := filepath.Join(root, "native-messaging.json")
+	nativeManifestRoot := filepath.Join(root, "etc", "opt", "chrome_for_testing", "native-messaging-hosts")
+	if err := os.MkdirAll(nativeManifestRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nativeManifestPath := filepath.Join(nativeManifestRoot, "ai.openlinker.browser.json")
 	nativeManifest := officialNativeMessagingManifest{
-		Name:           "com.openai.codexextension",
+		Name:           openLinkerNativeHostName,
 		Description:    "Locked test Native Host",
 		Path:           filepath.Join(root, "native-host"),
 		Type:           "stdio",
-		AllowedOrigins: []string{"chrome-extension://" + officialCodexExtensionID + "/"},
+		AllowedOrigins: []string{"chrome-extension://" + openLinkerTestExtensionID + "/"},
 	}
 	nativeManifestRaw, err := json.Marshal(nativeManifest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	files[nativeManifestPath] = nativeManifestRaw
-	installRoot := filepath.Join(root, "opt", "google", "chrome", "extensions")
-	policyRoot := filepath.Join(root, "etc", "opt", "chrome", "policies", "managed")
+	installRoot := filepath.Join(root, "usr", "share", "chromium", "extensions")
+	policyRoot := filepath.Join(root, "etc", "opt", "chrome_for_testing", "policies", "managed")
 	if err := os.MkdirAll(installRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(policyRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	installPath := filepath.Join(installRoot, officialCodexExtensionID+".json")
+	installPath := filepath.Join(installRoot, openLinkerTestExtensionID+".json")
 	installRaw, err := json.Marshal(officialExtensionInstallManifest{
 		ExternalCRX:     filepath.Join(extensionRoot, "extension.crx"),
 		ExternalVersion: "1.2.3.4",
@@ -142,11 +152,23 @@ func writeOfficialChromeAssetFixture(
 		t.Fatal(err)
 	}
 	files[installPath] = installRaw
+	updatePath := filepath.Join(root, "extension-update.xml")
+	files[updatePath] = []byte(
+		`<?xml version="1.0" encoding="UTF-8"?>` +
+			`<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">` +
+			`<app appid="` + openLinkerTestExtensionID + `">` +
+			`<updatecheck codebase="` + officialChromeFileURL(filepath.Join(extensionRoot, "extension.crx")) + `" version="1.2.3.4"/>` +
+			`</app></gupdate>`,
+	)
 	policyPath := filepath.Join(policyRoot, "openlinker-native-chrome.json")
 	policyRaw, err := json.Marshal(officialExtensionPolicy{
 		ExtensionSettings: map[string]officialExtensionPolicyEntry{
-			"*":                      {InstallationMode: "blocked"},
-			officialCodexExtensionID: {InstallationMode: "allowed"},
+			"*": {InstallationMode: "blocked"},
+			openLinkerTestExtensionID: {
+				InstallationMode:  "force_installed",
+				OverrideUpdateURL: true,
+				UpdateURL:         officialChromeFileURL(updatePath),
+			},
 		},
 	})
 	if err != nil {
@@ -187,13 +209,15 @@ func writeOfficialChromeAssetFixture(
 		Platform:                 platform,
 		Architecture:             architecture,
 		ChromePath:               filepath.Join(root, "chrome"),
+		ChromeDistribution:       "chrome_for_testing",
 		ChromeVersion:            "150.0.1.2",
 		ExtensionRoot:            extensionRoot,
-		ExtensionID:              officialCodexExtensionID,
+		ExtensionID:              openLinkerTestExtensionID,
 		ExtensionVersion:         "1.2.3.4",
-		ExtensionActivationPath:  "/codex-sidepanel/index.html?openlinker=1",
+		ExtensionActivationPath:  openLinkerActivationPath,
 		ExtensionCRXPath:         filepath.Join(extensionRoot, "extension.crx"),
 		ExtensionInstallManifest: installPath,
+		ExtensionUpdateManifest:  updatePath,
 		ExtensionPolicyPath:      policyPath,
 		NativeHostPath:           filepath.Join(root, "native-host"),
 		NativeHostProtocol:       "openlinker.native-chrome.v1",

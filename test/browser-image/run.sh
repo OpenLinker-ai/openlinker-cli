@@ -38,7 +38,7 @@ key_volume="${prefix}-key"
 state_volume="${prefix}-state"
 capture_volume="${prefix}-capture"
 
-browser_image="openlinker-browser-runtime:image-acceptance"
+browser_image=${OPENLINKER_BROWSER_ACCEPTANCE_BROWSER_IMAGE:-openlinker-browser-runtime:image-acceptance}
 egress_image="openlinker-egress-gateway:image-acceptance"
 client_image="openlinker-browser-acceptance-client:image-acceptance"
 fixture_image="openlinker-browser-acceptance-fixture:image-acceptance"
@@ -102,10 +102,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-docker build \
-  -f "$repository_root/Dockerfile.browser" \
-  -t "$browser_image" \
-  "$repository_root"
+if [ -z "${OPENLINKER_BROWSER_ACCEPTANCE_BROWSER_IMAGE:-}" ]; then
+  docker build \
+    -f "$repository_root/Dockerfile.browser" \
+    -t "$browser_image" \
+    "$repository_root"
+else
+  docker image inspect "$browser_image" >/dev/null
+fi
 docker build \
   --target egress \
   -f "$repository_root/Dockerfile.providers" \
@@ -164,12 +168,21 @@ case "$browser_architecture" in
     exit 1
     ;;
 esac
-expected_browser_version=$(
-  sed -n \
-    "s/^[[:space:]]*\"linux-${browser_architecture}\":[[:space:]]*\"\\([0-9.]*\\)\"[,]\\{0,1\\}[[:space:]]*$/\\1/p" \
-    "$repository_root/browser-engine/browser-versions.json"
-)
+expected_browser_version=${OPENLINKER_BROWSER_ACCEPTANCE_EXPECTED_BROWSER_VERSION:-}
+if [ -z "$expected_browser_version" ]; then
+  expected_browser_version=$(
+    sed -n \
+      "s/^[[:space:]]*\"linux-${browser_architecture}\":[[:space:]]*\"\\([0-9.]*\\)\"[,]\\{0,1\\}[[:space:]]*$/\\1/p" \
+      "$repository_root/browser-engine/browser-versions.json"
+  )
+fi
 expected_font_sha256=$(tr -d '\n' <"$repository_root/browser-engine/font-contract-v1.sha256")
+expected_browser_engine=${OPENLINKER_BROWSER_ACCEPTANCE_EXPECTED_BROWSER_ENGINE:-chromium}
+expected_browser_distribution=${OPENLINKER_BROWSER_ACCEPTANCE_EXPECTED_BROWSER_DISTRIBUTION:-playwright_chromium}
+backend_mode=${OPENLINKER_BROWSER_ACCEPTANCE_BACKEND_MODE:-}
+expected_extension_id=${OPENLINKER_BROWSER_ACCEPTANCE_EXPECTED_EXTENSION_ID:-}
+expected_extension_version=${OPENLINKER_BROWSER_ACCEPTANCE_EXPECTED_EXTENSION_VERSION:-}
+expected_profile_generation=${OPENLINKER_BROWSER_ACCEPTANCE_EXPECTED_PROFILE_GENERATION:-0}
 case "$expected_browser_version" in
   ''|*[!0-9.]*)
     echo "locked Browser version is invalid" >&2
@@ -640,7 +653,13 @@ full_result=$(docker run --rm \
   "$client_image" \
   --mode mcp-evidence \
   --expected-browser-version "$expected_browser_version" \
-  --expected-font-sha256 "$expected_font_sha256"
+  --expected-font-sha256 "$expected_font_sha256" \
+  --expected-browser-engine "$expected_browser_engine" \
+  --expected-browser-distribution "$expected_browser_distribution" \
+  --backend-mode "$backend_mode" \
+  --expected-extension-id "$expected_extension_id" \
+  --expected-extension-version "$expected_extension_version" \
+  --expected-profile-generation "$expected_profile_generation"
 
 docker run --rm \
   --network "$internal_network" \
@@ -655,7 +674,13 @@ docker run --rm \
   --prime-url "$fixture_prime_url" \
   --rebind-url "$rebind_url" \
   --expected-browser-version "$expected_browser_version" \
-  --expected-font-sha256 "$expected_font_sha256")
+  --expected-font-sha256 "$expected_font_sha256" \
+  --expected-browser-engine "$expected_browser_engine" \
+  --expected-browser-distribution "$expected_browser_distribution" \
+  --backend-mode "$backend_mode" \
+  --expected-extension-id "$expected_extension_id" \
+  --expected-extension-version "$expected_extension_version" \
+  --expected-profile-generation "$expected_profile_generation")
 printf '%s\n' "$full_result"
 if ! printf '%s\n' "$full_result" |
   grep -q '"action":"read_only_semantic_observation"'; then
