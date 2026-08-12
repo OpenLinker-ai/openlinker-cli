@@ -1,4 +1,11 @@
 services:
+  openlinker-agent-codex:
+    environment:
+      # Codex exec currently requires its explicit non-interactive bypass for
+      # approved MCP calls. The Provider remains externally isolated by this
+      # stack, and the launcher disables all non-Browser built-in action tools.
+      OPENLINKER_CODEX_SANDBOX: danger-full-access
+
   openlinker-browser-runtime:
     build:
       context: ..

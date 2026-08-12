@@ -292,7 +292,7 @@ func TestBrowserClientModesExposeExactlyOneProviderSurface(t *testing.T) {
 		BrowserNativePlugin:        "/opt/openlinker/agent-runtime-plugin/codex",
 	}, run)
 	nativeCodex := strings.Join(
-		codexArguments(native, "/workspace", "read-only", "", true),
+		codexArguments(native, "/workspace", "danger-full-access", "", true),
 		" ",
 	)
 	nativePluginServer := `plugins."openlinker@openlinker-agent-runtime".mcp_servers.openlinker_browser`
@@ -308,8 +308,21 @@ func TestBrowserClientModesExposeExactlyOneProviderSurface(t *testing.T) {
 	}
 	if strings.Contains(nativeCodex, "mcp_servers.openlinker_browser.command") ||
 		strings.Contains(nativeCodex, "browser-proxy") ||
+		!strings.Contains(nativeCodex, "--dangerously-bypass-approvals-and-sandbox") ||
+		!strings.Contains(nativeCodex, "--disable shell_tool") ||
+		!strings.Contains(nativeCodex, "--disable multi_agent") ||
+		!strings.Contains(nativeCodex, "tools.view_image=false") ||
+		strings.Contains(nativeCodex, "--sandbox danger-full-access") ||
 		strings.Contains(nativeCodex, "--ignore-user-config") {
 		t.Fatalf("native Codex Plugin surface is incomplete or duplicated: %s", nativeCodex)
+	}
+	nativeReadOnly := strings.Join(
+		codexArguments(native, "/workspace", "read-only", "", true),
+		" ",
+	)
+	if strings.Contains(nativeReadOnly, "--dangerously-bypass-approvals-and-sandbox") ||
+		!strings.Contains(nativeReadOnly, "--sandbox read-only") {
+		t.Fatalf("native Codex bypass escaped the external-sandbox gate: %s", nativeReadOnly)
 	}
 	nativeClaude := strings.Join(claudeArguments(native, "dontAsk", ""), " ")
 	if !strings.Contains(

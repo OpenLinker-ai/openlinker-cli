@@ -183,16 +183,26 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		// This mode is intended for an external isolation boundary such as the
 		// official hardened Provider container. Keep model-spawned commands from
 		// inheriting provider credentials even though the Codex process itself
-		// needs them to call the configured model endpoint.
+		// needs them to call the configured model endpoint. Native Browser runs
+		// also disable every built-in action surface so their explicit
+		// non-interactive MCP bypass exposes only the bounded Browser Plugin.
 		args = append(args,
 			"--disable", "code_mode",
 			"--disable", "code_mode_host",
 			"-c", `shell_environment_policy.inherit="none"`,
 			"-c", "shell_environment_policy.set="+codexCommandEnvironment(config.Env),
 		)
+		if nativeBrowserClientEnabled(config) {
+			args = append(args,
+				"--disable", "shell_tool",
+				"--disable", "multi_agent",
+				"-c", "tools.view_image=false",
+			)
+		}
 	}
 	if sessionID != "" {
-		args = append(args, "-C", workspace, "--sandbox", sandbox, "exec", "resume", "--skip-git-repo-check")
+		args = append(args, "-C", workspace, "exec", "resume", "--skip-git-repo-check")
+		args = append(args, codexExecutionAccessArguments(config, sandbox)...)
 		args = append(args, codexConfigIsolationArguments(config)...)
 		args = append(args, "--json")
 		if config.Model != "" {
@@ -201,8 +211,9 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		return append(args, sessionID, "-")
 	}
 	args = append(args, "exec", "--skip-git-repo-check")
+	args = append(args, codexExecutionAccessArguments(config, sandbox)...)
 	args = append(args, codexConfigIsolationArguments(config)...)
-	args = append(args, "-C", workspace, "--sandbox", sandbox, "--color", "never")
+	args = append(args, "-C", workspace, "--color", "never")
 	if persistent {
 		args = append(args, "--json")
 	} else {
@@ -212,6 +223,17 @@ func codexArguments(config ProviderConfig, workspace, sandbox, sessionID string,
 		args = append(args, "--model", config.Model)
 	}
 	return append(args, "-")
+}
+
+func codexExecutionAccessArguments(config ProviderConfig, sandbox string) []string {
+	if nativeBrowserClientEnabled(config) && sandbox == "danger-full-access" {
+		// Codex exec currently cancels even pre-approved MCP calls unless its
+		// explicit non-interactive bypass is active. This path is valid only for
+		// the externally isolated native Browser Provider image, whose other
+		// built-in action surfaces are disabled above.
+		return []string{"--dangerously-bypass-approvals-and-sandbox"}
+	}
+	return []string{"--sandbox", sandbox}
 }
 
 func codexConfigIsolationArguments(config ProviderConfig) []string {
