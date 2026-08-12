@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 ARG GO_VERSION=1.26.4
+ARG OPENLINKER_GO_VERSION=v0.2.0-rc6
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm@sha256:b305420a68d0f229d91eb3b3ed9e519fcf2cf5461da4bef997bf927e8c0bfd2b AS go-source
+ARG OPENLINKER_GO_VERSION
 WORKDIR /src
 ENV CGO_ENABLED=0 GOFLAGS=-mod=readonly GOWORK=off
 COPY go.mod go.sum ./
@@ -11,7 +13,8 @@ RUN set -eu; \
       if [ "${attempt}" -ge 3 ]; then exit 1; fi; \
       sleep "$((attempt * 2))"; \
       attempt="$((attempt + 1))"; \
-    done
+    done; \
+    test "$(go list -m -f '{{.Version}}' github.com/OpenLinker-ai/openlinker-go)" = "${OPENLINKER_GO_VERSION}"
 COPY . .
 
 FROM go-source AS go-build
@@ -36,6 +39,7 @@ RUN test "${TARGETOS}" = linux \
  && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/openlinker-egress-gateway ./cmd/openlinker-egress-gateway
 
 FROM node:24.4.1-bookworm-slim@sha256:36ae19f59c91f3303c7a648f07493fe14c4bd91320ac8d898416327bacf1bbfa AS provider-base
+ARG OPENLINKER_GO_VERSION
 ARG OPENLINKER_UID=10001
 ARG OPENLINKER_GID=10001
 ARG PROVIDER_UID=10002
@@ -61,6 +65,7 @@ ENV OPENLINKER_AGENT_TRANSPORT=auto \
 WORKDIR /workspace
 USER 0:0
 STOPSIGNAL SIGTERM
+LABEL org.opencontainers.image.openlinker-go.version="${OPENLINKER_GO_VERSION}"
 
 FROM provider-base AS agent-runtime-plugin
 RUN apt-get update \
