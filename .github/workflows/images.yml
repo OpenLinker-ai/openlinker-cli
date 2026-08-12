@@ -140,7 +140,7 @@ jobs:
             type=ref,event=tag
             type=sha,prefix=sha-
       - name: Build and optionally publish
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
