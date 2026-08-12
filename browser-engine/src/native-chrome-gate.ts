@@ -205,10 +205,17 @@ export class NativeChromeGate {
     callerBindsAuthority = false,
   ): Promise<string> {
     const hostProcessGenerationNonce = await this.preflight();
-    if (
-      this.hostProcessGenerationNonce === undefined ||
-      hostProcessGenerationNonce === this.hostProcessGenerationNonce
-    ) {
+    if (this.hostProcessGenerationNonce === undefined) {
+      if (!callerBindsAuthority) {
+        const result = await this.request("authorize_action", {
+          ...authority,
+          action_kind: "preflight",
+        });
+        this.requireAuthorization(result);
+      }
+      return hostProcessGenerationNonce;
+    }
+    if (hostProcessGenerationNonce === this.hostProcessGenerationNonce) {
       return hostProcessGenerationNonce;
     }
     if (this.authority === undefined || !sameAuthority(authority, this.authority)) {

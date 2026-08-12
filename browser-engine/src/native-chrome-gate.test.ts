@@ -67,7 +67,7 @@ test("native Chrome gate rejects incomplete or untrusted image configuration", (
   );
 });
 
-test("native Chrome gate rebinds only the same authority after Host restart", async () => {
+test("native Chrome gate binds a new Host and rebinds only the same authority", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "openlinker-native-gate-"));
   const socketPath = path.join(root, "native.sock");
   let hostProcessGenerationNonce = "11111111-1111-4111-8111-111111111111";
@@ -146,10 +146,15 @@ test("native Chrome gate rebinds only the same authority after Host restart", as
       action_id: "action-1",
       deadline: new Date(Date.now() + 10_000).toISOString(),
       identity,
-      action: { kind: "preflight" as const },
+      action: { kind: "navigate" as const },
     };
 
     await gate.authorize(request);
+    assert.deepEqual(calls, [
+      { method: "preflight" },
+      { method: "authorize_action", actionKind: "preflight" },
+      { method: "authorize_action", actionKind: "navigate" },
+    ]);
     hostProcessGenerationNonce = "22222222-2222-4222-8222-222222222222";
     await gate.authorize({
       ...request,
