@@ -165,9 +165,7 @@ func writeOfficialChromeAssetFixture(
 		ExtensionSettings: map[string]officialExtensionPolicyEntry{
 			"*": {InstallationMode: "blocked"},
 			openLinkerTestExtensionID: {
-				InstallationMode:  "force_installed",
-				OverrideUpdateURL: true,
-				UpdateURL:         officialChromeFileURL(updatePath),
+				InstallationMode: "allowed",
 			},
 		},
 	})

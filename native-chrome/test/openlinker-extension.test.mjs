@@ -185,6 +185,38 @@ test("MV3 connection reconnects with a new port and stops after a bounded budget
   assert.equal(attempts, 4);
 });
 
+test("MV3 connection invokes browser timer APIs with their global receiver", () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const timer = { kind: "browser-timer" };
+  let scheduled;
+  let cancelled;
+  try {
+    globalThis.setTimeout = function (callback, delay) {
+      assert.equal(this, globalThis);
+      scheduled = { callback, delay };
+      return timer;
+    };
+    globalThis.clearTimeout = function (value) {
+      assert.equal(this, globalThis);
+      cancelled = value;
+    };
+    const controller = new NativeConnectionController({
+      connectNative() {
+        throw new Error("host unavailable");
+      },
+      handleRequest: () => ({}),
+    });
+    controller.start();
+    assert.equal(scheduled.delay, 100);
+    controller.close();
+    assert.equal(cancelled, timer);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test("extension sources contain no remote code or generic browser control surface", async () => {
   const source = await Promise.all(
     [

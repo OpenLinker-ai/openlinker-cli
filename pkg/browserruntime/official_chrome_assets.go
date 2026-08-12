@@ -347,7 +347,6 @@ func validExtensionInstallation(
 		install.ExternalVersion != lock.ExtensionVersion {
 		return false
 	}
-	updateURL := officialChromeFileURL(lock.ExtensionUpdateManifest)
 	crxURL := officialChromeFileURL(lock.ExtensionCRXPath)
 	expectedUpdateManifest := `<?xml version="1.0" encoding="UTF-8"?>` +
 		`<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">` +
@@ -366,9 +365,7 @@ func validExtensionInstallation(
 			InstallationMode: "blocked",
 		}) ||
 		policy.ExtensionSettings[lock.ExtensionID] != (officialExtensionPolicyEntry{
-			InstallationMode:  "force_installed",
-			OverrideUpdateURL: true,
-			UpdateURL:         updateURL,
+			InstallationMode: "allowed",
 		}) {
 		return false
 	}

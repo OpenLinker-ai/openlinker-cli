@@ -164,9 +164,6 @@ async function buildAssetsLock(options) {
   );
   await chmod(options.extensionInstallManifestPath, 0o444);
   const extensionCRXURL = pathToFileURL(extensionCRXPath).href;
-  const extensionUpdateURL = pathToFileURL(
-    options.extensionUpdateManifestPath,
-  ).href;
   const extensionUpdateManifest =
     '<?xml version="1.0" encoding="UTF-8"?>' +
     '<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">' +
@@ -183,9 +180,7 @@ async function buildAssetsLock(options) {
     ExtensionSettings: {
       "*": { installation_mode: "blocked" },
       [extensionLock.extension_id]: {
-        installation_mode: "force_installed",
-        override_update_url: true,
-        update_url: extensionUpdateURL,
+        installation_mode: "allowed",
       },
     },
   };

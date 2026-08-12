@@ -20,8 +20,8 @@ class NativeConnectionController {
   constructor({
     connectNative,
     handleRequest,
-    scheduleTimer = setTimeout,
-    cancelTimer = clearTimeout,
+    scheduleTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
+    cancelTimer = (timer) => globalThis.clearTimeout(timer),
     maxReconnectAttempts = 8,
     reconnectBaseDelayMs = 100,
     maxReconnectDelayMs = 5_000,

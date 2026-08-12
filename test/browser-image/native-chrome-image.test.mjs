@@ -214,6 +214,11 @@ test("final runtime lock covers every installed native component", async () => {
   );
   assert.equal(lock.assets.some((asset) => asset.path === paths.extensionPolicy), true);
   assert.equal(lock.assets.some((asset) => asset.path === paths.nativeManifest), true);
+  const policy = JSON.parse(await readFile(paths.extensionPolicy, "utf8"));
+  assert.deepEqual(policy.ExtensionSettings, {
+    "*": { installation_mode: "blocked" },
+    [extensionID]: { installation_mode: "allowed" },
+  });
   await chmod(paths.manifest, 0o644);
   await writeFile(
     paths.manifest,
