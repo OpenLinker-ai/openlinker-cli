@@ -178,6 +178,46 @@ func TestProfileEnginePreflightPersistsAndReopensNewProfileBeforeReady(
 	}
 }
 
+func TestProfileSelectionEvidenceComesFromCheckpointRestore(t *testing.T) {
+	t.Parallel()
+	state := t.TempDir()
+	identity := profileEngineIdentity("principal-recovery-evidence")
+	action := browserprotocol.Action{Kind: browserprotocol.ActionPreflight}
+
+	first := newFixtureProfileEngine(t, state, t.TempDir())
+	first.processFactory = fixtureProfileFactory(new(bool))
+	if _, failure := first.Execute(context.Background(), identity, action); failure != nil {
+		t.Fatal(failure)
+	}
+	generation, recovered, ok := first.ProfileSelectionEvidence()
+	if !ok || generation != first.options.Environment.ProfileGeneration || recovered {
+		t.Fatalf("new Profile evidence = generation %d recovered %v ok %v", generation, recovered, ok)
+	}
+	if _, failure := first.Execute(context.Background(), identity, browserprotocol.Action{
+		Kind: browserprotocol.ActionNavigate,
+		URL:  "https://example.com",
+	}); failure != nil {
+		t.Fatal(failure)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newFixtureProfileEngine(t, state, t.TempDir())
+	defer restarted.Close()
+	loaded := false
+	restarted.processFactory = fixtureProfileFactory(&loaded)
+	identity.SessionEpoch++
+	identity.AttachmentID = "55555555-5555-4555-8555-555555555555"
+	if _, failure := restarted.Execute(context.Background(), identity, action); failure != nil {
+		t.Fatal(failure)
+	}
+	generation, recovered, ok = restarted.ProfileSelectionEvidence()
+	if !ok || generation != restarted.options.Environment.ProfileGeneration || !recovered || !loaded {
+		t.Fatalf("restored Profile evidence = generation %d recovered %v ok %v loaded %v", generation, recovered, ok, loaded)
+	}
+}
+
 func TestProfileEngineStartupAbortDiscardsOnlyUncommittedActiveState(
 	t *testing.T,
 ) {

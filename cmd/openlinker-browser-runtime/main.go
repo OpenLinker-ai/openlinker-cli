@@ -114,6 +114,7 @@ func run() error {
 				ExtensionID:         assets.Lock.ExtensionID,
 				ExtensionVersion:    assets.Lock.ExtensionVersion,
 				NativeHostProtocol:  assets.Lock.NativeHostProtocol,
+				ProfileGeneration:   assets.Lock.ProfileGeneration,
 			}
 		}
 	}

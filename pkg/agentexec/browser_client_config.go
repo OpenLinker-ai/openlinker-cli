@@ -34,6 +34,23 @@ var browserBackendFallbackReasons = map[string]struct{}{
 	"official_egress_preflight_failed":        {},
 }
 
+const (
+	browserModeOpenLinkerNativeChrome = "openlinker-native-chrome"
+	browserModeOfficialChromeAlias    = "official-chrome"
+)
+
+func canonicalBrowserClientMode(value string) string {
+	value = strings.TrimSpace(value)
+	if value == browserModeOfficialChromeAlias {
+		return browserModeOpenLinkerNativeChrome
+	}
+	return value
+}
+
+func canonicalBrowserBackendMode(value string) string {
+	return canonicalBrowserClientMode(value)
+}
+
 func providerConfigForBrowserRun(
 	config ProviderConfig,
 	run *BrowserRunContext,
@@ -46,6 +63,8 @@ func providerConfigForBrowserRun(
 	config.BrowserBackendSelected = run.BackendSelected
 	config.BrowserBackendFallbackReason = run.BackendFallbackReason
 	config.BrowserSelectionGeneration = run.SelectionGeneration
+	config.BrowserProfileGeneration = run.ProfileGeneration
+	config.BrowserSessionRecovered = run.SessionRecovered
 	config.BrowserAssetManifestSHA256 = run.AssetManifestSHA256
 	config.BrowserExtensionID = run.ExtensionID
 	config.BrowserExtensionVersion = run.ExtensionVersion
@@ -67,8 +86,8 @@ func browserClientMode(config ProviderConfig) string {
 	if !browserProfileEnabled(config) {
 		return ""
 	}
-	switch strings.TrimSpace(config.BrowserClientMode) {
-	case "native", "isolated-native", "official-chrome":
+	switch canonicalBrowserClientMode(config.BrowserClientMode) {
+	case "native", "isolated-native", browserModeOpenLinkerNativeChrome:
 		return "native"
 	default:
 		return "mcp"
@@ -87,12 +106,12 @@ func validateBrowserClientConfig(config ProviderConfig) error {
 	if !browserProfileEnabled(config) {
 		return nil
 	}
-	requested := strings.TrimSpace(config.BrowserClientModeRequested)
+	requested := canonicalBrowserClientMode(config.BrowserClientModeRequested)
 	if requested == "" {
 		requested = "mcp"
 	}
 	switch requested {
-	case "auto", "official-chrome", "isolated-native", "isolated-mcp", "native", "mcp":
+	case "auto", browserModeOpenLinkerNativeChrome, "isolated-native", "isolated-mcp", "native", "mcp":
 	default:
 		return errors.New("Browser client mode request is invalid")
 	}
@@ -105,7 +124,7 @@ func validateBrowserClientConfig(config ProviderConfig) error {
 	}
 	strictSurface := ""
 	switch requested {
-	case "official-chrome", "isolated-native", "native":
+	case browserModeOpenLinkerNativeChrome, "isolated-native", "native":
 		strictSurface = "native"
 	case "isolated-mcp", "mcp":
 		strictSurface = "mcp"
@@ -125,17 +144,17 @@ func validateBrowserClientConfig(config ProviderConfig) error {
 	if selected == "native" && strings.TrimSpace(config.BrowserNativePlugin) == "" {
 		return errors.New("native Browser client mode requires a Runtime-owned Plugin path")
 	}
-	backendMode := strings.TrimSpace(config.BrowserBackendModeRequested)
+	backendMode := canonicalBrowserBackendMode(config.BrowserBackendModeRequested)
 	if backendMode == "" {
 		backendMode = requestedBackendMode(requested)
 	}
-	if backendMode != "auto" && backendMode != "official-chrome" && backendMode != "isolated" {
+	if backendMode != "auto" && backendMode != browserModeOpenLinkerNativeChrome && backendMode != "isolated" {
 		return errors.New("Browser backend mode request is invalid")
 	}
 	if selected == "mcp" && backendMode != "isolated" {
 		return errors.New("direct MCP Browser surface requires the isolated backend")
 	}
-	if requested == "official-chrome" && backendMode != "official-chrome" {
+	if requested == browserModeOpenLinkerNativeChrome && backendMode != browserModeOpenLinkerNativeChrome {
 		return errors.New("strict official Chrome mode cannot select another backend")
 	}
 	if (requested == "native" || requested == "isolated-native" ||
@@ -150,7 +169,10 @@ func validateBrowserClientConfig(config ProviderConfig) error {
 		(selected != "native" || backendMode == "isolated") {
 		return errors.New("official Chrome backend requires the native Plugin surface")
 	}
-	if backend == "isolated_chromium" && backendMode == "official-chrome" {
+	if backend == "official_chrome_extension" && config.BrowserProfileGeneration == 0 {
+		return errors.New("official Chrome backend requires positive Profile generation evidence")
+	}
+	if backend == "isolated_chromium" && backendMode == browserModeOpenLinkerNativeChrome {
 		return errors.New("strict official Chrome mode cannot select the isolated backend")
 	}
 	backendFallback := strings.TrimSpace(config.BrowserBackendFallbackReason)
@@ -169,15 +191,15 @@ func requestedBackendMode(requested string) string {
 	switch strings.TrimSpace(requested) {
 	case "auto":
 		return "auto"
-	case "official-chrome":
-		return "official-chrome"
+	case browserModeOpenLinkerNativeChrome:
+		return browserModeOpenLinkerNativeChrome
 	default:
 		return "isolated"
 	}
 }
 
 func browserClientEvidence(config ProviderConfig) map[string]any {
-	requested := strings.TrimSpace(config.BrowserClientModeRequested)
+	requested := canonicalBrowserClientMode(config.BrowserClientModeRequested)
 	if requested == "" {
 		requested = "mcp"
 	}
@@ -205,6 +227,8 @@ func browserClientEvidence(config ProviderConfig) map[string]any {
 		evidence["browser_extension_id"] = config.BrowserExtensionID
 		evidence["browser_extension_version"] = config.BrowserExtensionVersion
 		evidence["browser_native_host_protocol"] = config.BrowserNativeHostProtocol
+		evidence["browser_profile_generation"] = config.BrowserProfileGeneration
+		evidence["browser_session_recovered"] = config.BrowserSessionRecovered
 	}
 	if fallback := strings.TrimSpace(config.BrowserClientFallbackReason); fallback != "" {
 		evidence["browser_client_mode_fallback_reason"] = fallback
@@ -216,6 +240,19 @@ func browserClientEvidence(config ProviderConfig) map[string]any {
 }
 
 func codexBrowserMCPArguments(config ProviderConfig) []string {
+	if nativeBrowserClientEnabled(config) {
+		// The Runtime-owned Codex Plugin declares the MCP transport. Per-run
+		// overrides only make that bundled server mandatory and bound its tool
+		// policy; declaring a top-level command here would create a second,
+		// direct-MCP Browser surface.
+		const server = `plugins."openlinker@openlinker-agent-runtime".mcp_servers.openlinker_browser`
+		return []string{
+			"-c", server + ".enabled=true",
+			"-c", server + ".required=true",
+			"-c", server + `.enabled_tools=["browser_session"]`,
+			"-c", server + `.default_tools_approval_mode="auto"`,
+		}
+	}
 	if !directMCPBrowserClientEnabled(config) {
 		return nil
 	}

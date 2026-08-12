@@ -182,7 +182,8 @@ export class BrowserEngine {
     const nativeChromeGate = NativeChromeGate.fromEnvironment(environment);
     const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
       acceptDownloads: false,
-      args: [...CHROMIUM_FLAGS],
+      args:
+        nativeChromeGate?.launchArguments(CHROMIUM_FLAGS) ?? [...CHROMIUM_FLAGS],
       headless: nativeChromeGate === undefined,
       // Playwright disables BFCache by default to make request interception
       // deterministic. The Runtime's challenge-release contract needs real

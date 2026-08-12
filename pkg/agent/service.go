@@ -520,7 +520,7 @@ func resolveRuntime(getenv func(string) string, providerOverride string) (resolv
 
 func browserModeRequiresNativePreflight(mode string) bool {
 	switch strings.TrimSpace(mode) {
-	case "auto", "native", "isolated-native", "official-chrome":
+	case "auto", "native", "isolated-native", "openlinker-native-chrome", "official-chrome":
 		return true
 	default:
 		return false
@@ -538,8 +538,8 @@ func browserBackendMode(mode string) string {
 	switch strings.TrimSpace(mode) {
 	case "auto":
 		return "auto"
-	case "official-chrome":
-		return "official-chrome"
+	case "openlinker-native-chrome", "official-chrome":
+		return "openlinker-native-chrome"
 	default:
 		return "isolated"
 	}

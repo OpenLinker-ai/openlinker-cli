@@ -36,6 +36,8 @@ type ProviderConfig struct {
 	BrowserBackendSelected       string
 	BrowserBackendFallbackReason string
 	BrowserSelectionGeneration   uint64
+	BrowserProfileGeneration     uint64
+	BrowserSessionRecovered      bool
 	BrowserAssetManifestSHA256   string
 	BrowserExtensionID           string
 	BrowserExtensionVersion      string
@@ -91,6 +93,8 @@ type BrowserRunContext struct {
 	BackendSelected       string
 	BackendFallbackReason string
 	SelectionGeneration   uint64
+	ProfileGeneration     uint64
+	SessionRecovered      bool
 	AssetManifestSHA256   string
 	ExtensionID           string
 	ExtensionVersion      string

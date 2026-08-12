@@ -133,7 +133,13 @@ async function writeResponse(
   }
 }
 
-void main().catch(() => {
-  process.stderr.write("browser engine startup or stream loop failed\n");
+void main().catch((error: unknown) => {
+  const detail =
+    error instanceof Error && error.message.trim() !== ""
+      ? error.message.trim()
+      : "unknown startup failure";
+  process.stderr.write(
+    `browser engine startup or stream loop failed: ${detail}\n`,
+  );
   process.exit(1);
 });

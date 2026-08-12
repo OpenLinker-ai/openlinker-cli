@@ -62,7 +62,7 @@ func toolDefinitions() []toolDefinition {
 			"allowed_tools":              stringArray("Claude allowed tools"),
 			"execution_profile":          map[string]any{"type": "string", "enum": []string{"standard", "browser"}},
 			"browser_interaction_policy": map[string]any{"type": "string", "enum": []string{"restricted", "full"}},
-			"browser_client_mode":        map[string]any{"type": "string", "enum": []string{"auto", "official-chrome", "isolated-native", "isolated-mcp", "native", "mcp"}},
+			"browser_client_mode":        map[string]any{"type": "string", "enum": []string{"auto", "openlinker-native-chrome", "official-chrome", "isolated-native", "isolated-mcp", "native", "mcp"}},
 			"browser_native_plugin":      stringProperty("Absolute Runtime-owned native Browser Plugin path"),
 			"browser_plugin_bin":         stringProperty("OpenLinker CLI binary used for the isolated Browser tool server"),
 			"browser_socket":             stringProperty("Private Browser Runtime Unix socket path"),

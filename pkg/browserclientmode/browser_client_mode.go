@@ -14,8 +14,12 @@ import (
 )
 
 const (
-	ModeAuto           = "auto"
-	ModeOfficialChrome = "official-chrome"
+	ModeAuto                   = "auto"
+	ModeOpenLinkerNativeChrome = "openlinker-native-chrome"
+	ModeOfficialChromeAlias    = "official-chrome"
+	// ModeOfficialChrome is retained for source compatibility. New callers
+	// should use ModeOpenLinkerNativeChrome.
+	ModeOfficialChrome = ModeOfficialChromeAlias
 	ModeIsolatedNative = "isolated-native"
 	ModeIsolatedMCP    = "isolated-mcp"
 	ModeNativeAlias    = "native"
@@ -25,7 +29,7 @@ const (
 	SurfaceDirectMCP    = "mcp"
 
 	BackendAuto           = "auto"
-	BackendOfficialChrome = "official-chrome"
+	BackendOfficialChrome = "openlinker-native-chrome"
 	BackendIsolated       = "isolated"
 )
 
@@ -51,8 +55,8 @@ type Selection struct {
 
 func Select(options Options) (Selection, error) {
 	selection := Selection{
-		Requested:        strings.TrimSpace(options.Requested),
-		Selected:         strings.TrimSpace(options.Requested),
+		Requested:        canonicalRequestedMode(options.Requested),
+		Selected:         canonicalRequestedMode(options.Requested),
 		BackendRequested: BackendIsolated,
 		PluginPath:       filepath.Clean(strings.TrimSpace(options.PluginPath)),
 	}
@@ -67,7 +71,7 @@ func Select(options Options) (Selection, error) {
 		return selection, nil
 	case ModeNativeAlias, ModeIsolatedNative:
 		selection.Selected = SurfacePluginNative
-	case ModeOfficialChrome:
+	case ModeOpenLinkerNativeChrome:
 		selection.Selected = SurfacePluginNative
 		selection.BackendRequested = BackendOfficialChrome
 		if !officialChromePlatform(options.Provider, options.Platform) {
@@ -82,7 +86,7 @@ func Select(options Options) (Selection, error) {
 		}
 	default:
 		return Selection{}, errors.New(
-			"OPENLINKER_BROWSER_CLIENT_MODE must be auto, official-chrome, isolated-native, isolated-mcp, native, or mcp",
+			"OPENLINKER_BROWSER_CLIENT_MODE must be auto, openlinker-native-chrome, isolated-native, isolated-mcp, native, or mcp (official-chrome is a compatibility alias)",
 		)
 	}
 	if options.NativePreflight == nil && options.RunHostCommand == nil {
@@ -116,6 +120,14 @@ func Select(options Options) (Selection, error) {
 	selection.PluginPath = ""
 	selection.FallbackReason = reason
 	return selection, nil
+}
+
+func canonicalRequestedMode(value string) string {
+	value = strings.TrimSpace(value)
+	if value == ModeOfficialChromeAlias {
+		return ModeOpenLinkerNativeChrome
+	}
+	return value
 }
 
 func officialChromePlatform(provider, platform string) bool {

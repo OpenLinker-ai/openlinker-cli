@@ -81,7 +81,8 @@ func (action Action) ValidateForPolicy(policy string) *Failure {
 	case ActionBack, ActionForward, ActionScreenshot, ActionCheckpoint, ActionClose,
 		ActionPreflight:
 		if action.Kind == ActionPreflight && action.BackendMode != "" {
-			if action.BackendMode != "auto" && action.BackendMode != "official-chrome" &&
+			if action.BackendMode != "auto" && action.BackendMode != "openlinker-native-chrome" &&
+				action.BackendMode != "official-chrome" &&
 				action.BackendMode != "isolated" {
 				return NewFailure(ErrorProtocolInvalid, "browser backend mode is invalid", false)
 			}

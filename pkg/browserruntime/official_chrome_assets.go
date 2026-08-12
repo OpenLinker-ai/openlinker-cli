@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,7 +21,9 @@ import (
 
 const (
 	officialChromeAssetContractID = "openlinker.native-chrome.assets.v1"
-	officialCodexExtensionID      = "hehggadaopoacecdllhhajmbjkdcmajg"
+	legacyOpenAIExtensionID       = "hehggadaopoacecdllhhajmbjkdcmajg"
+	openLinkerNativeHostName      = "ai.openlinker.browser"
+	openLinkerActivationPath      = "/openlinker-runtime/index.html"
 	maxOfficialChromeLockBytes    = 256 << 10
 	maxOfficialChromeAssetBytes   = int64(1 << 30)
 	maxOfficialChromeAssetsBytes  = int64(2 << 30)
@@ -58,6 +61,7 @@ type OfficialChromeAssetLock struct {
 	Platform                 string                `json:"platform"`
 	Architecture             string                `json:"architecture"`
 	ChromePath               string                `json:"chrome_path"`
+	ChromeDistribution       string                `json:"chrome_distribution"`
 	ChromeVersion            string                `json:"chrome_version"`
 	ExtensionRoot            string                `json:"extension_root"`
 	ExtensionID              string                `json:"extension_id"`
@@ -65,6 +69,7 @@ type OfficialChromeAssetLock struct {
 	ExtensionActivationPath  string                `json:"extension_activation_path"`
 	ExtensionCRXPath         string                `json:"extension_crx_path"`
 	ExtensionInstallManifest string                `json:"extension_install_manifest_path"`
+	ExtensionUpdateManifest  string                `json:"extension_update_manifest_path"`
 	ExtensionPolicyPath      string                `json:"extension_policy_path"`
 	NativeHostPath           string                `json:"native_host_path"`
 	NativeHostProtocol       string                `json:"native_host_protocol"`
@@ -87,6 +92,7 @@ type OfficialChromeAssetOptions struct {
 	RequireRootOwned     bool
 	ExtensionInstallRoot string
 	ExtensionPolicyPath  string
+	NativeMessagingPath  string
 }
 
 func LoadOfficialChromeAssets(
@@ -167,6 +173,7 @@ func LoadOfficialChromeAssets(
 		chromeSandboxPath,
 		lock.ExtensionCRXPath,
 		lock.ExtensionInstallManifest,
+		lock.ExtensionUpdateManifest,
 		lock.ExtensionPolicyPath,
 		lock.NativeHostPath,
 		lock.NativeMessagingManifest,
@@ -201,14 +208,21 @@ func LoadOfficialChromeAssets(
 	}
 	installRoot := strings.TrimSpace(options.ExtensionInstallRoot)
 	if installRoot == "" {
-		installRoot = "/opt/google/chrome/extensions"
+		installRoot = officialChromeExtensionInstallRoot(lock.ChromeDistribution)
 	}
 	policyPath := strings.TrimSpace(options.ExtensionPolicyPath)
 	if policyPath == "" {
-		policyPath = "/etc/opt/chrome/policies/managed/openlinker-native-chrome.json"
+		policyPath = officialChromePolicyPath(lock.ChromeDistribution)
+	}
+	nativeMessagingPath := strings.TrimSpace(options.NativeMessagingPath)
+	if nativeMessagingPath == "" {
+		nativeMessagingPath = officialChromeNativeMessagingPath(lock.ChromeDistribution)
 	}
 	if !filepath.IsAbs(installRoot) || filepath.Clean(installRoot) != installRoot ||
-		!filepath.IsAbs(policyPath) || filepath.Clean(policyPath) != policyPath {
+		!filepath.IsAbs(policyPath) || filepath.Clean(policyPath) != policyPath ||
+		!filepath.IsAbs(nativeMessagingPath) ||
+		filepath.Clean(nativeMessagingPath) != nativeMessagingPath ||
+		lock.NativeMessagingManifest != nativeMessagingPath {
 		return OfficialChromeAssets{}, "official_assets_invalid"
 	}
 	if !validExtensionInstallation(lock, installRoot, policyPath) {
@@ -227,6 +241,7 @@ func validOfficialChromeLock(lock OfficialChromeAssetLock) bool {
 		lock.ExtensionRoot,
 		lock.ExtensionCRXPath,
 		lock.ExtensionInstallManifest,
+		lock.ExtensionUpdateManifest,
 		lock.ExtensionPolicyPath,
 		lock.NativeHostPath,
 		lock.NativeMessagingManifest,
@@ -237,11 +252,14 @@ func validOfficialChromeLock(lock OfficialChromeAssetLock) bool {
 		}
 	}
 	if lock.ProfileGeneration == 0 ||
+		(lock.ChromeDistribution != "google_chrome" &&
+			lock.ChromeDistribution != "chrome_for_testing") ||
 		!validLockedVersion(lock.ChromeVersion) ||
 		!validLockedVersion(lock.ExtensionVersion) ||
 		!validExtensionID(lock.ExtensionID) ||
-		lock.ExtensionID != officialCodexExtensionID ||
+		lock.ExtensionID == legacyOpenAIExtensionID ||
 		!validExtensionActivationPath(lock.ExtensionActivationPath) ||
+		lock.ExtensionActivationPath != openLinkerActivationPath ||
 		!validBoundedOpaque(lock.NativeHostProtocol, 64) ||
 		len(lock.Assets) < 7 || len(lock.Assets) > 4096 {
 		return false
@@ -258,13 +276,36 @@ func validOfficialChromeLock(lock OfficialChromeAssetLock) bool {
 	return true
 }
 
+func officialChromeExtensionInstallRoot(distribution string) string {
+	if distribution == "chrome_for_testing" {
+		return "/usr/share/chromium/extensions"
+	}
+	return "/opt/google/chrome/extensions"
+}
+
+func officialChromePolicyPath(distribution string) string {
+	if distribution == "chrome_for_testing" {
+		return "/etc/opt/chrome_for_testing/policies/managed/openlinker-native-chrome.json"
+	}
+	return "/etc/opt/chrome/policies/managed/openlinker-native-chrome.json"
+}
+
+func officialChromeNativeMessagingPath(distribution string) string {
+	if distribution == "chrome_for_testing" {
+		return "/etc/opt/chrome_for_testing/native-messaging-hosts/ai.openlinker.browser.json"
+	}
+	return "/etc/opt/chrome/native-messaging-hosts/ai.openlinker.browser.json"
+}
+
 type officialExtensionInstallManifest struct {
 	ExternalCRX     string `json:"external_crx"`
 	ExternalVersion string `json:"external_version"`
 }
 
 type officialExtensionPolicyEntry struct {
-	InstallationMode string `json:"installation_mode"`
+	InstallationMode  string `json:"installation_mode"`
+	OverrideUpdateURL bool   `json:"override_update_url,omitempty"`
+	UpdateURL         string `json:"update_url,omitempty"`
 }
 
 type officialExtensionPolicy struct {
@@ -278,6 +319,10 @@ func validExtensionInstallation(
 ) bool {
 	if lock.ExtensionCRXPath != filepath.Join(lock.ExtensionRoot, "extension.crx") ||
 		lock.ExtensionInstallManifest != filepath.Join(installRoot, lock.ExtensionID+".json") ||
+		lock.ExtensionUpdateManifest != filepath.Join(
+			filepath.Dir(lock.ExtensionRoot),
+			"extension-update.xml",
+		) ||
 		lock.ExtensionPolicyPath != policyPath {
 		return false
 	}
@@ -302,14 +347,33 @@ func validExtensionInstallation(
 		install.ExternalVersion != lock.ExtensionVersion {
 		return false
 	}
+	crxURL := officialChromeFileURL(lock.ExtensionCRXPath)
+	expectedUpdateManifest := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">` +
+		`<app appid="` + lock.ExtensionID + `">` +
+		`<updatecheck codebase="` + crxURL + `" version="` + lock.ExtensionVersion + `"/>` +
+		`</app></gupdate>`
+	updateManifest, err := os.ReadFile(lock.ExtensionUpdateManifest) // #nosec G304 -- path is covered by the verified asset lock.
+	if err != nil || len(updateManifest) > 16<<10 ||
+		!bytes.Equal(updateManifest, []byte(expectedUpdateManifest)) {
+		return false
+	}
 	var policy officialExtensionPolicy
 	if !readCanonicalOfficialChromeJSON(lock.ExtensionPolicyPath, &policy, 16<<10) ||
 		len(policy.ExtensionSettings) != 2 ||
-		policy.ExtensionSettings["*"].InstallationMode != "blocked" ||
-		policy.ExtensionSettings[lock.ExtensionID].InstallationMode != "allowed" {
+		policy.ExtensionSettings["*"] != (officialExtensionPolicyEntry{
+			InstallationMode: "blocked",
+		}) ||
+		policy.ExtensionSettings[lock.ExtensionID] != (officialExtensionPolicyEntry{
+			InstallationMode: "allowed",
+		}) {
 		return false
 	}
 	return true
+}
+
+func officialChromeFileURL(path string) string {
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 func readCanonicalOfficialChromeJSON(path string, target any, maximum int) bool {
@@ -353,7 +417,7 @@ func validNativeMessagingManifest(lock OfficialChromeAssetLock) bool {
 	}
 	canonical, err := json.Marshal(manifest)
 	return err == nil && bytes.Equal(raw, canonical) &&
-		manifest.Name == "com.openai.codexextension" &&
+		manifest.Name == openLinkerNativeHostName &&
 		manifest.Description != "" && len(manifest.Description) <= 256 &&
 		manifest.Path == lock.NativeHostPath && manifest.Type == "stdio" &&
 		len(manifest.AllowedOrigins) == 1 &&

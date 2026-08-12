@@ -292,12 +292,37 @@ func TestBrowserClientModesExposeExactlyOneProviderSurface(t *testing.T) {
 		BrowserNativePlugin:        "/opt/openlinker/agent-runtime-plugin/codex",
 	}, run)
 	nativeCodex := strings.Join(
+		codexArguments(native, "/workspace", "danger-full-access", "", true),
+		" ",
+	)
+	nativePluginServer := `plugins."openlinker@openlinker-agent-runtime".mcp_servers.openlinker_browser`
+	for _, expected := range []string{
+		nativePluginServer + ".enabled=true",
+		nativePluginServer + ".required=true",
+		nativePluginServer + `.enabled_tools=["browser_session"]`,
+		nativePluginServer + `.default_tools_approval_mode="auto"`,
+	} {
+		if !strings.Contains(nativeCodex, expected) {
+			t.Fatalf("native Codex Plugin config is missing %q: %s", expected, nativeCodex)
+		}
+	}
+	if strings.Contains(nativeCodex, "mcp_servers.openlinker_browser.command") ||
+		strings.Contains(nativeCodex, "browser-proxy") ||
+		!strings.Contains(nativeCodex, "--dangerously-bypass-approvals-and-sandbox") ||
+		!strings.Contains(nativeCodex, "--disable shell_tool") ||
+		!strings.Contains(nativeCodex, "--disable multi_agent") ||
+		!strings.Contains(nativeCodex, "tools.view_image=false") ||
+		strings.Contains(nativeCodex, "--sandbox danger-full-access") ||
+		strings.Contains(nativeCodex, "--ignore-user-config") {
+		t.Fatalf("native Codex Plugin surface is incomplete or duplicated: %s", nativeCodex)
+	}
+	nativeReadOnly := strings.Join(
 		codexArguments(native, "/workspace", "read-only", "", true),
 		" ",
 	)
-	if strings.Contains(nativeCodex, "mcp_servers.openlinker_browser") ||
-		strings.Contains(nativeCodex, "--ignore-user-config") {
-		t.Fatalf("native Codex also exposed direct MCP: %s", nativeCodex)
+	if strings.Contains(nativeReadOnly, "--dangerously-bypass-approvals-and-sandbox") ||
+		!strings.Contains(nativeReadOnly, "--sandbox read-only") {
+		t.Fatalf("native Codex bypass escaped the external-sandbox gate: %s", nativeReadOnly)
 	}
 	nativeClaude := strings.Join(claudeArguments(native, "dontAsk", ""), " ")
 	if !strings.Contains(
@@ -418,6 +443,8 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 		BrowserClientMode:          "native",
 		BrowserBackendSelected:     "official_chrome_extension",
 		BrowserSelectionGeneration: 3,
+		BrowserProfileGeneration:   7,
+		BrowserSessionRecovered:    false,
 		BrowserAssetManifestSHA256: strings.Repeat("a", 64),
 		BrowserExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
 		BrowserExtensionVersion:    "1.2.3.4",
@@ -430,6 +457,8 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 		"browser_extension_id":          "abcdefghijklmnopabcdefghijklmnop",
 		"browser_extension_version":     "1.2.3.4",
 		"browser_native_host_protocol":  "openlinker.native-chrome.v1",
+		"browser_profile_generation":    uint64(7),
+		"browser_session_recovered":     false,
 	} {
 		if evidence[key] != expected {
 			t.Fatalf("official evidence %s = %#v, want %#v", key, evidence[key], expected)
@@ -439,7 +468,7 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"/opt/", "/browser-", "profile", "cookie", "https://"} {
+	for _, forbidden := range []string{"/opt/", "/browser-", "profile_path", "cookie", "https://"} {
 		if strings.Contains(strings.ToLower(string(encoded)), forbidden) {
 			t.Fatalf("official evidence leaked %q: %s", forbidden, encoded)
 		}

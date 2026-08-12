@@ -104,6 +104,13 @@ test("Native Host fences preflight, replay and Browser authority generation", ()
     method: "preflight",
   };
   fence.admit(preflight, {});
+  fence.admit(
+    {
+      ...preflight,
+      request_id: "12121212-1212-4212-8212-121212121212",
+    },
+    {},
+  );
   const admitted = {
     ...action,
     request_id: "55555555-5555-4555-8555-555555555555",
