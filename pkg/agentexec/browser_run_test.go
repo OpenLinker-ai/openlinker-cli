@@ -295,9 +295,21 @@ func TestBrowserClientModesExposeExactlyOneProviderSurface(t *testing.T) {
 		codexArguments(native, "/workspace", "read-only", "", true),
 		" ",
 	)
-	if strings.Contains(nativeCodex, "mcp_servers.openlinker_browser") ||
+	nativePluginServer := `plugins."openlinker@openlinker-agent-runtime".mcp_servers.openlinker_browser`
+	for _, expected := range []string{
+		nativePluginServer + ".enabled=true",
+		nativePluginServer + ".required=true",
+		nativePluginServer + `.enabled_tools=["browser_session"]`,
+		nativePluginServer + `.default_tools_approval_mode="auto"`,
+	} {
+		if !strings.Contains(nativeCodex, expected) {
+			t.Fatalf("native Codex Plugin config is missing %q: %s", expected, nativeCodex)
+		}
+	}
+	if strings.Contains(nativeCodex, "mcp_servers.openlinker_browser.command") ||
+		strings.Contains(nativeCodex, "browser-proxy") ||
 		strings.Contains(nativeCodex, "--ignore-user-config") {
-		t.Fatalf("native Codex also exposed direct MCP: %s", nativeCodex)
+		t.Fatalf("native Codex Plugin surface is incomplete or duplicated: %s", nativeCodex)
 	}
 	nativeClaude := strings.Join(claudeArguments(native, "dontAsk", ""), " ")
 	if !strings.Contains(

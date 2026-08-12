@@ -240,6 +240,19 @@ func browserClientEvidence(config ProviderConfig) map[string]any {
 }
 
 func codexBrowserMCPArguments(config ProviderConfig) []string {
+	if nativeBrowserClientEnabled(config) {
+		// The Runtime-owned Codex Plugin declares the MCP transport. Per-run
+		// overrides only make that bundled server mandatory and bound its tool
+		// policy; declaring a top-level command here would create a second,
+		// direct-MCP Browser surface.
+		const server = `plugins."openlinker@openlinker-agent-runtime".mcp_servers.openlinker_browser`
+		return []string{
+			"-c", server + ".enabled=true",
+			"-c", server + ".required=true",
+			"-c", server + `.enabled_tools=["browser_session"]`,
+			"-c", server + `.default_tools_approval_mode="auto"`,
+		}
+	}
 	if !directMCPBrowserClientEnabled(config) {
 		return nil
 	}
