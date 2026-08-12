@@ -593,6 +593,25 @@ func run(
 	if err != nil {
 		return result{}, err
 	}
+	if expected.BackendMode != "" {
+		isolatedPreflight, failure := execute(isolated, browserprotocol.Action{
+			Kind:        browserprotocol.ActionPreflight,
+			Observation: browserprotocol.ObservationSemantic,
+		})
+		if failure != nil {
+			return result{}, fmt.Errorf(
+				"different-Session Native Host preflight failed: %w",
+				failure,
+			)
+		}
+		if err := validateBackendSelection(
+			isolatedPreflight.BackendSelection,
+			expected,
+			true,
+		); err != nil {
+			return result{}, err
+		}
+	}
 	isolatedObservation, failure := execute(isolated, browserprotocol.Action{
 		Kind:        browserprotocol.ActionScreenshot,
 		Observation: browserprotocol.ObservationSemantic,
