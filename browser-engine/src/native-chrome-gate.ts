@@ -205,7 +205,7 @@ export class NativeChromeGate {
     callerBindsAuthority = false,
   ): Promise<string> {
     const hostProcessGenerationNonce = await this.preflight();
-    if (this.hostProcessGenerationNonce === undefined) {
+    if (this.authority === undefined) {
       if (!callerBindsAuthority) {
         const result = await this.request("authorize_action", {
           ...authority,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -125,8 +125,18 @@ test("native Chrome gate binds a new Host and rebinds only the same authority", 
     const gate = NativeChromeGate.fromEnvironment({
       ...validEnvironment,
       OPENLINKER_NATIVE_CHROME_SOCKET: socketPath,
+      OPENLINKER_NATIVE_CHROME_EXTENSION_ROOT: root,
     });
     assert.ok(gate);
+    await writeFile(path.join(root, "manifest.json"), "{}\n");
+    await gate.activate({
+      newPage: async () => ({
+        close: async () => undefined,
+        goto: async () => undefined,
+        url: () =>
+          "chrome-extension://abcdefghijklmnopabcdefghijklmnop/openlinker-runtime/index.html",
+      }),
+    } as never);
     const identity = {
       run_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       agent_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -151,6 +161,7 @@ test("native Chrome gate binds a new Host and rebinds only the same authority", 
 
     await gate.authorize(request);
     assert.deepEqual(calls, [
+      { method: "preflight" },
       { method: "preflight" },
       { method: "authorize_action", actionKind: "preflight" },
       { method: "authorize_action", actionKind: "navigate" },
