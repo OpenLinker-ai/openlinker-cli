@@ -103,7 +103,15 @@ export class NativeChromeGate {
   }
 
   ignoredDefaultArguments(): string[] {
-    return ["--disable-extensions"];
+    return ["--disable-extensions", "--disable-default-apps"];
+  }
+
+  launchArguments(arguments_: readonly string[]): string[] {
+    // Chrome for Testing 151 does not register the image-baked external CRX
+    // on a new Profile while this switch is present, even though policy
+    // explicitly allows its ID. Playwright also supplies the switch as a
+    // default argument, so native mode must remove both sources.
+    return arguments_.filter((argument) => argument !== "--disable-default-apps");
   }
 
   isInternalPage(page: Page): boolean {

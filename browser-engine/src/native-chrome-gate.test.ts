@@ -27,7 +27,18 @@ const validEnvironment = {
 test("native Chrome gate is opt-in and enables the image-installed extension", () => {
   assert.equal(NativeChromeGate.fromEnvironment({}), undefined);
   const gate = NativeChromeGate.fromEnvironment(validEnvironment);
-  assert.deepEqual(gate?.ignoredDefaultArguments(), ["--disable-extensions"]);
+  assert.deepEqual(gate?.ignoredDefaultArguments(), [
+    "--disable-extensions",
+    "--disable-default-apps",
+  ]);
+  assert.deepEqual(
+    gate?.launchArguments([
+      "--disable-background-networking",
+      "--disable-default-apps",
+      "--disable-sync",
+    ]),
+    ["--disable-background-networking", "--disable-sync"],
+  );
   assert.equal(
     gate?.isInternalPage({
       url: () =>
