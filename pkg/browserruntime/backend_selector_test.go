@@ -151,6 +151,185 @@ func TestBackendSelectorKeepsSelectionAcrossCloseAndContinuation(t *testing.T) {
 	}
 }
 
+func TestBackendSelectorAcceptsEquivalentModeOnSameGenerationNewAttachment(
+	t *testing.T,
+) {
+	for _, continuationMode := range []string{
+		ModeOpenLinkerNativeChrome,
+		ModeOfficialChromeAlias,
+	} {
+		t.Run(continuationMode, func(t *testing.T) {
+			official := &selectorTestBackend{}
+			selector, err := NewBackendSelector(BackendSelectorOptions{
+				Official:         official,
+				OfficialEvidence: validOfficialSelectionEvidence(),
+				Isolated:         &selectorTestBackend{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := browserprotocol.Identity{
+				AgentID:          "agent",
+				PrincipalScopeID: "principal",
+				BrowserSessionID: "session",
+				SessionEpoch:     1,
+				AttachmentID:     "first",
+			}
+			if _, failure := selector.Execute(
+				context.Background(),
+				first,
+				browserprotocol.Action{
+					Kind:        browserprotocol.ActionPreflight,
+					BackendMode: ModeOpenLinkerNativeChrome,
+				},
+			); failure != nil {
+				t.Fatal(failure)
+			}
+			if _, failure := selector.Execute(
+				context.Background(),
+				first,
+				browserprotocol.Action{Kind: browserprotocol.ActionClose},
+			); failure != nil {
+				t.Fatal(failure)
+			}
+			continued := first
+			continued.AttachmentID = "second"
+			observation, failure := selector.Execute(
+				context.Background(),
+				continued,
+				browserprotocol.Action{
+					Kind:        browserprotocol.ActionPreflight,
+					BackendMode: continuationMode,
+				},
+			)
+			if failure != nil {
+				t.Fatal(failure)
+			}
+			if observation.BackendSelection == nil ||
+				observation.BackendSelection.RequestedMode != ModeOpenLinkerNativeChrome ||
+				observation.BackendSelection.SelectedBackend != BackendOfficialChrome ||
+				official.aborted || len(official.calls) != 3 ||
+				official.calls[2].BackendMode != "" ||
+				!selector.scope.matches(continued) {
+				t.Fatalf(
+					"continuation = %#v, aborted=%v calls=%#v scope=%#v",
+					observation.BackendSelection,
+					official.aborted,
+					official.calls,
+					selector.scope,
+				)
+			}
+		})
+	}
+}
+
+func TestBackendSelectorRejectsModeDriftOnSameGenerationNewAttachment(
+	t *testing.T,
+) {
+	official := &selectorTestBackend{}
+	selector, err := NewBackendSelector(BackendSelectorOptions{
+		Official:         official,
+		OfficialEvidence: validOfficialSelectionEvidence(),
+		Isolated:         &selectorTestBackend{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := browserprotocol.Identity{
+		AgentID:          "agent",
+		PrincipalScopeID: "principal",
+		BrowserSessionID: "session",
+		SessionEpoch:     1,
+		AttachmentID:     "first",
+	}
+	if _, failure := selector.Execute(
+		context.Background(),
+		first,
+		browserprotocol.Action{
+			Kind:        browserprotocol.ActionPreflight,
+			BackendMode: ModeOpenLinkerNativeChrome,
+		},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+	drifted := first
+	drifted.AttachmentID = "second"
+	if _, failure := selector.Execute(
+		context.Background(),
+		drifted,
+		browserprotocol.Action{
+			Kind:        browserprotocol.ActionPreflight,
+			BackendMode: "isolated",
+		},
+	); failure == nil || failure.Code != browserprotocol.ErrorProtocolInvalid ||
+		len(official.calls) != 1 || !selector.scope.matches(first) {
+		t.Fatalf(
+			"mode drift failure=%#v calls=%#v scope=%#v",
+			failure,
+			official.calls,
+			selector.scope,
+		)
+	}
+}
+
+func TestBackendSelectorClearsSelectionWhenEquivalentModeContinuationFails(
+	t *testing.T,
+) {
+	official := &selectorTestBackend{}
+	selector, err := NewBackendSelector(BackendSelectorOptions{
+		Official:         official,
+		OfficialEvidence: validOfficialSelectionEvidence(),
+		Isolated:         &selectorTestBackend{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := browserprotocol.Identity{
+		AgentID:          "agent",
+		PrincipalScopeID: "principal",
+		BrowserSessionID: "session",
+		SessionEpoch:     1,
+		AttachmentID:     "first",
+	}
+	if _, failure := selector.Execute(
+		context.Background(),
+		first,
+		browserprotocol.Action{
+			Kind:        browserprotocol.ActionPreflight,
+			BackendMode: ModeOpenLinkerNativeChrome,
+		},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+	official.failure = browserprotocol.NewFailure(
+		browserprotocol.ErrorEngineUnavailable,
+		"continued attachment failed",
+		false,
+	)
+	continued := first
+	continued.AttachmentID = "second"
+	if _, failure := selector.Execute(
+		context.Background(),
+		continued,
+		browserprotocol.Action{
+			Kind:        browserprotocol.ActionPreflight,
+			BackendMode: ModeOpenLinkerNativeChrome,
+		},
+	); failure == nil || failure.Code != browserprotocol.ErrorEngineUnavailable ||
+		!official.aborted || selector.selected != nil ||
+		selector.evidence != (browserprotocol.BackendSelectionEvidence{}) ||
+		selector.scope != (backendSelectionScope{}) {
+		t.Fatalf(
+			"continuation failure=%#v aborted=%v selected=%#v evidence=%#v scope=%#v",
+			failure,
+			official.aborted,
+			selector.selected,
+			selector.evidence,
+			selector.scope,
+		)
+	}
+}
+
 func TestBackendSelectorDiscardsAStaleGenerationBeforeNewPreflight(t *testing.T) {
 	official := &selectorTestBackend{}
 	isolated := &selectorTestBackend{}
@@ -191,7 +370,7 @@ func TestBackendSelectorDiscardsAStaleGenerationBeforeNewPreflight(t *testing.T)
 	}
 }
 
-func TestBackendSelectorRepreflightsTheLockedBackendAfterAttachmentRotation(
+func TestBackendSelectorKeepsLockedBackendForEmptyModeAcrossNewGeneration(
 	t *testing.T,
 ) {
 	official := &selectorTestBackend{}
@@ -224,7 +403,8 @@ func TestBackendSelectorRepreflightsTheLockedBackendAfterAttachmentRotation(
 	}
 	if observation.BackendSelection == nil ||
 		observation.BackendSelection.SelectedBackend != BackendOfficialChrome ||
-		official.aborted || len(official.calls) != 2 {
+		official.aborted || len(official.calls) != 2 ||
+		!selector.scope.matches(second) {
 		t.Fatalf(
 			"rotated selection = %#v, aborted=%v calls=%d",
 			observation.BackendSelection,
