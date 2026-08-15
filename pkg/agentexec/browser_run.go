@@ -24,8 +24,10 @@ import (
 )
 
 const (
-	browserSessionStateVersion = 2
-	maxBrowserSessionStateSize = 16 << 10
+	browserSessionStateVersion      = 2
+	maxBrowserSessionStateSize      = 16 << 10
+	browserSessionEvidenceDomain    = "openlinker.browser-session.v1\x00"
+	browserAttachmentEvidenceDomain = "openlinker.browser-attachment.v1\x00"
 )
 
 type browserExecutionProvider struct {
@@ -217,7 +219,15 @@ func browserAuthorityEvidence(identity browserprotocol.Identity) map[string]any 
 		"browser_mutation_origins":              append([]string{}, identity.BrowserMutationOrigins...),
 		"browser_mutation_origins_sha256":       identity.BrowserMutationOriginsSHA256,
 		"browser_contract_id":                   browserprotocol.ContractID,
+		"browser_session_sha256":                browserIdentityEvidenceSHA256(browserSessionEvidenceDomain, identity.BrowserSessionID),
+		"browser_session_epoch":                 identity.SessionEpoch,
+		"browser_attachment_sha256":             browserIdentityEvidenceSHA256(browserAttachmentEvidenceDomain, identity.AttachmentID),
 	}
+}
+
+func browserIdentityEvidenceSHA256(domain, value string) string {
+	digest := sha256.Sum256([]byte(domain + value))
+	return hex.EncodeToString(digest[:])
 }
 
 func preflightBrowserRuntime(

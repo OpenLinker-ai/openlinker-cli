@@ -475,6 +475,33 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 	}
 }
 
+func TestBrowserAuthorityEvidenceHashesSessionAndAttachmentIdentity(t *testing.T) {
+	identity := browserprotocol.Identity{
+		BrowserSessionID: "44444444-4444-4444-8444-444444444444",
+		SessionEpoch:     7,
+		AttachmentID:     "99999999-9999-4999-8999-999999999999",
+	}
+	evidence := browserAuthorityEvidence(identity)
+	for key, expected := range map[string]any{
+		"browser_session_sha256":    "59eb27c6ed8826d6ff0da734260f2159b712802132ae1dda90b0e7591f15706d",
+		"browser_session_epoch":     uint64(7),
+		"browser_attachment_sha256": "855d919c701efec5e6229e8da8cc3235d68f3795432f3712392463a60fca8a93",
+	} {
+		if evidence[key] != expected {
+			t.Fatalf("Browser authority evidence %s = %#v, want %#v", key, evidence[key], expected)
+		}
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{identity.BrowserSessionID, identity.AttachmentID} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("Browser authority evidence leaked raw identity %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func TestBrowserLifecycleEventBudgetIsFixed(t *testing.T) {
 	root := shortBrowserTestRoot(t)
 	base := &browserCaptureProvider{root: root}
@@ -514,6 +541,24 @@ func TestBrowserLifecycleEventBudgetIsFixed(t *testing.T) {
 			browserprotocol.RestrictedMutationOriginsSHA256 ||
 		output["browser_contract_id"] != browserprotocol.ContractID {
 		t.Fatalf("Browser result evidence = %#v", result.Output)
+	}
+	if len(base.leases) != 1 {
+		t.Fatalf("Browser leases = %#v, want exactly one", base.leases)
+	}
+	authorityEvidence := browserAuthorityEvidence(base.leases[0].Identity)
+	for _, key := range []string{
+		"browser_session_sha256",
+		"browser_session_epoch",
+		"browser_attachment_sha256",
+	} {
+		if output[key] != authorityEvidence[key] {
+			t.Fatalf("Browser result authority evidence %s = %#v, want %#v", key, output[key], authorityEvidence[key])
+		}
+		for _, index := range []int{1, 2} {
+			if payloads[index][key] != authorityEvidence[key] {
+				t.Fatalf("Browser lifecycle authority evidence %s at %d = %#v, want %#v", key, index, payloads[index][key], authorityEvidence[key])
+			}
+		}
 	}
 	origins, ok := output["browser_mutation_origins"].([]string)
 	if !ok || len(origins) != 0 {
