@@ -107,7 +107,16 @@ func (selector *BackendSelector) Execute(
 		)
 	}
 	if selector.selected != nil {
-		if action.BackendMode == "" && !selector.scope.matches(identity) {
+		equivalentModeContinuation := selector.scope.isEquivalentModeContinuation(
+			identity,
+			action,
+			selector.evidence.RequestedMode,
+		)
+		if (action.BackendMode == "" || equivalentModeContinuation) &&
+			!selector.scope.matches(identity) {
+			if equivalentModeContinuation {
+				action.BackendMode = ""
+			}
 			observation, failure := selector.selected.Execute(ctx, identity, action)
 			if failure != nil {
 				if action.Kind == browserprotocol.ActionPreflight {
@@ -403,20 +412,52 @@ func newBackendSelectionScope(identity browserprotocol.Identity) backendSelectio
 }
 
 func (scope backendSelectionScope) matches(identity browserprotocol.Identity) bool {
+	return scope.sameGeneration(identity) &&
+		scope.AttachmentID == identity.AttachmentID
+}
+
+func (scope backendSelectionScope) sameGeneration(
+	identity browserprotocol.Identity,
+) bool {
 	return scope.AgentID == identity.AgentID &&
 		scope.PrincipalScopeID == identity.PrincipalScopeID &&
 		scope.BrowserSessionID == identity.BrowserSessionID &&
-		scope.SessionEpoch == identity.SessionEpoch &&
-		scope.AttachmentID == identity.AttachmentID
+		scope.SessionEpoch == identity.SessionEpoch
+}
+
+func (scope backendSelectionScope) isEquivalentModeContinuation(
+	identity browserprotocol.Identity,
+	action browserprotocol.Action,
+	lockedRequestedMode string,
+) bool {
+	return action.Kind == browserprotocol.ActionPreflight &&
+		action.BackendMode != "" &&
+		scope.sameGeneration(identity) &&
+		scope.AttachmentID != identity.AttachmentID &&
+		equivalentBackendMode(action.BackendMode, lockedRequestedMode)
 }
 
 func (scope backendSelectionScope) isNewGeneration(
 	identity browserprotocol.Identity,
 ) bool {
-	return scope.AgentID != identity.AgentID ||
-		scope.PrincipalScopeID != identity.PrincipalScopeID ||
-		scope.BrowserSessionID != identity.BrowserSessionID ||
-		scope.SessionEpoch != identity.SessionEpoch
+	return !scope.sameGeneration(identity)
+}
+
+func equivalentBackendMode(left, right string) bool {
+	leftMode, leftOK := canonicalBackendMode(left)
+	rightMode, rightOK := canonicalBackendMode(right)
+	return leftOK && rightOK && leftMode == rightMode
+}
+
+func canonicalBackendMode(mode string) (string, bool) {
+	switch mode {
+	case ModeOpenLinkerNativeChrome, ModeOfficialChromeAlias:
+		return ModeOpenLinkerNativeChrome, true
+	case "auto", "isolated":
+		return mode, true
+	default:
+		return "", false
+	}
 }
 
 func (selector *BackendSelector) Close() error {
