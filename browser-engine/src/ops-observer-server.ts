@@ -60,7 +60,14 @@ export class OpsObserverServer {
 
   private async listen(): Promise<void> {
     await removeStaleSocket(this.socketPath);
-    const server = createServer((connection) => this.handle(connection));
+    // The Go Runtime sends exactly one newline-framed request and then closes
+    // only its write side. Keep the response side open until the asynchronous
+    // observation has been encoded instead of letting Node's default
+    // allowHalfOpen=false turn that FIN into an immediate empty EOF.
+    const server = createServer(
+      { allowHalfOpen: true },
+      (connection) => this.handle(connection),
+    );
     this.server = server;
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
