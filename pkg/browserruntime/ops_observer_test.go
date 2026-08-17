@@ -97,9 +97,22 @@ func TestOpsObserverServerEnforcesOneConnectionBoundLease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	third := newOpsObserverTestStream(t, ctx, socketPath, credentialFile)
-	response, observerErr = third.Observe(ctx, browserprotocol.OpsObserverStatusOperation)
-	if observerErr != nil || response.Status != "ok" || response.Observation.Frame != nil {
+	var third *browserclient.OpsObserverStream
+	releaseDeadline := time.Now().Add(2 * time.Second)
+	for {
+		third = newOpsObserverTestStream(t, ctx, socketPath, credentialFile)
+		response, observerErr = third.Observe(ctx, browserprotocol.OpsObserverStatusOperation)
+		if observerErr == nil {
+			break
+		}
+		_ = third.Close()
+		if observerErr.Code != browserprotocol.OpsObserverAlreadyActive ||
+			time.Now().After(releaseDeadline) {
+			t.Fatalf("replacement observation = %#v, %v", response, observerErr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if response.Status != "ok" || response.Observation.Frame != nil {
 		t.Fatalf("replacement observation = %#v, %v", response, observerErr)
 	}
 	_ = third.Close()
