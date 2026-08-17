@@ -327,6 +327,45 @@ function createAuthorityFence() {
   };
 }
 
+async function authorizeControlRequest(request, params, options) {
+  const {
+    authorityFence,
+    config,
+    extensionHealth,
+    hostProcessGenerationNonce,
+    authorizationNonce = randomUUID,
+  } = options;
+  // The Native Host exists only while Chrome's extension-owned Native
+  // Messaging port remains open; stdin ending shuts the Host and its control
+  // socket down. Observer requests therefore retain the exact Host authority
+  // fence without repeating ping + getInfo inside the 500 ms frame budget.
+  if (request.method !== "authorize_observer") {
+    await extensionHealth(15_000);
+  }
+  if (request.method === "preflight") {
+    if (
+      params.asset_manifest_sha256 !== config.assetManifestSHA256 ||
+      params.extension_id !== config.extensionID ||
+      params.extension_version !== config.extensionVersion ||
+      params.native_host_protocol !== config.nativeHostProtocol ||
+      JSON.stringify(params.capabilities) !== JSON.stringify(REQUIRED_CAPABILITIES)
+    ) {
+      throw new Error("preflight capability evidence is invalid");
+    }
+    authorityFence.admit(request, params);
+    return {
+      asset_manifest_sha256: config.assetManifestSHA256,
+      extension_id: config.extensionID,
+      extension_version: config.extensionVersion,
+      host_process_generation_nonce: hostProcessGenerationNonce,
+      native_host_protocol: config.nativeHostProtocol,
+      capabilities: REQUIRED_CAPABILITIES,
+    };
+  }
+  authorityFence.admit(request, params);
+  return { authorized: true, nonce: authorizationNonce() };
+}
+
 function startNativeHost(environment = process.env) {
   const config = requireEnvironment(environment);
   const decoder = new NativeFrameDecoder();
@@ -505,33 +544,13 @@ function startNativeHost(environment = process.env) {
             result,
           })}\n`,
         );
-      extensionHealth(request.method === "authorize_observer" ? 350 : 15_000)
-        .then(() => {
-          if (request.method === "preflight") {
-            if (
-              params.asset_manifest_sha256 !== config.assetManifestSHA256 ||
-              params.extension_id !== config.extensionID ||
-              params.extension_version !== config.extensionVersion ||
-              params.native_host_protocol !== config.nativeHostProtocol ||
-              JSON.stringify(params.capabilities) !==
-                JSON.stringify(REQUIRED_CAPABILITIES)
-            ) {
-              throw new Error("preflight capability evidence is invalid");
-            }
-            authorityFence.admit(request, params);
-            complete({
-              asset_manifest_sha256: config.assetManifestSHA256,
-              extension_id: config.extensionID,
-              extension_version: config.extensionVersion,
-              host_process_generation_nonce: hostProcessGenerationNonce,
-              native_host_protocol: config.nativeHostProtocol,
-              capabilities: REQUIRED_CAPABILITIES,
-            });
-            return;
-          }
-          authorityFence.admit(request, params);
-          complete({ authorized: true, nonce: randomUUID() });
-        })
+      authorizeControlRequest(request, params, {
+        authorityFence,
+        config,
+        extensionHealth,
+        hostProcessGenerationNonce,
+      })
+        .then(complete)
         .catch((error) => {
           socket.end(
             `${JSON.stringify({
@@ -565,6 +584,7 @@ if (path.resolve(process.argv[1] ?? "") === path.resolve(fileURLToPath(import.me
 
 export {
   ACTION_KINDS,
+  authorizeControlRequest,
   CONTROL_CONTRACT,
   REQUIRED_CAPABILITIES,
   createAuthorityFence,

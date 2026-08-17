@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  authorizeControlRequest,
   createAuthorityFence,
   REQUIRED_CAPABILITIES,
   requireEnvironment,
@@ -189,4 +190,83 @@ test("Native Host fences preflight, replay and Browser authority generation", ()
     },
   };
   assert.throws(() => fence.admit(stale, stale.params), /authority changed/);
+});
+
+test("Ops Observer keeps the Host authority fence without a redundant extension round trip", async () => {
+  const fence = createAuthorityFence();
+  const config = {
+    assetManifestSHA256: "b".repeat(64),
+    extensionID: "abcdefghijklmnopabcdefghijklmnop",
+    extensionVersion: "1.2.3.4",
+    nativeHostProtocol: "openlinker.native-chrome.v2",
+  };
+  const authority = {
+    browser_session_id: "22222222-2222-4222-8222-222222222222",
+    session_epoch: 1,
+    attachment_id: "33333333-3333-4333-8333-333333333333",
+    control_epoch: 1,
+    interaction_policy: "restricted",
+    interaction_policy_generation: 1,
+    mutation_origins_sha256: "a".repeat(64),
+  };
+  let healthChecks = 0;
+  const options = {
+    authorityFence: fence,
+    config,
+    extensionHealth: async () => {
+      healthChecks += 1;
+    },
+    hostProcessGenerationNonce: "44444444-4444-4444-8444-444444444444",
+    authorizationNonce: () => "55555555-5555-4555-8555-555555555555",
+  };
+  await authorizeControlRequest(
+    {
+      contract_id: "openlinker.native-chrome.control.v2",
+      request_id: "11111111-1111-4111-8111-111111111111",
+      method: "preflight",
+    },
+    {
+      asset_manifest_sha256: config.assetManifestSHA256,
+      extension_id: config.extensionID,
+      extension_version: config.extensionVersion,
+      native_host_protocol: config.nativeHostProtocol,
+      capabilities: REQUIRED_CAPABILITIES,
+    },
+    options,
+  );
+  const actionPreflight = {
+    contract_id: "openlinker.native-chrome.control.v2",
+    request_id: "22222222-2222-4222-8222-222222222222",
+    method: "authorize_action",
+    params: { ...authority, action_kind: "preflight" },
+  };
+  await authorizeControlRequest(
+    actionPreflight,
+    actionPreflight.params,
+    options,
+  );
+  assert.equal(healthChecks, 2);
+  const observer = {
+    contract_id: "openlinker.native-chrome.control.v2",
+    request_id: "33333333-3333-4333-8333-333333333333",
+    method: "authorize_observer",
+    params: { ...authority, observer_operation: "observe_status" },
+  };
+  const result = await authorizeControlRequest(observer, observer.params, options);
+  assert.equal(healthChecks, 2);
+  assert.deepEqual(result, {
+    authorized: true,
+    nonce: "55555555-5555-4555-8555-555555555555",
+  });
+
+  const changed = {
+    ...observer,
+    request_id: "66666666-6666-4666-8666-666666666666",
+    params: { ...observer.params, control_epoch: 2 },
+  };
+  await assert.rejects(
+    authorizeControlRequest(changed, changed.params, options),
+    /Observer authority changed/,
+  );
+  assert.equal(healthChecks, 2);
 });
