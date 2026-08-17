@@ -219,9 +219,11 @@ func TestProfileEngineOpsObservationNeverActivatesAndPreservesAuthority(t *testi
 	}
 	beforeOwner := engine.active.owner
 	beforeIdentity := engine.active.identity
+	engine.mu.Lock()
 	observation, busy, observerErr := engine.ObserveOps(
 		context.Background(), identity.RunID, browserprotocol.OpsObserverStatusOperation,
 	)
+	engine.mu.Unlock()
 	if observerErr != nil || busy || observation.RunID != identity.RunID ||
 		observation.PageURL != "about:blank" || observation.ProfileGeneration != 1 {
 		t.Fatalf("active observation = %#v, busy=%v error=%v", observation, busy, observerErr)

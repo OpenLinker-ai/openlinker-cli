@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -72,6 +73,13 @@ type ProfileEngine struct {
 	mu             sync.Mutex
 	active         *activeBrowserProfile
 	closed         bool
+	ops            atomic.Pointer[profileOpsSnapshot]
+}
+
+type profileOpsSnapshot struct {
+	identity          browserprotocol.Identity
+	profileGeneration uint64
+	observer          activeOpsObserverEngine
 }
 
 func NewProfileEngine(options ProfileEngineOptions) (*ProfileEngine, error) {
@@ -171,6 +179,7 @@ func (engine *ProfileEngine) Execute(
 		}
 		if engine.active != nil {
 			engine.active.preflightValidated = true
+			engine.publishOpsSnapshotLocked()
 		}
 		if engine.active == nil || engine.active.exists {
 			return observation, nil
@@ -273,6 +282,7 @@ func (engine *ProfileEngine) ExecuteViewer(
 		)
 	}
 	engine.active.owner = identity
+	engine.publishOpsSnapshotLocked()
 	return process.ExecuteViewer(ctx, identity, operation, input)
 }
 
@@ -281,52 +291,58 @@ func (engine *ProfileEngine) ObserveOps(
 	runID string,
 	operation browserprotocol.OpsObserverOperation,
 ) (browserprotocol.OpsObserverObservation, bool, *browserprotocol.OpsObserverError) {
-	if engine == nil || !engine.mu.TryLock() {
-		if engine == nil {
-			return browserprotocol.OpsObserverObservation{}, false,
-				browserprotocol.NewOpsObserverError(
-					browserprotocol.OpsObserverRunNotActive,
-					"requested Run is not active",
-				)
-		}
-		return browserprotocol.OpsObserverObservation{}, true, nil
-	}
-	if engine.closed || engine.active == nil || engine.active.owner.RunID != runID ||
-		engine.active.process == nil || !engine.active.preflightValidated {
-		engine.mu.Unlock()
+	if engine == nil {
 		return browserprotocol.OpsObserverObservation{}, false,
 			browserprotocol.NewOpsObserverError(
 				browserprotocol.OpsObserverRunNotActive,
 				"requested Run is not active",
 			)
 	}
-	identity := engine.active.owner
-	profileGeneration := engine.active.identity.ProfileGeneration
-	process := engine.active.process
-	engine.mu.Unlock()
-	observer, ok := process.(activeOpsObserverEngine)
-	if !ok {
+	snapshot := engine.ops.Load()
+	if snapshot == nil || snapshot.identity.RunID != runID {
 		return browserprotocol.OpsObserverObservation{}, false,
 			browserprotocol.NewOpsObserverError(
-				browserprotocol.OpsObserverInternalError,
-				"Browser process does not support Ops observation",
+				browserprotocol.OpsObserverRunNotActive,
+				"requested Run is not active",
 			)
 	}
-	page, busy, observerErr := observer.ObserveActiveOps(ctx, identity, operation)
+	page, busy, observerErr := snapshot.observer.ObserveActiveOps(
+		ctx,
+		snapshot.identity,
+		operation,
+	)
 	if observerErr != nil || busy {
 		return browserprotocol.OpsObserverObservation{}, busy, observerErr
 	}
 	return browserprotocol.OpsObserverObservation{
-		RunID:                identity.RunID,
-		Controller:           identity.Controller,
-		SessionEpoch:         identity.SessionEpoch,
-		BrowserSessionSHA256: opsIdentitySHA256(identity.BrowserSessionID),
-		AttachmentSHA256:     opsIdentitySHA256(identity.AttachmentID),
-		ProfileGeneration:    profileGeneration,
+		RunID:                snapshot.identity.RunID,
+		Controller:           snapshot.identity.Controller,
+		SessionEpoch:         snapshot.identity.SessionEpoch,
+		BrowserSessionSHA256: opsIdentitySHA256(snapshot.identity.BrowserSessionID),
+		AttachmentSHA256:     opsIdentitySHA256(snapshot.identity.AttachmentID),
+		ProfileGeneration:    snapshot.profileGeneration,
 		PageURL:              page.PageURL,
 		PageTitle:            page.PageTitle,
 		Frame:                page.Frame,
 	}, false, nil
+}
+
+func (engine *ProfileEngine) publishOpsSnapshotLocked() {
+	if engine == nil || engine.closed || engine.active == nil ||
+		engine.active.process == nil || !engine.active.preflightValidated {
+		engine.ops.Store(nil)
+		return
+	}
+	observer, ok := engine.active.process.(activeOpsObserverEngine)
+	if !ok {
+		engine.ops.Store(nil)
+		return
+	}
+	engine.ops.Store(&profileOpsSnapshot{
+		identity:          engine.active.owner,
+		profileGeneration: engine.active.identity.ProfileGeneration,
+		observer:          observer,
+	})
 }
 
 func opsIdentitySHA256(value string) string {
@@ -344,6 +360,7 @@ func (engine *ProfileEngine) Close() error {
 		return nil
 	}
 	engine.closed = true
+	engine.publishOpsSnapshotLocked()
 	var checkpointErr error
 	if engine.active != nil {
 		if failure := engine.checkpointActive(false); failure != nil {
@@ -384,6 +401,7 @@ func (engine *ProfileEngine) activate(identity browserprotocol.Identity) *browse
 		engine.active.identity == profileIdentity &&
 		engine.active.session == session {
 		engine.active.owner = identity
+		engine.publishOpsSnapshotLocked()
 		return nil
 	}
 	if engine.active != nil {
@@ -497,6 +515,7 @@ func (engine *ProfileEngine) activate(identity browserprotocol.Identity) *browse
 		upgradePending:             upgradePending,
 		environmentAdoptionPending: environmentAdoptionPending,
 	}
+	engine.publishOpsSnapshotLocked()
 	return nil
 }
 
@@ -543,6 +562,7 @@ func (engine *ProfileEngine) ensureProcess() (managedBrowserEngine, *browserprot
 		)
 	}
 	engine.active.process = process
+	engine.publishOpsSnapshotLocked()
 	return process, nil
 }
 
@@ -566,6 +586,7 @@ func (engine *ProfileEngine) checkpointActive(retain bool) *browserprotocol.Fail
 		)
 	}
 	if active.process != nil {
+		engine.ops.Store(nil)
 		if err := active.process.Close(); err != nil {
 			return profileRuntimeFailure(err)
 		}
@@ -631,6 +652,7 @@ func (engine *ProfileEngine) checkpointActive(retain bool) *browserprotocol.Fail
 		return nil
 	}
 	engine.active = nil
+	engine.ops.Store(nil)
 	if err := resetProfileWorkDirectory(engine.workDirectory); err != nil {
 		return profileRuntimeFailure(err)
 	}
@@ -654,6 +676,7 @@ func (engine *ProfileEngine) upgradeFailure(
 func (engine *ProfileEngine) discardActive() error {
 	active := engine.active
 	engine.active = nil
+	engine.ops.Store(nil)
 	var closeErr error
 	if active != nil && active.process != nil {
 		closeErr = active.process.Close()

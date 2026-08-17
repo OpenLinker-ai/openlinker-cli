@@ -46,6 +46,7 @@ type ProcessEngine struct {
 	nextID        uint64
 	closed        bool
 	opsSocketPath string
+	opsReady      atomic.Bool
 }
 
 type engineProcess struct {
@@ -433,18 +434,13 @@ func (engine *ProcessEngine) ObserveActiveOps(
 			"Ops Observer operation is invalid",
 		)
 	}
-	if !engine.mu.TryLock() {
-		return opsPageObservation{}, true, nil
-	}
-	if engine.closed || engine.process == nil || engine.opsSocketPath == "" {
-		engine.mu.Unlock()
+	if !engine.opsReady.Load() || engine.opsSocketPath == "" {
 		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
 			browserprotocol.OpsObserverRunNotActive,
 			"requested Run is not active",
 		)
 	}
 	socketPath := engine.opsSocketPath
-	engine.mu.Unlock()
 	observeContext, cancel := context.WithTimeout(
 		ctx,
 		browserprotocol.MaxOpsObserverCapture,
@@ -567,6 +563,7 @@ func (engine *ProcessEngine) ensureProcess() (*engineProcess, error) {
 		stdout:     bufio.NewReaderSize(stdout, 64<<10),
 		diagnostic: diagnostic,
 	}
+	engine.opsReady.Store(engine.opsSocketPath != "")
 	return engine.process, nil
 }
 
@@ -575,6 +572,7 @@ func (engine *ProcessEngine) resetProcess() error {
 }
 
 func (engine *ProcessEngine) closeProcess(graceful bool) error {
+	engine.opsReady.Store(false)
 	process := engine.process
 	engine.process = nil
 	if process == nil {
