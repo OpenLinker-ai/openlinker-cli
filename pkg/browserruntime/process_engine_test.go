@@ -6,9 +6,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -162,6 +167,117 @@ func TestProcessEngineCancellationKillsChildAndRecovers(t *testing.T) {
 	}
 }
 
+func TestProcessEngineCancellationKillsProcessGroupHoldingDiagnosticPipe(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	engine, err := NewProcessEngine(ProcessEngineOptions{
+		Command: []string{
+			os.Args[0],
+			"-test.run=^TestProcessEngineHelper$",
+			"--",
+			"browser-engine-helper",
+		},
+		Environment: []string{"HOME=" + home},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, failure := engine.Execute(
+		ctx,
+		validRuntimeRequest().Identity,
+		browserprotocol.Action{
+			Kind: browserprotocol.ActionNavigate,
+			URL:  "https://process-tree-hang.example",
+		},
+	)
+	if failure == nil || failure.Code != browserprotocol.ErrorDeadlineExceeded {
+		t.Fatalf("failure = %#v, want deadline exceeded", failure)
+	}
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
+		t.Fatalf("cancellation took %s, want bounded process cleanup", elapsed)
+	}
+
+	rawPID, err := os.ReadFile(filepath.Join(home, "grandchild.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grandchildPID, err := strconv.Atoi(strings.TrimSpace(string(rawPID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for processExists(grandchildPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processExists(grandchildPID) {
+		t.Fatalf("grandchild process %d survived process-group reset", grandchildPID)
+	}
+
+	observation, failure := engine.Execute(
+		testActionContext(t),
+		validRuntimeRequest().Identity,
+		browserprotocol.Action{Kind: browserprotocol.ActionScreenshot},
+	)
+	if failure != nil || observation.PageStateID != "state-1" {
+		t.Fatalf("recovered observation=%#v failure=%#v", observation, failure)
+	}
+}
+
+func TestProcessEngineGracefulCloseKillsDiagnosticPipeDescendant(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	engine, err := NewProcessEngine(ProcessEngineOptions{
+		Command: []string{
+			os.Args[0],
+			"-test.run=^TestProcessEngineHelper$",
+			"--",
+			"browser-engine-helper",
+		},
+		Environment: []string{"HOME=" + home},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, failure := engine.Execute(
+		testActionContext(t),
+		validRuntimeRequest().Identity,
+		browserprotocol.Action{
+			Kind: browserprotocol.ActionNavigate,
+			URL:  "https://diagnostic-descendant.example",
+		},
+	)
+	if failure != nil || observation.PageStateID != "state-1" {
+		t.Fatalf("observation=%#v failure=%#v", observation, failure)
+	}
+	rawPID, err := os.ReadFile(filepath.Join(home, "grandchild.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grandchildPID, err := strconv.Atoi(strings.TrimSpace(string(rawPID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
+		t.Fatalf("graceful close took %s, want bounded cleanup", elapsed)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for processExists(grandchildPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processExists(grandchildPID) {
+		t.Fatalf("grandchild process %d survived graceful close", grandchildPID)
+	}
+}
+
 func TestProcessEngineRejectsForbiddenEnvironment(t *testing.T) {
 	t.Parallel()
 	command := []string{os.Args[0], "-test.run=^TestProcessEngineHelper$", "--", "browser-engine-helper"}
@@ -224,7 +340,15 @@ func TestProcessEngineAcceptsLockedNativeChromeEnvironment(t *testing.T) {
 }
 
 func TestProcessEngineHelper(t *testing.T) {
-	if len(os.Args) == 0 || os.Args[len(os.Args)-1] != "browser-engine-helper" {
+	if len(os.Args) == 0 {
+		return
+	}
+	if os.Args[len(os.Args)-1] == "browser-engine-grandchild" {
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	if os.Args[len(os.Args)-1] != "browser-engine-helper" {
 		return
 	}
 	scanner := bufio.NewScanner(os.Stdin)
@@ -237,6 +361,27 @@ func TestProcessEngineHelper(t *testing.T) {
 		}
 		counter++
 		switch request.Action.URL {
+		case "https://process-tree-hang.example":
+			startDiagnosticGrandchild()
+			for {
+				time.Sleep(time.Hour)
+			}
+		case "https://diagnostic-descendant.example":
+			startDiagnosticGrandchild()
+			writeHelperResponse(engineResponse{
+				ContractID: request.ContractID,
+				ActionID:   request.ActionID,
+				Status:     "ok",
+				Observation: &browserprotocol.Observation{
+					PageStateID: "state-1",
+					Viewport: &browserprotocol.Viewport{
+						Width:  browserprotocol.BrowserViewportWidth,
+						Height: browserprotocol.BrowserViewportHeight,
+					},
+					NavigationGeneration: 1,
+					Origin:               request.Action.URL,
+				},
+			})
 		case "https://blocked.example":
 			writeHelperResponse(engineResponse{
 				ContractID: engineContractID,
@@ -320,6 +465,27 @@ func writeHelperResponse(response engineResponse) {
 	fmt.Println(string(raw))
 }
 
+func startDiagnosticGrandchild() {
+	child := exec.Command(
+		os.Args[0],
+		"-test.run=^TestProcessEngineHelper$",
+		"--",
+		"browser-engine-grandchild",
+	)
+	child.Stdout = os.Stdout
+	child.Stderr = os.Stderr
+	if err := child.Start(); err != nil {
+		os.Exit(4)
+	}
+	if err := os.WriteFile(
+		filepath.Join(os.Getenv("HOME"), "grandchild.pid"),
+		[]byte(strconv.Itoa(child.Process.Pid)+"\n"),
+		0o600,
+	); err != nil {
+		os.Exit(5)
+	}
+}
+
 func testProcessEngine(t *testing.T) *ProcessEngine {
 	t.Helper()
 	engine, err := NewProcessEngine(ProcessEngineOptions{
@@ -352,4 +518,9 @@ func processIntPointer(value int) *int {
 
 func processBoolPointer(value bool) *bool {
 	return &value
+}
+
+func processExists(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

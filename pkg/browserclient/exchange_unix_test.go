@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -209,5 +210,77 @@ func TestExecuteErrorsNeverContainCredential(t *testing.T) {
 	)
 	if failure == nil || strings.Contains(failure.Message, strings.Repeat("c", 32)) {
 		t.Fatalf("failure = %#v", failure)
+	}
+}
+
+func TestExchangeClassifiesTransportAndMalformedResponses(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		response []byte
+		holdOpen bool
+		wantCode browserprotocol.ErrorCode
+	}{
+		{
+			name:     "zero-byte EOF",
+			wantCode: browserprotocol.ErrorRuntimeUnavailable,
+		},
+		{
+			name:     "partial JSON",
+			response: []byte("{"),
+			wantCode: browserprotocol.ErrorOutputInvalid,
+		},
+		{
+			name:     "socket timeout",
+			holdOpen: true,
+			wantCode: browserprotocol.ErrorRuntimeUnavailable,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir, err := os.MkdirTemp("", "olbc-x-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			socketPath := filepath.Join(dir, "browser.sock")
+			listener, err := net.Listen("unix", socketPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			release := make(chan struct{})
+			if !test.holdOpen {
+				close(release)
+			} else {
+				defer close(release)
+			}
+			go func() {
+				connection, acceptErr := listener.Accept()
+				if acceptErr != nil {
+					return
+				}
+				defer connection.Close()
+				var request browserprotocol.Request
+				_ = json.NewDecoder(connection).Decode(&request)
+				if len(test.response) > 0 {
+					_, _ = connection.Write(test.response)
+				}
+				<-release
+			}()
+			request := browserprotocol.Request{
+				ContractID:        browserprotocol.ContractID,
+				ChannelCredential: strings.Repeat("a", 64),
+				RequestID:         "11111111-1111-4111-8111-111111111111",
+			}
+			_, failure := exchange(
+				context.Background(),
+				socketPath,
+				request,
+				time.Now().Add(100*time.Millisecond),
+			)
+			if failure == nil || failure.Code != test.wantCode {
+				t.Fatalf("failure = %#v, want %s", failure, test.wantCode)
+			}
+		})
 	}
 }
