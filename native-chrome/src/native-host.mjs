@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import { encodeNativeMessage, NativeFrameDecoder } from "./native-framing.mjs";
 
-const CONTROL_CONTRACT = "openlinker.native-chrome.control.v1";
+const CONTROL_CONTRACT = "openlinker.native-chrome.control.v2";
 const MAX_CONTROL_BYTES = 1024 * 1024;
 const REQUIRED_CAPABILITIES = [
   "act",
@@ -27,6 +27,8 @@ const REQUIRED_CAPABILITIES = [
   "keypress",
   "navigate",
   "observe",
+  "ops_observe_frame",
+  "ops_observe_status",
   "policy_evidence",
   "restricted",
   "screenshot",
@@ -52,6 +54,7 @@ const ACTION_KINDS = new Set([
   "batch",
 ]);
 const VIEWER_OPERATIONS = new Set(["enter", "frame", "input", "exit"]);
+const OBSERVER_OPERATIONS = new Set(["observe_status", "observe_frame"]);
 
 function requireEnvironment(environment = process.env) {
   const config = {
@@ -132,7 +135,14 @@ function validateControlRequest(value) {
   ) {
     throw new Error("control request identity is invalid");
   }
-  if (!new Set(["preflight", "authorize_action", "authorize_viewer"]).has(request.method)) {
+  if (
+    !new Set([
+      "preflight",
+      "authorize_action",
+      "authorize_viewer",
+      "authorize_observer",
+    ]).has(request.method)
+  ) {
     throw new Error("control request method is invalid");
   }
   const params = exactObject(
@@ -156,7 +166,8 @@ function validateControlRequest(value) {
             "mutation_origins_sha256",
             "action_kind",
           ]
-        : [
+        : request.method === "authorize_viewer"
+          ? [
             "browser_session_id",
             "session_epoch",
             "attachment_id",
@@ -165,7 +176,17 @@ function validateControlRequest(value) {
             "interaction_policy_generation",
             "mutation_origins_sha256",
             "viewer_operation",
-          ],
+          ]
+          : [
+              "browser_session_id",
+              "session_epoch",
+              "attachment_id",
+              "control_epoch",
+              "interaction_policy",
+              "interaction_policy_generation",
+              "mutation_origins_sha256",
+              "observer_operation",
+            ],
     "control request params",
   );
   if (request.method !== "preflight") validateAuthorityParams(params);
@@ -177,6 +198,12 @@ function validateControlRequest(value) {
     !VIEWER_OPERATIONS.has(params.viewer_operation)
   ) {
     throw new Error("viewer operation is invalid");
+  }
+  if (
+    request.method === "authorize_observer" &&
+    !OBSERVER_OPERATIONS.has(params.observer_operation)
+  ) {
+    throw new Error("observer operation is invalid");
   }
   return { request, params };
 }
@@ -262,6 +289,22 @@ function createAuthorityFence() {
           throw new Error("Native Host Browser authority rotation is invalid");
         }
         authority = next;
+        return;
+      }
+      if (request.method === "authorize_observer") {
+        for (const field of [
+          "browser_session_id",
+          "session_epoch",
+          "attachment_id",
+          "control_epoch",
+          "interaction_policy",
+          "interaction_policy_generation",
+          "mutation_origins_sha256",
+        ]) {
+          if (next[field] !== authority[field]) {
+            throw new Error("Native Host Ops Observer authority changed");
+          }
+        }
         return;
       }
       for (const field of [
@@ -394,10 +437,11 @@ function startNativeHost(environment = process.env) {
   });
   process.stdin.resume();
 
-  const extensionHealth = async () => {
-    const pong = await nativeRequest("ping", {});
+  const extensionHealth = async (timeoutMs = 15_000) => {
+    const deadline = Date.now() + timeoutMs;
+    const pong = await nativeRequest("ping", {}, Math.max(1, deadline - Date.now()));
     if (pong !== "pong") throw new Error("extension ping failed");
-    const info = await nativeRequest("getInfo", {});
+    const info = await nativeRequest("getInfo", {}, Math.max(1, deadline - Date.now()));
     if (info === null || typeof info !== "object" || Array.isArray(info)) {
       throw new Error("extension identity is invalid");
     }
@@ -461,7 +505,7 @@ function startNativeHost(environment = process.env) {
             result,
           })}\n`,
         );
-      extensionHealth()
+      extensionHealth(request.method === "authorize_observer" ? 350 : 15_000)
         .then(() => {
           if (request.method === "preflight") {
             if (

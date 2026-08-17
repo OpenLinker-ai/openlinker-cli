@@ -26,6 +26,8 @@ import {
   type EngineResponse,
   type EngineViewerRequest,
   type EngineViewerResponse,
+  type EngineOpsObserverRequest,
+  type EngineOpsObserverResponse,
   type EngineFailure,
   type EnvironmentEvidence,
   type Observation,
@@ -38,6 +40,8 @@ import {
   truncateUTF8,
   viewerFailure,
   viewerSuccess,
+  opsObserverFailure,
+  opsObserverSuccess,
 } from "./protocol.js";
 import {
   allowsPageRequestMethod,
@@ -125,6 +129,7 @@ export class BrowserEngine {
   private page: Page;
   private boundSessionKey = "";
   private boundAttachmentKey = "";
+  private boundRunID = "";
   private lastBodyText = "";
   private navigationGeneration = 1;
   private readonly blockedNavigationPages = new WeakSet<Page>();
@@ -502,6 +507,7 @@ export class BrowserEngine {
           );
         }
         this.boundAttachmentKey = attachmentKey;
+        this.boundRunID = request.identity.run_id;
         this.controlState.attachmentKey = attachmentKey;
         this.controlState.controller = "human";
         return viewerSuccess(request.action_id);
@@ -587,6 +593,74 @@ export class BrowserEngine {
                 : "browser viewer operation failed",
             ),
         true,
+      );
+    }
+  }
+
+  async executeOpsObserver(
+    request: EngineOpsObserverRequest,
+  ): Promise<EngineOpsObserverResponse> {
+    const sessionKey = pageContinuationSessionKey(request.identity);
+    const attachmentKey =
+      request.identity.controller === "human"
+        ? viewerAttachmentKey(request.identity)
+        : agentAttachmentKey(request.identity);
+    if (
+      request.identity.controller === "none" ||
+      this.boundRunID !== request.identity.run_id ||
+      this.boundSessionKey === "" ||
+      this.boundSessionKey !== sessionKey ||
+      this.boundAttachmentKey !== attachmentKey ||
+      this.controlState.controller !== request.identity.controller
+    ) {
+      return opsObserverFailure(
+        request.action_id,
+        "RUN_NOT_ACTIVE",
+        "requested Run is not active in this Browser Engine",
+      );
+    }
+    try {
+      const timeout = Math.min(500, remainingTimeout(request.deadline));
+      await withOpsObserverTimeout(
+        this.nativeChromeGate?.authorizeObserver(request) ?? Promise.resolve(),
+        timeout,
+      );
+      const pageURL = opsObserverPageURL(this.page.url());
+      const pageTitle = await withOpsObserverTimeout(
+        this.page.title(),
+        Math.max(1, Math.min(timeout, remainingTimeout(request.deadline))),
+      );
+      if (request.operation === "observe_status") {
+        return opsObserverSuccess(request.action_id, pageURL, pageTitle);
+      }
+      const frame = await this.page.screenshot({
+        animations: "disabled",
+        caret: "initial",
+        quality: 55,
+        timeout: Math.max(1, Math.min(timeout, remainingTimeout(request.deadline))),
+        type: "jpeg",
+      });
+      if (frame.byteLength > MAX_VIEWER_FRAME_BYTES) {
+        throw new Error("Ops Observer frame exceeds the output limit");
+      }
+      return opsObserverSuccess(request.action_id, pageURL, pageTitle, {
+        mime_type: "image/jpeg",
+        data: frame.toString("base64"),
+        width: BROWSER_VIEWPORT_WIDTH,
+        height: BROWSER_VIEWPORT_HEIGHT,
+      });
+    } catch (error) {
+      const busy =
+        Date.parse(request.deadline) <= Date.now() ||
+        error instanceof playwrightErrors.TimeoutError ||
+        (error instanceof Error &&
+          error.message === "Ops Observer capture timed out");
+      return opsObserverFailure(
+        request.action_id,
+        busy ? "OPS_VIEWER_BUSY" : "OPS_VIEWER_INTERNAL",
+        busy
+          ? "Browser Engine is busy"
+          : "Browser Engine could not capture the read-only observation",
       );
     }
   }
@@ -1094,13 +1168,7 @@ export class BrowserEngine {
     timeout: number,
   ): Promise<void> {
     const sessionKey = pageContinuationSessionKey(request.identity);
-    const attachmentKey = [
-      request.identity.attachment_id,
-      request.identity.control_epoch,
-      request.identity.browser_interaction_policy,
-      request.identity.browser_interaction_policy_generation,
-      request.identity.browser_mutation_origins_sha256,
-    ].join("\u0000");
+    const attachmentKey = agentAttachmentKey(request.identity);
     this.controlState.interactionPolicy =
       request.identity.browser_interaction_policy;
     this.controlState.mutationOrigins = new Set(
@@ -1112,6 +1180,7 @@ export class BrowserEngine {
       this.boundSessionKey === sessionKey &&
       this.boundAttachmentKey === attachmentKey
     ) {
+      this.boundRunID = request.identity.run_id;
       return;
     }
     if (this.boundSessionKey === sessionKey) {
@@ -1119,11 +1188,13 @@ export class BrowserEngine {
       this.suspectedSticky = false;
       await this.establishDocumentTracker(this.page);
       this.boundAttachmentKey = attachmentKey;
+      this.boundRunID = request.identity.run_id;
       return;
     }
     this.freshObservationRequired = false;
     this.boundSessionKey = "";
     this.boundAttachmentKey = "";
+    this.boundRunID = "";
     const pages = this.modelPages();
     for (const extra of pages.slice(1)) {
       await extra.close();
@@ -1146,6 +1217,7 @@ export class BrowserEngine {
     this.suspectedDocumentGeneration = undefined;
     this.suspectedSticky = false;
     this.boundAttachmentKey = attachmentKey;
+    this.boundRunID = request.identity.run_id;
     if (request.action.kind === "navigate") {
       this.boundSessionKey = sessionKey;
       return;
@@ -2042,6 +2114,58 @@ function viewerAttachmentKey(
     identity.control_epoch,
     identity.controller,
   ].join("\u0000");
+}
+
+function agentAttachmentKey(identity: EngineRequest["identity"]): string {
+  return [
+    identity.attachment_id,
+    identity.control_epoch,
+    identity.browser_interaction_policy,
+    identity.browser_interaction_policy_generation,
+    identity.browser_mutation_origins_sha256,
+  ].join("\u0000");
+}
+
+function opsObserverPageURL(raw: string): string {
+  if (raw === "about:blank") return raw;
+  const parsed = new URL(raw);
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username !== "" ||
+    parsed.password !== ""
+  ) {
+    throw new Error("Ops Observer page URL is not public HTTP(S)");
+  }
+  parsed.search = "";
+  parsed.hash = "";
+  const redacted = parsed.toString();
+  if (Buffer.byteLength(redacted, "utf8") <= 4096) return redacted;
+  parsed.pathname = "/";
+  const originOnly = parsed.toString();
+  if (Buffer.byteLength(originOnly, "utf8") > 4096) {
+    throw new Error("Ops Observer page URL exceeds the output limit");
+  }
+  return originOnly;
+}
+
+async function withOpsObserverTimeout<T>(
+  operation: Promise<T>,
+  timeoutMS: number,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Ops Observer capture timed out")),
+          timeoutMS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function requireProxy(raw: string | undefined): string {

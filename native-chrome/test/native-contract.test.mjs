@@ -14,7 +14,7 @@ const environment = {
   OPENLINKER_NATIVE_CHROME_EXTENSION_ID:
     "abcdefghijklmnopabcdefghijklmnop",
   OPENLINKER_NATIVE_CHROME_EXTENSION_VERSION: "1.2.3.4",
-  OPENLINKER_NATIVE_CHROME_PROTOCOL: "openlinker.native-chrome.v1",
+  OPENLINKER_NATIVE_CHROME_PROTOCOL: "openlinker.native-chrome.v2",
   OPENLINKER_NATIVE_CHROME_ASSET_MANIFEST_SHA256: "a".repeat(64),
 };
 
@@ -35,7 +35,7 @@ test("Native Host environment requires locked image identities", () => {
     socketPath: "/run/openlinker/native-chrome.sock",
     extensionID: "abcdefghijklmnopabcdefghijklmnop",
     extensionVersion: "1.2.3.4",
-    nativeHostProtocol: "openlinker.native-chrome.v1",
+    nativeHostProtocol: "openlinker.native-chrome.v2",
     assetManifestSHA256: "a".repeat(64),
   });
   assert.throws(
@@ -46,7 +46,7 @@ test("Native Host environment requires locked image identities", () => {
 
 test("control protocol carries typed authority but no URL or text", () => {
   const request = {
-    contract_id: "openlinker.native-chrome.control.v1",
+    contract_id: "openlinker.native-chrome.control.v2",
     request_id: "11111111-1111-4111-8111-111111111111",
     method: "authorize_action",
     params: {
@@ -73,17 +73,38 @@ test("control protocol carries typed authority but no URL or text", () => {
     () => validateControlRequest({ ...request, params: { ...request.params, action_kind: "evaluate" } }),
     /action kind/,
   );
+  const observer = {
+    ...request,
+    request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    method: "authorize_observer",
+    params: {
+      ...request.params,
+      observer_operation: "observe_frame",
+    },
+  };
+  delete observer.params.action_kind;
+  assert.equal(
+    validateControlRequest(observer).params.observer_operation,
+    "observe_frame",
+  );
+  assert.throws(
+    () => validateControlRequest({
+      ...observer,
+      params: { ...observer.params, url: "https://secret.example/path?token=x" },
+    }),
+    /fields/,
+  );
 });
 
 test("preflight requires the complete sorted browser_session capability set", () => {
-  assert.equal(REQUIRED_CAPABILITIES.length, 19);
+  assert.equal(REQUIRED_CAPABILITIES.length, 21);
   assert.deepEqual([...REQUIRED_CAPABILITIES].sort(), REQUIRED_CAPABILITIES);
 });
 
 test("Native Host fences preflight, replay and Browser authority generation", () => {
   const fence = createAuthorityFence();
   const action = {
-    contract_id: "openlinker.native-chrome.control.v1",
+    contract_id: "openlinker.native-chrome.control.v2",
     request_id: "11111111-1111-4111-8111-111111111111",
     method: "authorize_action",
     params: {
@@ -118,6 +139,26 @@ test("Native Host fences preflight, replay and Browser authority generation", ()
   };
   fence.admit(admitted, admitted.params);
   assert.throws(() => fence.admit(admitted, admitted.params), /duplicate/);
+  const observed = {
+    ...action,
+    request_id: "abababab-abab-4bab-8bab-abababababab",
+    method: "authorize_observer",
+    params: {
+      ...action.params,
+      observer_operation: "observe_status",
+    },
+  };
+  delete observed.params.action_kind;
+  fence.admit(observed, observed.params);
+  const changedObserver = {
+    ...observed,
+    request_id: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+    params: { ...observed.params, control_epoch: 2 },
+  };
+  assert.throws(
+    () => fence.admit(changedObserver, changedObserver.params),
+    /Observer authority changed/,
+  );
   const rotated = {
     ...action,
     request_id: "88888888-8888-4888-8888-888888888888",

@@ -47,10 +47,12 @@ services:
       OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles
       OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-key/profile-root-key
       OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED: "true"
+      OPENLINKER_BROWSER_OPS_VIEWER_ENABLED: ${OPENLINKER_BROWSER_OPS_VIEWER_ENABLED:-false}
     volumes:
       - claude-browser-control:/browser-control
       - claude-browser-profile-key:/browser-key
       - claude-browser-profile:/browser-state
+      - claude-browser-ops:/browser-ops
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "/usr/local/bin/openlinker-browser-runtime", "healthcheck"]
@@ -65,3 +67,4 @@ volumes:
   claude-browser-control: {}
   claude-browser-profile-key: {}
   claude-browser-profile: {}
+  claude-browser-ops: {}

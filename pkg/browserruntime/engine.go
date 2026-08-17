@@ -24,3 +24,25 @@ type ViewerEngine interface {
 		*browserprotocol.ViewerInput,
 	) (*browserprotocol.ViewerFrame, *browserprotocol.Failure)
 }
+
+type OpsObserverEngine interface {
+	ObserveOps(
+		context.Context,
+		string,
+		browserprotocol.OpsObserverOperation,
+	) (browserprotocol.OpsObserverObservation, bool, *browserprotocol.OpsObserverError)
+}
+
+type activeOpsObserverEngine interface {
+	ObserveActiveOps(
+		context.Context,
+		browserprotocol.Identity,
+		browserprotocol.OpsObserverOperation,
+	) (opsPageObservation, bool, *browserprotocol.OpsObserverError)
+}
+
+type opsPageObservation struct {
+	PageURL   string
+	PageTitle string
+	Frame     *browserprotocol.ViewerFrame
+}

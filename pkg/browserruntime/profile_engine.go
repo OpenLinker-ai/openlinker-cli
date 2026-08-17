@@ -5,6 +5,8 @@ package browserruntime
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -272,6 +274,64 @@ func (engine *ProfileEngine) ExecuteViewer(
 	}
 	engine.active.owner = identity
 	return process.ExecuteViewer(ctx, identity, operation, input)
+}
+
+func (engine *ProfileEngine) ObserveOps(
+	ctx context.Context,
+	runID string,
+	operation browserprotocol.OpsObserverOperation,
+) (browserprotocol.OpsObserverObservation, bool, *browserprotocol.OpsObserverError) {
+	if engine == nil || !engine.mu.TryLock() {
+		if engine == nil {
+			return browserprotocol.OpsObserverObservation{}, false,
+				browserprotocol.NewOpsObserverError(
+					browserprotocol.OpsObserverRunNotActive,
+					"requested Run is not active",
+				)
+		}
+		return browserprotocol.OpsObserverObservation{}, true, nil
+	}
+	if engine.closed || engine.active == nil || engine.active.owner.RunID != runID ||
+		engine.active.process == nil || !engine.active.preflightValidated {
+		engine.mu.Unlock()
+		return browserprotocol.OpsObserverObservation{}, false,
+			browserprotocol.NewOpsObserverError(
+				browserprotocol.OpsObserverRunNotActive,
+				"requested Run is not active",
+			)
+	}
+	identity := engine.active.owner
+	profileGeneration := engine.active.identity.ProfileGeneration
+	process := engine.active.process
+	engine.mu.Unlock()
+	observer, ok := process.(activeOpsObserverEngine)
+	if !ok {
+		return browserprotocol.OpsObserverObservation{}, false,
+			browserprotocol.NewOpsObserverError(
+				browserprotocol.OpsObserverInternalError,
+				"Browser process does not support Ops observation",
+			)
+	}
+	page, busy, observerErr := observer.ObserveActiveOps(ctx, identity, operation)
+	if observerErr != nil || busy {
+		return browserprotocol.OpsObserverObservation{}, busy, observerErr
+	}
+	return browserprotocol.OpsObserverObservation{
+		RunID:                identity.RunID,
+		Controller:           identity.Controller,
+		SessionEpoch:         identity.SessionEpoch,
+		BrowserSessionSHA256: opsIdentitySHA256(identity.BrowserSessionID),
+		AttachmentSHA256:     opsIdentitySHA256(identity.AttachmentID),
+		ProfileGeneration:    profileGeneration,
+		PageURL:              page.PageURL,
+		PageTitle:            page.PageTitle,
+		Frame:                page.Frame,
+	}, false, nil
+}
+
+func opsIdentitySHA256(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
 }
 
 func (engine *ProfileEngine) Close() error {
@@ -607,19 +667,33 @@ func newManagedProcessEngine(options ProcessEngineOptions) (managedBrowserEngine
 }
 
 func withBrowserProfileDirectory(environment []string, directory string) []string {
-	result := make([]string, 0, len(environment)+1)
+	result := make([]string, 0, len(environment)+2)
 	replaced := false
+	opsObserverEnabled := false
 	for _, item := range environment {
 		key, _, found := stringsCut(item)
+		if found && key == "OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED" &&
+			item == "OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED=true" {
+			opsObserverEnabled = true
+		}
 		if found && key == "OPENLINKER_BROWSER_PROFILE_DIR" {
 			result = append(result, key+"="+directory)
 			replaced = true
+			continue
+		}
+		if found && key == "OPENLINKER_BROWSER_ENGINE_OPS_SOCKET" {
 			continue
 		}
 		result = append(result, item)
 	}
 	if !replaced {
 		result = append(result, "OPENLINKER_BROWSER_PROFILE_DIR="+directory)
+	}
+	if opsObserverEnabled {
+		result = append(result,
+			"OPENLINKER_BROWSER_ENGINE_OPS_SOCKET="+
+				filepath.Join(directory, "engine-ops-observer.sock"),
+		)
 	}
 	return result
 }

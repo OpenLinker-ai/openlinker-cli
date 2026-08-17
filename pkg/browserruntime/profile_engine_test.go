@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -50,6 +51,23 @@ func (process *fixtureProfileProcess) Execute(
 
 func (*fixtureProfileProcess) Close() error {
 	return nil
+}
+
+func (*fixtureProfileProcess) ObserveActiveOps(
+	_ context.Context,
+	_ browserprotocol.Identity,
+	operation browserprotocol.OpsObserverOperation,
+) (opsPageObservation, bool, *browserprotocol.OpsObserverError) {
+	page := opsPageObservation{PageURL: "about:blank", PageTitle: "Blank"}
+	if operation == browserprotocol.OpsObserverFrameOperation {
+		page.Frame = &browserprotocol.ViewerFrame{
+			MIMEType: "image/jpeg",
+			Data:     []byte{0xff, 0xd8, 0xff, 0xd9},
+			Width:    browserprotocol.BrowserViewportWidth,
+			Height:   browserprotocol.BrowserViewportHeight,
+		}
+	}
+	return page, false, nil
 }
 
 func TestProfileEngineEncryptsCheckpointAndIsolatesPrincipal(t *testing.T) {
@@ -175,6 +193,48 @@ func TestProfileEnginePreflightPersistsAndReopensNewProfileBeforeReady(
 	}
 	if starts != 2 {
 		t.Fatalf("existing Profile was unnecessarily restarted: %d", starts)
+	}
+}
+
+func TestProfileEngineOpsObservationNeverActivatesAndPreservesAuthority(t *testing.T) {
+	t.Parallel()
+	engine := newFixtureProfileEngine(t, t.TempDir(), t.TempDir())
+	defer engine.Close()
+	starts := 0
+	engine.processFactory = func(options ProcessEngineOptions) (managedBrowserEngine, error) {
+		starts++
+		return fixtureProfileFactory(new(bool))(options)
+	}
+	identity := profileEngineIdentity("ops-observer-principal")
+	if _, busy, observerErr := engine.ObserveOps(
+		context.Background(), identity.RunID, browserprotocol.OpsObserverStatusOperation,
+	); observerErr == nil || observerErr.Code != browserprotocol.OpsObserverRunNotActive || busy || starts != 0 {
+		t.Fatalf("inactive observation busy=%v error=%v process starts=%d", busy, observerErr, starts)
+	}
+	if _, failure := engine.Execute(
+		context.Background(), identity,
+		browserprotocol.Action{Kind: browserprotocol.ActionPreflight},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+	beforeOwner := engine.active.owner
+	beforeIdentity := engine.active.identity
+	observation, busy, observerErr := engine.ObserveOps(
+		context.Background(), identity.RunID, browserprotocol.OpsObserverStatusOperation,
+	)
+	if observerErr != nil || busy || observation.RunID != identity.RunID ||
+		observation.PageURL != "about:blank" || observation.ProfileGeneration != 1 {
+		t.Fatalf("active observation = %#v, busy=%v error=%v", observation, busy, observerErr)
+	}
+	if !reflect.DeepEqual(engine.active.owner, beforeOwner) ||
+		engine.active.identity != beforeIdentity || starts != 2 {
+		t.Fatalf("observation changed Profile authority or process count: owner=%#v starts=%d", engine.active.owner, starts)
+	}
+	if _, busy, observerErr = engine.ObserveOps(
+		context.Background(), "55555555-5555-4555-8555-555555555555",
+		browserprotocol.OpsObserverStatusOperation,
+	); observerErr == nil || observerErr.Code != browserprotocol.OpsObserverRunNotActive || busy {
+		t.Fatalf("wrong Run observation busy=%v error=%v", busy, observerErr)
 	}
 }
 

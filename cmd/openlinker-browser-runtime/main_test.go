@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserruntime"
 )
 
 func TestReadCredentialFileAcceptsOwnerOnlyAbsoluteFile(t *testing.T) {
@@ -23,6 +26,48 @@ func TestReadCredentialFileAcceptsOwnerOnlyAbsoluteFile(t *testing.T) {
 	if value != token {
 		t.Fatalf("credential = %q, want token", value)
 	}
+}
+
+func TestOpsViewerStreamArgumentsAndEngineEnvironmentAreClosed(t *testing.T) {
+	t.Parallel()
+	runID := "11111111-1111-4111-8111-111111111111"
+	parsedRunID, ttl, err := parseOpsViewerStreamArguments([]string{
+		"--run-id", runID, "--ttl", "10m",
+	})
+	if err != nil || parsedRunID != runID || ttl != 10*time.Minute {
+		t.Fatalf("parsed stream arguments = %q, %v, %v", parsedRunID, ttl, err)
+	}
+	for _, arguments := range [][]string{
+		{"--run-id", runID, "--ttl", "59s"},
+		{"--run-id", runID, "--ttl", "31m"},
+		{"--ttl", "10m", "--run-id", runID},
+		{"--run-id", "not-a-uuid", "--ttl", "10m"},
+	} {
+		if _, _, err := parseOpsViewerStreamArguments(arguments); err == nil {
+			t.Fatalf("unsafe stream arguments were accepted: %#v", arguments)
+		}
+	}
+	environment := browserEngineEnvironment(browserruntime.ProfileEnvironment{
+		ProfileGeneration: 1,
+	}, true)
+	if !containsEnvironment(environment, "OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED=true") {
+		t.Fatal("enabled Browser Engine environment is missing the Ops flag")
+	}
+	disabled := browserEngineEnvironment(browserruntime.ProfileEnvironment{
+		ProfileGeneration: 1,
+	}, false)
+	if containsEnvironment(disabled, "OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED=true") {
+		t.Fatal("disabled Browser Engine environment exposes the Ops flag")
+	}
+}
+
+func containsEnvironment(environment []string, expected string) bool {
+	for _, entry := range environment {
+		if entry == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadOrCreateCredentialFileCreatesPrivateInternalCredential(t *testing.T) {

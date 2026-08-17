@@ -448,7 +448,7 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 		BrowserAssetManifestSHA256: strings.Repeat("a", 64),
 		BrowserExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
 		BrowserExtensionVersion:    "1.2.3.4",
-		BrowserNativeHostProtocol:  "openlinker.native-chrome.v1",
+		BrowserNativeHostProtocol:  "openlinker.native-chrome.v2",
 	})
 	for key, expected := range map[string]any{
 		"browser_backend_selected":      "official_chrome_extension",
@@ -456,7 +456,7 @@ func TestOfficialChromeEvidenceIsCompleteAndRedacted(t *testing.T) {
 		"browser_asset_manifest_sha256": strings.Repeat("a", 64),
 		"browser_extension_id":          "abcdefghijklmnopabcdefghijklmnop",
 		"browser_extension_version":     "1.2.3.4",
-		"browser_native_host_protocol":  "openlinker.native-chrome.v1",
+		"browser_native_host_protocol":  "openlinker.native-chrome.v2",
 		"browser_profile_generation":    uint64(7),
 		"browser_session_recovered":     false,
 	} {

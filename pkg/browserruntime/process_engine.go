@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,11 +25,12 @@ import (
 )
 
 const (
-	engineContractID       = "openlinker.browser.engine.v2"
-	engineViewerContractID = "openlinker.browser.engine.viewer.v1"
-	maxEngineOutputBytes   = browserprotocol.MaxResponseBytes
-	maxEngineLogBytes      = 32 << 10
-	maxEngineLogLine       = 4 << 10
+	engineContractID            = "openlinker.browser.engine.v2"
+	engineViewerContractID      = "openlinker.browser.engine.viewer.v1"
+	engineOpsObserverContractID = "openlinker.browser.engine.ops-observer.v1"
+	maxEngineOutputBytes        = browserprotocol.MaxResponseBytes
+	maxEngineLogBytes           = 32 << 10
+	maxEngineLogLine            = 4 << 10
 )
 
 type ProcessEngineOptions struct {
@@ -38,11 +40,12 @@ type ProcessEngineOptions struct {
 }
 
 type ProcessEngine struct {
-	options ProcessEngineOptions
-	mu      sync.Mutex
-	process *engineProcess
-	nextID  uint64
-	closed  bool
+	options       ProcessEngineOptions
+	mu            sync.Mutex
+	process       *engineProcess
+	nextID        uint64
+	closed        bool
+	opsSocketPath string
 }
 
 type engineProcess struct {
@@ -55,6 +58,7 @@ type engineProcess struct {
 }
 
 var processEngineInstanceSequence atomic.Uint64
+var processEngineOpsSequence atomic.Uint64
 
 type engineRequest struct {
 	ContractID string                   `json:"contract_id"`
@@ -89,6 +93,24 @@ type engineViewerResponse struct {
 	Error      *browserprotocol.Failure     `json:"error,omitempty"`
 }
 
+type engineOpsObserverRequest struct {
+	ContractID string                               `json:"contract_id"`
+	ActionID   string                               `json:"action_id"`
+	Deadline   string                               `json:"deadline"`
+	Identity   browserprotocol.Identity             `json:"identity"`
+	Operation  browserprotocol.OpsObserverOperation `json:"operation"`
+}
+
+type engineOpsObserverResponse struct {
+	ContractID string                            `json:"contract_id"`
+	ActionID   string                            `json:"action_id"`
+	Status     string                            `json:"status"`
+	PageURL    string                            `json:"page_url,omitempty"`
+	PageTitle  string                            `json:"page_title,omitempty"`
+	Frame      *browserprotocol.ViewerFrame      `json:"frame,omitempty"`
+	Error      *browserprotocol.OpsObserverError `json:"error,omitempty"`
+}
+
 func NewProcessEngine(options ProcessEngineOptions) (*ProcessEngine, error) {
 	if len(options.Command) == 0 ||
 		!filepath.IsAbs(options.Command[0]) ||
@@ -103,7 +125,15 @@ func NewProcessEngine(options ProcessEngineOptions) (*ProcessEngine, error) {
 	if err := validateEngineEnvironment(options.Environment); err != nil {
 		return nil, err
 	}
-	return &ProcessEngine{options: options}, nil
+	opsSocketPath := engineEnvironmentValue(
+		options.Environment,
+		"OPENLINKER_BROWSER_ENGINE_OPS_SOCKET",
+	)
+	if opsSocketPath != "" &&
+		(!filepath.IsAbs(opsSocketPath) || filepath.Clean(opsSocketPath) != opsSocketPath) {
+		return nil, errors.New("browser engine Ops Observer socket path is invalid")
+	}
+	return &ProcessEngine{options: options, opsSocketPath: opsSocketPath}, nil
 }
 
 func (engine *ProcessEngine) Execute(
@@ -377,6 +407,114 @@ func (engine *ProcessEngine) ExecuteViewer(
 	}
 }
 
+func (engine *ProcessEngine) ObserveActiveOps(
+	ctx context.Context,
+	identity browserprotocol.Identity,
+	operation browserprotocol.OpsObserverOperation,
+) (opsPageObservation, bool, *browserprotocol.OpsObserverError) {
+	if engine == nil {
+		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverRunNotActive,
+			"requested Run is not active",
+		)
+	}
+	if failure := identity.Validate(); failure != nil {
+		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverInternalError,
+			"active Browser identity is invalid",
+		)
+	}
+	switch operation {
+	case browserprotocol.OpsObserverStatusOperation,
+		browserprotocol.OpsObserverFrameOperation:
+	default:
+		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverProtocolError,
+			"Ops Observer operation is invalid",
+		)
+	}
+	if !engine.mu.TryLock() {
+		return opsPageObservation{}, true, nil
+	}
+	if engine.closed || engine.process == nil || engine.opsSocketPath == "" {
+		engine.mu.Unlock()
+		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverRunNotActive,
+			"requested Run is not active",
+		)
+	}
+	socketPath := engine.opsSocketPath
+	engine.mu.Unlock()
+	observeContext, cancel := context.WithTimeout(
+		ctx,
+		browserprotocol.MaxOpsObserverCapture,
+	)
+	defer cancel()
+	deadline, ok := observeContext.Deadline()
+	if !ok {
+		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverInternalError,
+			"Ops Observer deadline is missing",
+		)
+	}
+	dialer := net.Dialer{}
+	connection, err := dialer.DialContext(observeContext, "unix", socketPath)
+	if err != nil {
+		if observeContext.Err() != nil {
+			return opsPageObservation{}, true, nil
+		}
+		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverRunNotActive,
+			"requested Run is not active",
+		)
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(deadline); err != nil {
+		return opsPageObservation{}, true, nil
+	}
+	actionID := strconv.FormatUint(processEngineOpsSequence.Add(1), 10)
+	request := engineOpsObserverRequest{
+		ContractID: engineOpsObserverContractID,
+		ActionID:   actionID,
+		Deadline:   deadline.UTC().Format(browserTimeFormat),
+		Identity:   identity,
+		Operation:  operation,
+	}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		return opsPageObservation{}, true, nil
+	}
+	if unixConnection, ok := connection.(*net.UnixConn); ok {
+		if err := unixConnection.CloseWrite(); err != nil {
+			return opsPageObservation{}, true, nil
+		}
+	}
+	raw, err := readBoundedLine(
+		bufio.NewReaderSize(connection, 64<<10),
+		maxEngineOutputBytes,
+	)
+	if err != nil {
+		return opsPageObservation{}, true, nil
+	}
+	response, err := decodeEngineOpsObserverResponse(raw, actionID, operation)
+	if err != nil {
+		return opsPageObservation{}, false, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverInternalError,
+			"Browser Engine Ops Observer response is invalid",
+		)
+	}
+	if response.Error != nil {
+		if response.Error.Code == browserprotocol.OpsObserverBusyError {
+			return opsPageObservation{}, true, nil
+		}
+		return opsPageObservation{}, false, response.Error
+	}
+	return opsPageObservation{
+		PageURL:   response.PageURL,
+		PageTitle: response.PageTitle,
+		Frame:     response.Frame,
+	}, false, nil
+}
+
 func processResetFailure(failure *browserprotocol.Failure) *browserprotocol.Failure {
 	if failure != nil {
 		failure.EngineProcessReset = true
@@ -639,6 +777,60 @@ func decodeEngineViewerResponse(
 	return response, nil, ""
 }
 
+func decodeEngineOpsObserverResponse(
+	raw []byte,
+	actionID string,
+	operation browserprotocol.OpsObserverOperation,
+) (engineOpsObserverResponse, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var response engineOpsObserverResponse
+	if err := decoder.Decode(&response); err != nil {
+		return engineOpsObserverResponse{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return engineOpsObserverResponse{}, errors.New("Ops Observer response contains trailing JSON")
+		}
+		return engineOpsObserverResponse{}, err
+	}
+	if response.ContractID != engineOpsObserverContractID ||
+		response.ActionID != actionID {
+		return engineOpsObserverResponse{}, errors.New("Ops Observer response identity does not match")
+	}
+	switch response.Status {
+	case "ok":
+		if response.Error != nil ||
+			(operation == browserprotocol.OpsObserverFrameOperation) != (response.Frame != nil) {
+			return engineOpsObserverResponse{}, errors.New("Ops Observer success payload is invalid")
+		}
+		if response.Frame != nil {
+			if failure := response.Frame.Validate(); failure != nil {
+				return engineOpsObserverResponse{}, failure
+			}
+		}
+	case "error":
+		if response.Error == nil || response.Frame != nil ||
+			response.PageURL != "" || response.PageTitle != "" {
+			return engineOpsObserverResponse{}, errors.New("Ops Observer error payload is invalid")
+		}
+		switch response.Error.Code {
+		case browserprotocol.OpsObserverRunNotActive,
+			browserprotocol.OpsObserverBusyError,
+			browserprotocol.OpsObserverInternalError:
+		default:
+			return engineOpsObserverResponse{}, errors.New("Ops Observer error code is invalid")
+		}
+		if response.Error.Message == "" || len(response.Error.Message) > 300 {
+			return engineOpsObserverResponse{}, errors.New("Ops Observer error message is invalid")
+		}
+	default:
+		return engineOpsObserverResponse{}, errors.New("Ops Observer response status is invalid")
+	}
+	return response, nil
+}
+
 var errEngineOutputTooLarge = errors.New("browser engine output is too large")
 
 func readBoundedLine(reader *bufio.Reader, limit int) ([]byte, error) {
@@ -675,6 +867,16 @@ func writeAllProcess(writer io.Writer, value []byte) error {
 	return nil
 }
 
+func engineEnvironmentValue(environment []string, expected string) string {
+	for _, item := range environment {
+		key, value, found := strings.Cut(item, "=")
+		if found && key == expected {
+			return value
+		}
+	}
+	return ""
+}
+
 func validateEngineEnvironment(environment []string) error {
 	allowed := map[string]bool{
 		"HOME":                                                 true,
@@ -708,6 +910,8 @@ func validateEngineEnvironment(environment []string) error {
 		"OPENLINKER_NATIVE_CHROME_ENABLED":                     true,
 		"OPENLINKER_NATIVE_CHROME_REQUIRE_ORIGIN":              true,
 		"OPENLINKER_NATIVE_CHROME_SOCKET":                      true,
+		"OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED":              true,
+		"OPENLINKER_BROWSER_ENGINE_OPS_SOCKET":                 true,
 	}
 	seen := make(map[string]bool, len(environment))
 	for _, item := range environment {
@@ -722,7 +926,8 @@ func validateEngineEnvironment(environment []string) error {
 		case "HOME", "TMPDIR", "OPENLINKER_BROWSER_PROFILE_DIR", "PLAYWRIGHT_BROWSERS_PATH",
 			"OPENLINKER_BROWSER_EXECUTABLE_PATH",
 			"OPENLINKER_NATIVE_CHROME_BINARY", "OPENLINKER_NATIVE_CHROME_EXTENSION_ROOT",
-			"OPENLINKER_NATIVE_CHROME_HOST", "OPENLINKER_NATIVE_CHROME_SOCKET":
+			"OPENLINKER_NATIVE_CHROME_HOST", "OPENLINKER_NATIVE_CHROME_SOCKET",
+			"OPENLINKER_BROWSER_ENGINE_OPS_SOCKET":
 			if !filepath.IsAbs(value) || filepath.Clean(value) != value {
 				return errors.New("browser engine environment path must be absolute and clean")
 			}
@@ -756,8 +961,16 @@ func validateEngineEnvironment(environment []string) error {
 			if value != "true" {
 				return errors.New("browser engine native Chrome gate must be enabled")
 			}
+		case "OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED":
+			if value != "true" {
+				return errors.New("browser engine Ops Observer flag must be enabled")
+			}
 		}
 		seen[key] = true
+	}
+	if seen["OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED"] !=
+		seen["OPENLINKER_BROWSER_ENGINE_OPS_SOCKET"] {
+		return errors.New("browser engine Ops Observer flag and socket must be configured together")
 	}
 	return nil
 }

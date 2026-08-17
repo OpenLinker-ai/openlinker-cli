@@ -218,7 +218,7 @@ func writeOfficialChromeAssetFixture(
 		ExtensionUpdateManifest:  updatePath,
 		ExtensionPolicyPath:      policyPath,
 		NativeHostPath:           filepath.Join(root, "native-host"),
-		NativeHostProtocol:       "openlinker.native-chrome.v1",
+		NativeHostProtocol:       "openlinker.native-chrome.v2",
 		NativeMessagingManifest:  nativeManifestPath,
 		EnginePath:               filepath.Join(root, "native-engine"),
 		ProfileGeneration:        1,
