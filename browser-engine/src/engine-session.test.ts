@@ -16,6 +16,7 @@ import { PageContinuationStore } from "./page-continuation.js";
 import {
   type BrowserAction,
   ENGINE_CONTRACT_ID,
+  ENGINE_OPS_OBSERVER_CONTRACT_ID,
   type EngineRequest,
   type Identity,
   type ObservationMode,
@@ -282,6 +283,49 @@ test("executes a safe batch with exactly one final observation", async () => {
   });
   assert.equal(response.status, "ok");
   assert.equal(context.createdPages[0]?.screenshotCalls, 1);
+});
+
+test("Ops Observer reuses the last settled title without a concurrent title request", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openlinker-engine-"));
+  const continuation = new PageContinuationStore(root);
+  const context = new FakeContext(() => new FakePage());
+  const engine = createEngine(context, continuation, async () => true);
+  const identity = fixtureIdentity(1);
+
+  const action = await engine.execute(request(identity, "1", "navigate"));
+  assert.equal(action.status, "ok");
+  const page = context.createdPages[0];
+  assert.ok(page);
+  page.titleError = new playwrightErrors.TimeoutError(
+    "concurrent title request must not run",
+  );
+
+  const observed = await engine.executeOpsObserver({
+    contract_id: ENGINE_OPS_OBSERVER_CONTRACT_ID,
+    action_id: "2",
+    deadline: new Date(Date.now() + 500).toISOString(),
+    identity,
+    operation: "observe_status",
+  });
+  assert.equal(observed.status, "ok");
+  if (observed.status === "ok") {
+    assert.equal(observed.page_title, "Fixture page");
+    assert.equal(observed.page_url, "https://public.example/redirect");
+  }
+  const frame = await engine.executeOpsObserver({
+    contract_id: ENGINE_OPS_OBSERVER_CONTRACT_ID,
+    action_id: "3",
+    deadline: new Date(Date.now() + 500).toISOString(),
+    identity,
+    operation: "observe_frame",
+  });
+  assert.equal(frame.status, "ok");
+  if (frame.status === "ok") {
+    assert.equal(frame.page_title, "Fixture page");
+    assert.equal(frame.frame?.mime_type, "image/jpeg");
+  }
+  assert.equal(page.titleCalls, 1);
+  assert.equal(page.screenshotCalls, 1);
 });
 
 test("reports the failed action index for any batch execution failure", async () => {
@@ -1307,6 +1351,8 @@ class FakeContext {
 class FakePage {
   readonly sessionStorage = new Map<string, string>();
   screenshotCalls = 0;
+  titleCalls = 0;
+  titleError: Error | undefined;
   ariaError: Error | undefined;
   bodyError: Error | undefined;
   waitError: Error | undefined;
@@ -1483,6 +1529,8 @@ class FakePage {
   }
 
   async title(): Promise<string> {
+    this.titleCalls++;
+    if (this.titleError !== undefined) throw this.titleError;
     return this.currentURL === "about:blank" ? "" : "Fixture page";
   }
 }
