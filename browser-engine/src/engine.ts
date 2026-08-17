@@ -131,6 +131,7 @@ export class BrowserEngine {
   private boundAttachmentKey = "";
   private boundRunID = "";
   private lastBodyText = "";
+  private lastSettledPageTitle = "";
   private navigationGeneration = 1;
   private readonly blockedNavigationPages = new WeakSet<Page>();
   private readonly configuredPages = new WeakSet<Page>();
@@ -626,10 +627,12 @@ export class BrowserEngine {
         timeout,
       );
       const pageURL = opsObserverPageURL(this.page.url());
-      const pageTitle = await withOpsObserverTimeout(
-        this.page.title(),
-        Math.max(1, Math.min(timeout, remainingTimeout(request.deadline))),
-      );
+      // Agent actions already obtain the page title while settling their
+      // observation. Reuse that bounded value here: asking Playwright for a
+      // second title concurrently with an in-flight action can fail fast with
+      // TimeoutError and make every Ops observation look busy before the JPEG
+      // capture is even attempted.
+      const pageTitle = truncateUTF8(this.lastSettledPageTitle, 512);
       if (request.operation === "observe_status") {
         return opsObserverSuccess(request.action_id, pageURL, pageTitle);
       }
@@ -1206,6 +1209,7 @@ export class BrowserEngine {
       await pages[0].close();
     }
     this.lastBodyText = "";
+    this.lastSettledPageTitle = "";
     this.blockedNavigationPages.delete(page);
     page.setDefaultTimeout(timeout);
     page.setDefaultNavigationTimeout(timeout);
@@ -1724,6 +1728,7 @@ export class BrowserEngine {
       this.lastBodyText = bodyText.value;
     }
     const boundedTitle = truncateUTF8(title, 2048);
+    this.lastSettledPageTitle = boundedTitle;
     const pageStateID = createHash("sha256")
       .update("openlinker.browser.page-state.v2\u0000")
       .update(truncateUTF8(page.url(), 4096))
