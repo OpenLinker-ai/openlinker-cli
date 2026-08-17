@@ -50,6 +50,7 @@ test("Engine Ops Observer UDS is opt-in, owner-only and one-shot", async () => {
       value: EngineOpsObserverRequest,
     ): Promise<EngineOpsObserverResponse> => {
       observed = value;
+      await new Promise((resolve) => setTimeout(resolve, 10));
       return opsObserverSuccess(value.action_id, "about:blank", "Blank");
     },
   } as unknown as BrowserEngine;
@@ -85,7 +86,9 @@ function exchange(
     const socket = createConnection(socketPath);
     let output = "";
     socket.setEncoding("utf8");
-    socket.on("connect", () => socket.write(`${JSON.stringify(value)}\n`));
+    // Match ProcessEngine: one framed request followed by CloseWrite. The
+    // Engine must still keep its writable half alive for the async response.
+    socket.on("connect", () => socket.end(`${JSON.stringify(value)}\n`));
     socket.on("data", (chunk: string) => {
       output += chunk;
     });
