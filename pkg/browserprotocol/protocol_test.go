@@ -445,7 +445,7 @@ func TestBackendSelectionEvidenceIsStrictAndRedacted(t *testing.T) {
 		AssetManifestSHA256: strings.Repeat("a", 64),
 		ExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
 		ExtensionVersion:    "1.2.3.4",
-		NativeHostProtocol:  "openlinker.native-chrome.v1",
+		NativeHostProtocol:  "openlinker.native-chrome.v2",
 		ProfileGeneration:   7,
 	}
 	if failure := official.Validate(); failure != nil {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +23,10 @@ import (
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclient"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserruntime"
+)
+
+var opsViewerRunIDPattern = regexp.MustCompile(
+	`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
 )
 
 const (
@@ -40,6 +46,8 @@ const (
 	defaultFontContractVersion = "openlinker.browser.fonts.v1"
 	defaultEgressLabel         = "default"
 	defaultOfficialChromeLock  = "/opt/openlinker/native-chrome/assets.lock.json"
+	defaultOpsObserverSocket   = "/browser-ops/openlinker.browser.ops-viewer.sock"
+	defaultOpsCredential       = "/browser-ops/channel-credential"
 	defaultHealthcheckTimeout  = 2 * time.Second
 	maxCredentialBytes         = 4096
 )
@@ -56,7 +64,22 @@ func run() error {
 		if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 			return runHealthcheck()
 		}
+		if os.Args[1] == "ops-viewer-stream" {
+			return runOpsViewerStream(os.Args[2:], os.Stdout)
+		}
 		return errors.New("Browser Runtime command is invalid")
+	}
+	opsObserverEnabled, err := booleanValue(
+		"OPENLINKER_BROWSER_OPS_VIEWER_ENABLED",
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if !opsObserverEnabled {
+		if err := removeDisabledOpsObserverArtifacts(); err != nil {
+			return err
+		}
 	}
 	socketPath := strings.TrimSpace(os.Getenv("OPENLINKER_BROWSER_SOCKET"))
 	if socketPath == "" {
@@ -77,7 +100,7 @@ func run() error {
 	isolated, err := browserruntime.NewProfileEngine(browserruntime.ProfileEngineOptions{
 		Process: browserruntime.ProcessEngineOptions{
 			Command:     []string{defaultEngineExecutable, defaultEngineScript},
-			Environment: browserEngineEnvironment(profileEnvironment),
+			Environment: browserEngineEnvironment(profileEnvironment, opsObserverEnabled),
 		},
 		Environment: profileEnvironment,
 		StoreRoot:   value("OPENLINKER_BROWSER_PROFILE_STORE", defaultProfileStore),
@@ -102,7 +125,7 @@ func run() error {
 		officialBackend, officialErr := browserruntime.NewOfficialChromeBackend(
 			browserruntime.OfficialChromeBackendOptions{
 				Assets:             assets,
-				BaseEnvironment:    browserEngineEnvironment(profileEnvironment),
+				BaseEnvironment:    browserEngineEnvironment(profileEnvironment, opsObserverEnabled),
 				Locale:             profileEnvironment.Evidence.BrowserLocale,
 				Timezone:           profileEnvironment.Evidence.BrowserTimezone,
 				FontContract:       profileEnvironment.Evidence.FontContractVersion,
@@ -155,9 +178,58 @@ func run() error {
 	if err != nil {
 		return errors.Join(err, engine.Close())
 	}
+	var opsServer *browserruntime.OpsObserverServer
+	if opsObserverEnabled {
+		opsCredential, credentialErr := loadOrCreateCredentialFile(
+			value("OPENLINKER_BROWSER_OPS_CREDENTIAL_FILE", defaultOpsCredential),
+		)
+		if credentialErr != nil {
+			return errors.Join(credentialErr, engine.Close())
+		}
+		opsServer, err = browserruntime.NewOpsObserverServer(
+			browserruntime.OpsObserverServerOptions{
+				SocketPath: value(
+					"OPENLINKER_BROWSER_OPS_SOCKET",
+					defaultOpsObserverSocket,
+				),
+				ChannelCredential: opsCredential,
+				Observer:          engine,
+			},
+		)
+		if err != nil {
+			return errors.Join(err, engine.Close())
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	serveErr := server.Serve(ctx)
+	serveContext, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
+	serverCount := 1
+	serveResults := make(chan error, 2)
+	go func() { serveResults <- server.Serve(serveContext) }()
+	if opsServer != nil {
+		serverCount++
+		go func() { serveResults <- opsServer.Serve(serveContext) }()
+	}
+	var serveErr error
+	completed := 0
+	select {
+	case <-ctx.Done():
+	case serveErr = <-serveResults:
+		completed = 1
+		if serveErr == nil {
+			serveErr = errors.New("Browser Runtime server stopped unexpectedly")
+		}
+	}
+	cancelServe()
+	_ = server.Close()
+	if opsServer != nil {
+		_ = opsServer.Close()
+	}
+	for completed < serverCount {
+		serveErr = errors.Join(serveErr, <-serveResults)
+		completed++
+	}
 	closeErr := engine.Close()
 	return errors.Join(serveErr, closeErr)
 }
@@ -183,8 +255,11 @@ func runHealthcheck() error {
 	)
 }
 
-func browserEngineEnvironment(environment browserruntime.ProfileEnvironment) []string {
-	return []string{
+func browserEngineEnvironment(
+	environment browserruntime.ProfileEnvironment,
+	opsObserverEnabled bool,
+) []string {
+	result := []string{
 		"HOME=" + value("HOME", "/home/pwuser"),
 		"TMPDIR=" + value("TMPDIR", "/browser-tmp"),
 		"NO_PROXY=",
@@ -212,6 +287,126 @@ func browserEngineEnvironment(environment browserruntime.ProfileEnvironment) []s
 		"PLAYWRIGHT_BROWSERS_PATH=" + value("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright"),
 		"LANG=" + value("LANG", "C.UTF-8"),
 	}
+	if opsObserverEnabled {
+		result = append(result, "OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED=true")
+	}
+	return result
+}
+
+func runOpsViewerStream(arguments []string, output io.Writer) error {
+	runID, ttl, err := parseOpsViewerStreamArguments(arguments)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	leaseContext, cancelLease := context.WithTimeout(ctx, ttl)
+	defer cancelLease()
+	stream, err := browserclient.NewOpsObserverStream(
+		leaseContext,
+		browserclient.OpsObserverConfig{
+			SocketPath: value(
+				"OPENLINKER_BROWSER_OPS_SOCKET",
+				defaultOpsObserverSocket,
+			),
+			CredentialFile: value(
+				"OPENLINKER_BROWSER_OPS_CREDENTIAL_FILE",
+				defaultOpsCredential,
+			),
+			RunID: runID,
+			TTL:   ttl,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	encoder := json.NewEncoder(output)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		requestContext, cancel := context.WithTimeout(
+			leaseContext,
+			browserprotocol.MaxOpsObserverDeadline,
+		)
+		response, observerErr := stream.Observe(
+			requestContext,
+			browserprotocol.OpsObserverFrameOperation,
+		)
+		cancel()
+		if response.ContractID != "" {
+			if err := encoder.Encode(response); err != nil {
+				return errors.New("write Ops Viewer stream")
+			}
+		}
+		if observerErr != nil {
+			return observerErr
+		}
+		select {
+		case <-leaseContext.Done():
+			if errors.Is(leaseContext.Err(), context.DeadlineExceeded) {
+				return nil
+			}
+			return leaseContext.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func parseOpsViewerStreamArguments(arguments []string) (string, time.Duration, error) {
+	if len(arguments) != 4 || arguments[0] != "--run-id" || arguments[2] != "--ttl" {
+		return "", 0, errors.New(
+			"ops-viewer-stream requires --run-id UUID --ttl DURATION",
+		)
+	}
+	if !opsViewerRunIDPattern.MatchString(arguments[1]) {
+		return "", 0, errors.New("Ops Viewer Run ID is invalid")
+	}
+	ttl, err := time.ParseDuration(arguments[3])
+	if err != nil || ttl < browserprotocol.MinOpsObserverTTL ||
+		ttl > browserprotocol.MaxOpsObserverTTL {
+		return "", 0, errors.New("Ops Viewer TTL must be between 1m and 30m")
+	}
+	return arguments[1], ttl, nil
+}
+
+func removeDisabledOpsObserverArtifacts() error {
+	for _, artifact := range []struct {
+		path       string
+		credential bool
+	}{
+		{
+			path: value("OPENLINKER_BROWSER_OPS_SOCKET", defaultOpsObserverSocket),
+		},
+		{
+			path:       value("OPENLINKER_BROWSER_OPS_CREDENTIAL_FILE", defaultOpsCredential),
+			credential: true,
+		},
+	} {
+		path := filepath.Clean(artifact.path)
+		if !filepath.IsAbs(path) {
+			return errors.New("Ops Viewer artifact path must be absolute")
+		}
+		info, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("Ops Viewer disabled artifact is invalid")
+		}
+		stat, owned := info.Sys().(*syscall.Stat_t)
+		if !owned || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
+			return errors.New("Ops Viewer disabled artifact is not private")
+		}
+		if (artifact.credential && !info.Mode().IsRegular()) ||
+			(!artifact.credential && info.Mode()&os.ModeSocket == 0) {
+			return errors.New("Ops Viewer disabled artifact type is invalid")
+		}
+		if err := os.Remove(path); err != nil {
+			return errors.New("remove disabled Ops Viewer artifact")
+		}
+	}
+	return nil
 }
 
 func browserProfileEnvironment() (browserruntime.ProfileEnvironment, error) {

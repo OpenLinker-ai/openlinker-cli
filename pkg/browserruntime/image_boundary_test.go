@@ -222,6 +222,8 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			"OPENLINKER_BROWSER_PROFILE_STORE: /browser-state/encrypted-profiles",
 			"OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles",
 			"OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-key/profile-root-key",
+			"OPENLINKER_BROWSER_OPS_VIEWER_ENABLED: ${OPENLINKER_BROWSER_OPS_VIEWER_ENABLED:-false}",
+			"-browser-ops:/browser-ops",
 			"-profile-key:/browser-key",
 			"- agent-internal",
 			"/browser-home:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
@@ -253,6 +255,9 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		}
 		if strings.Count(source, "    init: true\n") != 1 {
 			t.Errorf("%s must enable init only for Browser Runtime", name)
+		}
+		if strings.Count(source, "-browser-ops:/browser-ops") != 1 {
+			t.Errorf("%s must mount the Ops volume only into Browser Runtime", name)
 		}
 	}
 	codexHealth := browserRuntimeHealthContract(

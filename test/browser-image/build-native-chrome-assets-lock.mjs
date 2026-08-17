@@ -18,6 +18,8 @@ const CAPABILITIES = [
   "keypress",
   "navigate",
   "observe",
+  "ops_observe_frame",
+  "ops_observe_status",
   "policy_evidence",
   "restricted",
   "screenshot",

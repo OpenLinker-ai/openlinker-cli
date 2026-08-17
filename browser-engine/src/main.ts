@@ -1,6 +1,7 @@
 import { once } from "node:events";
 
 import { BrowserEngine } from "./engine.js";
+import { OpsObserverServer } from "./ops-observer-server.js";
 import {
   ENGINE_VIEWER_CONTRACT_ID,
   failure,
@@ -15,7 +16,9 @@ const MAX_INPUT_BYTES = 256 * 1024;
 
 async function main(): Promise<void> {
   const engine = await BrowserEngine.create(process.env);
+  const opsObserver = await OpsObserverServer.start(engine, process.env);
   const shutdown = async (): Promise<void> => {
+    await opsObserver?.close().catch(() => undefined);
     await engine.close().catch(() => undefined);
     process.exit(0);
   };
@@ -52,6 +55,7 @@ async function main(): Promise<void> {
     }
     await writeResponse(response);
   }
+  await opsObserver?.close();
   await engine.close();
 }
 

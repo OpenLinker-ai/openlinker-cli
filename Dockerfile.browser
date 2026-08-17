@@ -38,6 +38,7 @@ RUN groupadd --gid 10001 openlinker-browser \
  && useradd --uid 10001 --gid 10001 --home-dir /browser-home --no-create-home --shell /usr/sbin/nologin openlinker-browser \
  && install -d -o 10001 -g 10001 -m 0700 /browser-home /browser-key /browser-state /browser-state/encrypted-profiles /browser-tmp /browser-tmp/profiles \
  && install -d -o 10001 -g 10001 -m 0700 /browser-control /browser-control/leases \
+ && install -d -o 10001 -g 10001 -m 0700 /browser-ops \
  && install -d -o root -g root -m 0555 /opt/openlinker/browser-engine
 COPY --chown=root:root --chmod=0555 test/browser-image/font-manifest.sh /usr/local/bin/openlinker-browser-font-manifest
 COPY --chown=root:root --chmod=0444 browser-engine/font-contract-v1.sha256 /opt/openlinker/browser-engine/font-contract-v1.sha256
@@ -61,6 +62,9 @@ ENV HOME=/browser-home \
     OPENLINKER_BROWSER_SOCKET=/browser-control/openlinker.browser.sock \
     OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE=/browser-control/channel-credential \
     OPENLINKER_BROWSER_ACTIVE_LEASE_FILE=/browser-control/leases/active-lease.json \
+    OPENLINKER_BROWSER_OPS_VIEWER_ENABLED=false \
+    OPENLINKER_BROWSER_OPS_SOCKET=/browser-ops/openlinker.browser.ops-viewer.sock \
+    OPENLINKER_BROWSER_OPS_CREDENTIAL_FILE=/browser-ops/channel-credential \
     OPENLINKER_BROWSER_PROFILE_DIR=/browser-tmp/profiles/active \
     OPENLINKER_BROWSER_PROFILE_STORE=/browser-state/encrypted-profiles \
     OPENLINKER_BROWSER_PROFILE_WORK_ROOT=/browser-tmp/profiles \

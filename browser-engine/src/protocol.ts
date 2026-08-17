@@ -9,6 +9,8 @@ import {
 export const ENGINE_CONTRACT_ID = "openlinker.browser.engine.v2";
 export const ENGINE_VIEWER_CONTRACT_ID =
   "openlinker.browser.engine.viewer.v1";
+export const ENGINE_OPS_OBSERVER_CONTRACT_ID =
+  "openlinker.browser.engine.ops-observer.v1";
 
 export type Controller = "agent" | "none" | "human";
 
@@ -107,6 +109,16 @@ export interface EngineViewerRequest {
   identity: Identity;
   operation: ViewerOperation;
   input?: ViewerInput;
+}
+
+export type OpsObserverOperation = "observe_status" | "observe_frame";
+
+export interface EngineOpsObserverRequest {
+  contract_id: typeof ENGINE_OPS_OBSERVER_CONTRACT_ID;
+  action_id: string;
+  deadline: string;
+  identity: Identity;
+  operation: OpsObserverOperation;
 }
 
 export type BrowserErrorCode =
@@ -258,6 +270,30 @@ export type EngineViewerResponse =
       error: EngineFailure;
     };
 
+export type EngineOpsObserverResponse =
+  | {
+      contract_id: typeof ENGINE_OPS_OBSERVER_CONTRACT_ID;
+      action_id: string;
+      status: "ok";
+      page_url: string;
+      page_title: string;
+      frame?: {
+        mime_type: "image/jpeg";
+        data: string;
+        width: number;
+        height: number;
+      };
+    }
+  | {
+      contract_id: typeof ENGINE_OPS_OBSERVER_CONTRACT_ID;
+      action_id: string;
+      status: "error";
+      error: {
+        code: "RUN_NOT_ACTIVE" | "OPS_VIEWER_BUSY" | "OPS_VIEWER_INTERNAL";
+        message: string;
+      };
+    };
+
 const REQUEST_FIELDS = new Set([
   "contract_id",
   "action_id",
@@ -286,6 +322,13 @@ const VIEWER_REQUEST_FIELDS = new Set([
   "identity",
   "operation",
   "input",
+]);
+const OPS_OBSERVER_REQUEST_FIELDS = new Set([
+  "contract_id",
+  "action_id",
+  "deadline",
+  "identity",
+  "operation",
 ]);
 const VIEWER_INPUT_FIELDS = new Set([
   "kind",
@@ -395,6 +438,36 @@ export function parseViewerRequest(
     identity,
     operation: operation as ViewerOperation,
     ...(input === undefined ? {} : { input }),
+  };
+}
+
+export function parseOpsObserverRequest(
+  line: string,
+  now = Date.now(),
+): EngineOpsObserverRequest {
+  if (Buffer.byteLength(line, "utf8") > 256 * 1024) {
+    throw new Error("engine Ops Observer request exceeds input limit");
+  }
+  const value: unknown = JSON.parse(line);
+  const request = requireRecord(value, "request");
+  requireExactFields(request, OPS_OBSERVER_REQUEST_FIELDS, "request");
+  if (request.contract_id !== ENGINE_OPS_OBSERVER_CONTRACT_ID) {
+    throw new Error("unsupported engine Ops Observer contract");
+  }
+  const actionID = requireString(request.action_id, "action_id", 1, 32);
+  if (!/^[1-9][0-9]*$/.test(actionID)) {
+    throw new Error("action_id is invalid");
+  }
+  const operation = requireString(request.operation, "operation", 13, 14);
+  if (operation !== "observe_status" && operation !== "observe_frame") {
+    throw new Error("engine Ops Observer operation is invalid");
+  }
+  return {
+    contract_id: ENGINE_OPS_OBSERVER_CONTRACT_ID,
+    action_id: actionID,
+    deadline: parseDeadline(request.deadline, now),
+    identity: parseIdentity(request.identity),
+    operation,
   };
 }
 
@@ -1026,6 +1099,43 @@ export function viewerFailure(
       code,
       message: truncateUTF8(message.trim(), 500),
       recoverable,
+    },
+  };
+}
+
+export function opsObserverSuccess(
+  actionID: string,
+  pageURL: string,
+  pageTitle: string,
+  frame?: {
+    mime_type: "image/jpeg";
+    data: string;
+    width: number;
+    height: number;
+  },
+): EngineOpsObserverResponse {
+  return {
+    contract_id: ENGINE_OPS_OBSERVER_CONTRACT_ID,
+    action_id: actionID,
+    status: "ok",
+    page_url: pageURL,
+    page_title: truncateUTF8(pageTitle, 512),
+    ...(frame === undefined ? {} : { frame }),
+  };
+}
+
+export function opsObserverFailure(
+  actionID: string,
+  code: "RUN_NOT_ACTIVE" | "OPS_VIEWER_BUSY" | "OPS_VIEWER_INTERNAL",
+  message: string,
+): EngineOpsObserverResponse {
+  return {
+    contract_id: ENGINE_OPS_OBSERVER_CONTRACT_ID,
+    action_id: actionID,
+    status: "error",
+    error: {
+      code,
+      message: truncateUTF8(message.trim(), 300),
     },
   };
 }

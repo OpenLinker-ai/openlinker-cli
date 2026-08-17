@@ -5,9 +5,13 @@ import path from "node:path";
 
 import type { BrowserContext, Page } from "playwright-core";
 
-import type { EngineRequest, EngineViewerRequest } from "./protocol.js";
+import type {
+  EngineOpsObserverRequest,
+  EngineRequest,
+  EngineViewerRequest,
+} from "./protocol.js";
 
-const CONTROL_CONTRACT = "openlinker.native-chrome.control.v1";
+const CONTROL_CONTRACT = "openlinker.native-chrome.control.v2";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REQUIRED_CAPABILITIES = [
   "act",
@@ -21,6 +25,8 @@ const REQUIRED_CAPABILITIES = [
   "keypress",
   "navigate",
   "observe",
+  "ops_observe_frame",
+  "ops_observe_status",
   "policy_evidence",
   "restricted",
   "screenshot",
@@ -200,6 +206,28 @@ export class NativeChromeGate {
     this.hostProcessGenerationNonce = hostProcessGenerationNonce;
   }
 
+  async authorizeObserver(request: EngineOpsObserverRequest): Promise<void> {
+    const authority = authorityFromRequest(request);
+    if (this.authority === undefined || !sameAuthority(authority, this.authority)) {
+      throw new Error(
+        "official Chrome Ops Observer does not match active Browser authority",
+      );
+    }
+    const timeout = Math.max(
+      1,
+      Math.min(500, Date.parse(request.deadline) - Date.now()),
+    );
+    const result = await this.request(
+      "authorize_observer",
+      {
+        ...authority,
+        observer_operation: request.operation,
+      },
+      timeout,
+    );
+    this.requireAuthorization(result);
+  }
+
   private async prepareHost(
     authority: GateAuthority,
     callerBindsAuthority = false,
@@ -244,16 +272,25 @@ export class NativeChromeGate {
   }
 
   private async request(
-    method: "preflight" | "authorize_action" | "authorize_viewer",
+    method:
+      | "preflight"
+      | "authorize_action"
+      | "authorize_viewer"
+      | "authorize_observer",
     params: Record<string, unknown>,
+    timeoutMS = 20_000,
   ): Promise<Record<string, unknown>> {
     const requestID = randomUUID();
-    const response = await exchange(this.config.socketPath, {
-      contract_id: CONTROL_CONTRACT,
-      request_id: requestID,
-      method,
-      params,
-    });
+    const response = await exchange(
+      this.config.socketPath,
+      {
+        contract_id: CONTROL_CONTRACT,
+        request_id: requestID,
+        method,
+        params,
+      },
+      timeoutMS,
+    );
     const responseFields = Object.keys(response).sort().join(",");
     if (
       (response.ok === true
@@ -272,7 +309,7 @@ export class NativeChromeGate {
 }
 
 function authorityFromRequest(
-  request: EngineRequest | EngineViewerRequest,
+  request: EngineRequest | EngineViewerRequest | EngineOpsObserverRequest,
 ): GateAuthority {
   return {
     browser_session_id: request.identity.browser_session_id,
@@ -303,6 +340,7 @@ function sameAuthority(left: GateAuthority, right: GateAuthority): boolean {
 function exchange(
   socketPath: string,
   request: Record<string, unknown>,
+  timeoutMS = 20_000,
 ): Promise<GateResponse> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
@@ -310,7 +348,7 @@ function exchange(
     const timeout = setTimeout(() => {
       socket.destroy();
       reject(new Error("official Chrome Native Host timed out"));
-    }, 20_000);
+    }, timeoutMS);
     socket.setEncoding("utf8");
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
     socket.on("data", (chunk: string) => {

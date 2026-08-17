@@ -5,6 +5,7 @@ package browserruntime
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 )
@@ -17,6 +18,16 @@ type selectorTestBackend struct {
 	aborted           bool
 	profileGeneration uint64
 	sessionRecovered  bool
+	opsCalls          int
+}
+
+func (backend *selectorTestBackend) ObserveOps(
+	_ context.Context,
+	runID string,
+	_ browserprotocol.OpsObserverOperation,
+) (browserprotocol.OpsObserverObservation, bool, *browserprotocol.OpsObserverError) {
+	backend.opsCalls++
+	return browserprotocol.OpsObserverObservation{RunID: runID}, false, nil
 }
 
 func (backend *selectorTestBackend) ProfileSelectionEvidence() (uint64, bool, bool) {
@@ -97,6 +108,49 @@ func TestBackendSelectorAutoPrefersOfficialAndLocksSelection(t *testing.T) {
 		browserprotocol.Action{Kind: browserprotocol.ActionPreflight, BackendMode: "isolated"},
 	); failure == nil || failure.Code != browserprotocol.ErrorProtocolInvalid {
 		t.Fatalf("backend reselection failure = %#v", failure)
+	}
+}
+
+func TestBackendSelectorOpsObserverIsRunBoundAndActionPriority(t *testing.T) {
+	official := &selectorTestBackend{}
+	selector, err := NewBackendSelector(BackendSelectorOptions{
+		Official: official, OfficialEvidence: validOfficialSelectionEvidence(),
+		Isolated: &selectorTestBackend{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := browserprotocol.Identity{
+		RunID: "11111111-1111-4111-8111-111111111111",
+	}
+	if _, failure := selector.Execute(
+		context.Background(), identity,
+		browserprotocol.Action{Kind: browserprotocol.ActionPreflight, BackendMode: ModeOpenLinkerNativeChrome},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+	selector.pending.Add(1)
+	started := time.Now()
+	_, busy, observerErr := selector.ObserveOps(
+		context.Background(), identity.RunID, browserprotocol.OpsObserverStatusOperation,
+	)
+	selector.pending.Add(-1)
+	if observerErr != nil || !busy || official.opsCalls != 0 ||
+		time.Since(started) > 100*time.Millisecond {
+		t.Fatalf("pending action observation busy=%v error=%v calls=%d", busy, observerErr, official.opsCalls)
+	}
+	if _, busy, observerErr = selector.ObserveOps(
+		context.Background(), "22222222-2222-4222-8222-222222222222",
+		browserprotocol.OpsObserverStatusOperation,
+	); observerErr == nil || observerErr.Code != browserprotocol.OpsObserverRunNotActive || busy || official.opsCalls != 0 {
+		t.Fatalf("wrong Run observation busy=%v error=%v calls=%d", busy, observerErr, official.opsCalls)
+	}
+	observation, busy, observerErr := selector.ObserveOps(
+		context.Background(), identity.RunID, browserprotocol.OpsObserverStatusOperation,
+	)
+	if observerErr != nil || busy || official.opsCalls != 1 ||
+		observation.SelectedBackend != BackendOfficialChrome || observation.ProfileGeneration != 7 {
+		t.Fatalf("Run observation = %#v, busy=%v error=%v calls=%d", observation, busy, observerErr, official.opsCalls)
 	}
 }
 
@@ -545,7 +599,7 @@ func validOfficialSelectionEvidence() browserprotocol.BackendSelectionEvidence {
 		AssetManifestSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ExtensionID:         "abcdefghijklmnopabcdefghijklmnop",
 		ExtensionVersion:    "1.2.3.4",
-		NativeHostProtocol:  "openlinker.native-chrome.v1",
+		NativeHostProtocol:  "openlinker.native-chrome.v2",
 		ProfileGeneration:   7,
 	}
 }

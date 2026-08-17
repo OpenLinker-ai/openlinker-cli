@@ -5,9 +5,11 @@ import test from "node:test";
 import {
   ENGINE_CONTRACT_ID,
   ENGINE_VIEWER_CONTRACT_ID,
+  ENGINE_OPS_OBSERVER_CONTRACT_ID,
   failure,
   parseRequest,
   parseViewerRequest,
+  parseOpsObserverRequest,
   truncateUTF8,
 } from "./protocol.js";
 
@@ -160,6 +162,43 @@ test("strictly separates human Viewer input from Agent actions", () => {
         ...viewer,
         input: { ...viewer.input, javascript: "document.cookie" },
       }),
+      Date.parse("2029-12-31T23:59:30Z"),
+    ),
+  );
+});
+
+test("Ops Observer protocol is exact and structurally read-only", () => {
+  const value = request();
+  const observer = {
+    contract_id: ENGINE_OPS_OBSERVER_CONTRACT_ID,
+    action_id: "2",
+    deadline: value.deadline,
+    identity: value.identity,
+    operation: "observe_frame",
+  };
+  assert.equal(
+    parseOpsObserverRequest(
+      JSON.stringify(observer),
+      Date.parse("2029-12-31T23:59:30Z"),
+    ).operation,
+    "observe_frame",
+  );
+  for (const extra of [
+    { input: { kind: "keyboard", text: "secret" } },
+    { action: { kind: "navigate" } },
+    { url: "https://example.com" },
+    { controller: "human" },
+  ]) {
+    assert.throws(() =>
+      parseOpsObserverRequest(
+        JSON.stringify({ ...observer, ...extra }),
+        Date.parse("2029-12-31T23:59:30Z"),
+      ),
+    );
+  }
+  assert.throws(() =>
+    parseOpsObserverRequest(
+      JSON.stringify({ ...observer, operation: "input" }),
       Date.parse("2029-12-31T23:59:30Z"),
     ),
   );

@@ -20,7 +20,7 @@ const validEnvironment = {
   OPENLINKER_NATIVE_CHROME_EXTENSION_VERSION: "1.2.3.4",
   OPENLINKER_NATIVE_CHROME_ACTIVATION_PATH:
     "/openlinker-runtime/index.html",
-  OPENLINKER_NATIVE_CHROME_PROTOCOL: "openlinker.native-chrome.v1",
+  OPENLINKER_NATIVE_CHROME_PROTOCOL: "openlinker.native-chrome.v2",
   OPENLINKER_NATIVE_CHROME_ASSET_MANIFEST_SHA256: "a".repeat(64),
 };
 
@@ -100,7 +100,7 @@ test("native Chrome gate binds a new Host and rebinds only the same authority", 
               extension_id: "abcdefghijklmnopabcdefghijklmnop",
               extension_version: "1.2.3.4",
               host_process_generation_nonce: hostProcessGenerationNonce,
-              native_host_protocol: "openlinker.native-chrome.v1",
+              native_host_protocol: "openlinker.native-chrome.v2",
               capabilities: REQUIRED_CAPABILITIES,
             }
           : {
@@ -160,12 +160,30 @@ test("native Chrome gate binds a new Host and rebinds only the same authority", 
     };
 
     await gate.authorize(request);
+    await gate.authorizeObserver({
+      contract_id: "openlinker.browser.engine.ops-observer.v1",
+      action_id: "2",
+      deadline: new Date(Date.now() + 500).toISOString(),
+      identity,
+      operation: "observe_status",
+    });
     assert.deepEqual(calls, [
       { method: "preflight" },
       { method: "preflight" },
       { method: "authorize_action", actionKind: "preflight" },
       { method: "authorize_action", actionKind: "navigate" },
+      { method: "authorize_observer" },
     ]);
+    await assert.rejects(
+      gate.authorizeObserver({
+        contract_id: "openlinker.browser.engine.ops-observer.v1",
+        action_id: "3",
+        deadline: new Date(Date.now() + 500).toISOString(),
+        identity: { ...identity, control_epoch: 2 },
+        operation: "observe_frame",
+      }),
+      /does not match active Browser authority/,
+    );
     hostProcessGenerationNonce = "22222222-2222-4222-8222-222222222222";
     await gate.authorize({
       ...request,

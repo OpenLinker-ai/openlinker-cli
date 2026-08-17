@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -328,7 +329,7 @@ func TestProcessEngineAcceptsLockedNativeChromeEnvironment(t *testing.T) {
 		"OPENLINKER_NATIVE_CHROME_EXTENSION_VERSION=1.2.3.4",
 		"OPENLINKER_NATIVE_CHROME_ACTIVATION_PATH=/openlinker-runtime/index.html",
 		"OPENLINKER_NATIVE_CHROME_HOST=/opt/openlinker/native-chrome/bin/openlinker-native-chrome-host",
-		"OPENLINKER_NATIVE_CHROME_PROTOCOL=openlinker.native-chrome.v1",
+		"OPENLINKER_NATIVE_CHROME_PROTOCOL=openlinker.native-chrome.v2",
 		"OPENLINKER_NATIVE_CHROME_ASSET_MANIFEST_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"OPENLINKER_NATIVE_CHROME_ENABLED=true",
 		"OPENLINKER_NATIVE_CHROME_REQUIRE_ORIGIN=true",
@@ -336,6 +337,93 @@ func TestProcessEngineAcceptsLockedNativeChromeEnvironment(t *testing.T) {
 	}
 	if _, err := NewProcessEngine(ProcessEngineOptions{Command: command, Environment: environment}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProcessEngineOpsObserverNeverStartsProcessAndUsesSeparateSocket(t *testing.T) {
+	root, err := os.MkdirTemp("", "ol-engine-ops-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(root, "ops.sock")
+	engine, err := NewProcessEngine(ProcessEngineOptions{
+		Command: []string{
+			os.Args[0], "-test.run=^TestProcessEngineHelper$", "--", "browser-engine-helper",
+		},
+		Environment: []string{
+			"OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED=true",
+			"OPENLINKER_BROWSER_ENGINE_OPS_SOCKET=" + socketPath,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	identity := validRuntimeRequest().Identity
+	if _, busy, observerErr := engine.ObserveActiveOps(
+		testActionContext(t), identity, browserprotocol.OpsObserverStatusOperation,
+	); observerErr == nil || observerErr.Code != browserprotocol.OpsObserverRunNotActive || busy || engine.process != nil {
+		t.Fatalf("inactive observation started process: busy=%v error=%v process=%v", busy, observerErr, engine.process)
+	}
+	if _, failure := engine.Execute(
+		testActionContext(t), identity,
+		browserprotocol.Action{Kind: browserprotocol.ActionScreenshot},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	done := make(chan error, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			done <- acceptErr
+			return
+		}
+		defer connection.Close()
+		var request engineOpsObserverRequest
+		if decodeErr := json.NewDecoder(connection).Decode(&request); decodeErr != nil {
+			done <- decodeErr
+			return
+		}
+		if request.Identity.RunID != identity.RunID ||
+			request.Operation != browserprotocol.OpsObserverStatusOperation {
+			done <- errors.New("Ops Observer authority did not match")
+			return
+		}
+		done <- json.NewEncoder(connection).Encode(engineOpsObserverResponse{
+			ContractID: engineOpsObserverContractID,
+			ActionID:   request.ActionID,
+			Status:     "ok",
+			PageURL:    "https://example.com/path",
+			PageTitle:  "Example",
+		})
+	}()
+	page, busy, observerErr := engine.ObserveActiveOps(
+		testActionContext(t), identity, browserprotocol.OpsObserverStatusOperation,
+	)
+	if observerErr != nil || busy || page.PageURL != "https://example.com/path" ||
+		page.PageTitle != "Example" {
+		t.Fatalf("Ops observation = %#v, busy=%v, error=%v", page, busy, observerErr)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	engine.mu.Lock()
+	started := time.Now()
+	_, busy, observerErr = engine.ObserveActiveOps(
+		testActionContext(t), identity, browserprotocol.OpsObserverStatusOperation,
+	)
+	engine.mu.Unlock()
+	if observerErr != nil || !busy || time.Since(started) > 100*time.Millisecond {
+		t.Fatalf("locked process observation busy=%v error=%v", busy, observerErr)
 	}
 }
 

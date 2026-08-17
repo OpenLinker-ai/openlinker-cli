@@ -113,6 +113,21 @@ func (backend *OfficialChromeBackend) ExecuteViewer(
 	return backend.engine.ExecuteViewer(ctx, identity, operation, input)
 }
 
+func (backend *OfficialChromeBackend) ObserveOps(
+	ctx context.Context,
+	runID string,
+	operation browserprotocol.OpsObserverOperation,
+) (browserprotocol.OpsObserverObservation, bool, *browserprotocol.OpsObserverError) {
+	if backend == nil || backend.engine == nil {
+		return browserprotocol.OpsObserverObservation{}, false,
+			browserprotocol.NewOpsObserverError(
+				browserprotocol.OpsObserverRunNotActive,
+				"requested Run is not active",
+			)
+	}
+	return backend.engine.ObserveOps(ctx, runID, operation)
+}
+
 func (backend *OfficialChromeBackend) Close() error {
 	if backend == nil || backend.engine == nil {
 		return nil

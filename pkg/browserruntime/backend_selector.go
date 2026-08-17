@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 )
@@ -45,9 +46,11 @@ type BackendSelector struct {
 	evidence browserprotocol.BackendSelectionEvidence
 	scope    backendSelectionScope
 	closed   bool
+	pending  atomic.Int64
 }
 
 type backendSelectionScope struct {
+	RunID            string
 	AgentID          string
 	PrincipalScopeID string
 	BrowserSessionID string
@@ -97,6 +100,8 @@ func (selector *BackendSelector) Execute(
 	identity browserprotocol.Identity,
 	action browserprotocol.Action,
 ) (browserprotocol.Observation, *browserprotocol.Failure) {
+	selector.pending.Add(1)
+	defer selector.pending.Add(-1)
 	selector.mu.Lock()
 	defer selector.mu.Unlock()
 	if selector.closed {
@@ -374,6 +379,8 @@ func (selector *BackendSelector) ExecuteViewer(
 	operation browserprotocol.ViewerOperation,
 	input *browserprotocol.ViewerInput,
 ) (*browserprotocol.ViewerFrame, *browserprotocol.Failure) {
+	selector.pending.Add(1)
+	defer selector.pending.Add(-1)
 	selector.mu.Lock()
 	defer selector.mu.Unlock()
 	if selector.closed {
@@ -401,8 +408,56 @@ func (selector *BackendSelector) ExecuteViewer(
 	return viewer.ExecuteViewer(ctx, identity, operation, input)
 }
 
+func (selector *BackendSelector) ObserveOps(
+	ctx context.Context,
+	runID string,
+	operation browserprotocol.OpsObserverOperation,
+) (browserprotocol.OpsObserverObservation, bool, *browserprotocol.OpsObserverError) {
+	if selector == nil {
+		return browserprotocol.OpsObserverObservation{}, false,
+			browserprotocol.NewOpsObserverError(
+				browserprotocol.OpsObserverRunNotActive,
+				"requested Run is not active",
+			)
+	}
+	if selector.pending.Load() > 0 || !selector.mu.TryLock() {
+		return browserprotocol.OpsObserverObservation{}, true, nil
+	}
+	defer selector.mu.Unlock()
+	if selector.pending.Load() > 0 {
+		return browserprotocol.OpsObserverObservation{}, true, nil
+	}
+	if selector.closed || selector.selected == nil || selector.scope.RunID != runID {
+		return browserprotocol.OpsObserverObservation{}, false,
+			browserprotocol.NewOpsObserverError(
+				browserprotocol.OpsObserverRunNotActive,
+				"requested Run is not active",
+			)
+	}
+	selected := selector.selected
+	evidence := selector.evidence
+	observer, ok := selected.(OpsObserverEngine)
+	if !ok {
+		return browserprotocol.OpsObserverObservation{}, false,
+			browserprotocol.NewOpsObserverError(
+				browserprotocol.OpsObserverInternalError,
+				"selected Browser backend does not support Ops observation",
+			)
+	}
+	observation, busy, observerErr := observer.ObserveOps(ctx, runID, operation)
+	if observerErr != nil || busy {
+		return browserprotocol.OpsObserverObservation{}, busy, observerErr
+	}
+	observation.SelectedBackend = evidence.SelectedBackend
+	if evidence.ProfileGeneration > 0 {
+		observation.ProfileGeneration = evidence.ProfileGeneration
+	}
+	return observation, false, nil
+}
+
 func newBackendSelectionScope(identity browserprotocol.Identity) backendSelectionScope {
 	return backendSelectionScope{
+		RunID:            identity.RunID,
 		AgentID:          identity.AgentID,
 		PrincipalScopeID: identity.PrincipalScopeID,
 		BrowserSessionID: identity.BrowserSessionID,

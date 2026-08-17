@@ -196,7 +196,7 @@ test("final runtime lock covers every installed native component", async () => {
     enginePath: paths.engine,
     nativeMessagingManifestPath: paths.nativeManifest,
     architecture: "amd64",
-    nativeHostProtocol: "openlinker.native-chrome.v1",
+    nativeHostProtocol: "openlinker.native-chrome.v2",
     profileGeneration: 1,
     outputPath: paths.output,
   });
@@ -245,7 +245,7 @@ test("final runtime lock covers every installed native component", async () => {
       enginePath: paths.engine,
       nativeMessagingManifestPath: paths.nativeManifest,
       architecture: "amd64",
-      nativeHostProtocol: "openlinker.native-chrome.v1",
+      nativeHostProtocol: "openlinker.native-chrome.v2",
       profileGeneration: 1,
       outputPath: paths.output,
     }),

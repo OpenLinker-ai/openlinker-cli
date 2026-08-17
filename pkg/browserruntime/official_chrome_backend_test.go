@@ -58,7 +58,7 @@ func TestOfficialChromeBackendProducesValidProcessConfiguration(t *testing.T) {
 				ExtensionVersion:        "1.2.3.4",
 				ExtensionActivationPath: "/openlinker-runtime/index.html",
 				NativeHostPath:          "/opt/openlinker/native-chrome/bin/openlinker-native-chrome-host",
-				NativeHostProtocol:      "openlinker.native-chrome.v1",
+				NativeHostProtocol:      "openlinker.native-chrome.v2",
 				EnginePath:              "/opt/openlinker/native-chrome/bin/openlinker-native-chrome-engine",
 				ProfileGeneration:       2,
 			},

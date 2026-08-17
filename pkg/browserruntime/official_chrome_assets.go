@@ -23,6 +23,7 @@ const (
 	officialChromeAssetContractID = "openlinker.native-chrome.assets.v1"
 	legacyOpenAIExtensionID       = "hehggadaopoacecdllhhajmbjkdcmajg"
 	openLinkerNativeHostName      = "ai.openlinker.browser"
+	officialNativeHostProtocol    = "openlinker.native-chrome.v2"
 	openLinkerActivationPath      = "/openlinker-runtime/index.html"
 	maxOfficialChromeLockBytes    = 256 << 10
 	maxOfficialChromeAssetBytes   = int64(1 << 30)
@@ -41,6 +42,8 @@ var requiredOfficialChromeCapabilities = []string{
 	"keypress",
 	"navigate",
 	"observe",
+	"ops_observe_frame",
+	"ops_observe_status",
 	"policy_evidence",
 	"restricted",
 	"screenshot",
@@ -260,7 +263,7 @@ func validOfficialChromeLock(lock OfficialChromeAssetLock) bool {
 		lock.ExtensionID == legacyOpenAIExtensionID ||
 		!validExtensionActivationPath(lock.ExtensionActivationPath) ||
 		lock.ExtensionActivationPath != openLinkerActivationPath ||
-		!validBoundedOpaque(lock.NativeHostProtocol, 64) ||
+		lock.NativeHostProtocol != officialNativeHostProtocol ||
 		len(lock.Assets) < 7 || len(lock.Assets) > 4096 {
 		return false
 	}
