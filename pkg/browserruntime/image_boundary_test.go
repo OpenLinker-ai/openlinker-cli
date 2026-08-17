@@ -205,6 +205,7 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 		}
 	}
 
+	composeSources := make(map[string]string)
 	for _, name := range []string{
 		"deploy/compose.codex.browser.yml",
 		"deploy/compose.claude.browser.yml",
@@ -214,6 +215,7 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			t.Fatal(err)
 		}
 		source := string(raw)
+		composeSources[name] = source
 		for _, required := range []string{
 			"openlinker-browser-runtime:",
 			"condition: service_healthy",
@@ -225,6 +227,11 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			"/browser-home:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
 			"/tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
 			"stop_grace_period: 30s",
+			"    init: true",
+			`test: ["CMD", "/usr/local/bin/openlinker-browser-runtime", "healthcheck"]`,
+			"      interval: 5s",
+			"      timeout: 2s",
+			"      retries: 30",
 		} {
 			if !strings.Contains(source, required) {
 				t.Errorf("%s is missing %q", name, required)
@@ -243,6 +250,31 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			if strings.Contains(source, forbidden) {
 				t.Errorf("%s contains forbidden Browser boundary %q", name, forbidden)
 			}
+		}
+		if strings.Count(source, "    init: true\n") != 1 {
+			t.Errorf("%s must enable init only for Browser Runtime", name)
+		}
+	}
+	codexHealth := browserRuntimeHealthContract(
+		t,
+		composeSources["deploy/compose.codex.browser.yml"],
+	)
+	claudeHealth := browserRuntimeHealthContract(
+		t,
+		composeSources["deploy/compose.claude.browser.yml"],
+	)
+	if codexHealth != claudeHealth {
+		t.Fatalf("Codex and Claude Browser health contracts differ:\nCodex:\n%s\nClaude:\n%s", codexHealth, claudeHealth)
+	}
+	nativeChromeOverlay, err := os.ReadFile(
+		filepath.Join(root, "deploy/compose.codex.native-chrome.yml"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"healthcheck:", "init:"} {
+		if strings.Contains(string(nativeChromeOverlay), forbidden) {
+			t.Errorf("native Chrome overlay overrides shared Browser Runtime %q", forbidden)
 		}
 	}
 
@@ -266,4 +298,17 @@ func TestBrowserImageIsSeparatePinnedAndHasNoProviderCredentialSurface(t *testin
 			}
 		}
 	}
+}
+
+func browserRuntimeHealthContract(t *testing.T, source string) string {
+	t.Helper()
+	start := strings.Index(source, "    healthcheck:\n")
+	if start < 0 {
+		t.Fatal("Browser Runtime healthcheck is missing")
+	}
+	end := strings.Index(source[start:], "    pids_limit:")
+	if end < 0 {
+		t.Fatal("Browser Runtime healthcheck boundary is missing")
+	}
+	return source[start : start+end]
 }

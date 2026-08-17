@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"time"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
@@ -44,8 +45,9 @@ func exchange(
 			return browserprotocol.Response{}, contextFailure(ctx, "finish Browser Runtime request")
 		}
 	}
+	counted := &countingReader{reader: connection}
 	limited := &io.LimitedReader{
-		R: connection,
+		R: counted,
 		N: int64(browserprotocol.MaxResponseBytes) + 1,
 	}
 	decoder := json.NewDecoder(limited)
@@ -59,20 +61,11 @@ func exchange(
 				false,
 			)
 		}
-		if ctx.Err() != nil {
-			return browserprotocol.Response{}, contextFailure(ctx, "read Browser Runtime response")
-		}
-		if errors.Is(err, io.EOF) {
-			return browserprotocol.Response{}, browserprotocol.NewFailure(
-				browserprotocol.ErrorRuntimeUnavailable,
-				"Browser Runtime closed without a response",
-				true,
-			)
-		}
-		return browserprotocol.Response{}, browserprotocol.NewFailure(
-			browserprotocol.ErrorOutputInvalid,
-			"Browser Runtime response is invalid",
-			false,
+		return browserprotocol.Response{}, classifyRuntimeDecodeFailure(
+			ctx,
+			err,
+			counted.count,
+			"Browser Runtime",
 		)
 	}
 	if limited.N == 0 {
@@ -84,6 +77,21 @@ func exchange(
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if limited.N == 0 {
+			return browserprotocol.Response{}, browserprotocol.NewFailure(
+				browserprotocol.ErrorOutputTooLarge,
+				"Browser Runtime response exceeds the output limit",
+				false,
+			)
+		}
+		if err != nil {
+			return browserprotocol.Response{}, classifyRuntimeDecodeFailure(
+				ctx,
+				err,
+				counted.count,
+				"Browser Runtime",
+			)
+		}
 		return browserprotocol.Response{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorOutputInvalid,
 			"Browser Runtime response contains trailing data",
@@ -133,8 +141,9 @@ func exchangeViewer(
 			)
 		}
 	}
+	counted := &countingReader{reader: connection}
 	limited := &io.LimitedReader{
-		R: connection,
+		R: counted,
 		N: int64(browserprotocol.MaxResponseBytes) + 1,
 	}
 	decoder := json.NewDecoder(limited)
@@ -148,13 +157,30 @@ func exchangeViewer(
 				false,
 			)
 		}
-		return browserprotocol.ViewerResponse{}, contextFailure(
+		return browserprotocol.ViewerResponse{}, classifyRuntimeDecodeFailure(
 			ctx,
-			"read Browser Runtime Viewer response",
+			err,
+			counted.count,
+			"Browser Runtime Viewer",
 		)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if limited.N == 0 {
+			return browserprotocol.ViewerResponse{}, browserprotocol.NewFailure(
+				browserprotocol.ErrorOutputTooLarge,
+				"Browser Runtime Viewer response exceeds the output limit",
+				false,
+			)
+		}
+		if err != nil {
+			return browserprotocol.ViewerResponse{}, classifyRuntimeDecodeFailure(
+				ctx,
+				err,
+				counted.count,
+				"Browser Runtime Viewer",
+			)
+		}
 		return browserprotocol.ViewerResponse{}, browserprotocol.NewFailure(
 			browserprotocol.ErrorOutputInvalid,
 			"Browser Runtime Viewer response contains trailing data",
@@ -162,6 +188,49 @@ func exchangeViewer(
 		)
 	}
 	return response, nil
+}
+
+type countingReader struct {
+	reader io.Reader
+	count  int64
+}
+
+func (reader *countingReader) Read(value []byte) (int, error) {
+	count, err := reader.reader.Read(value)
+	reader.count += int64(count)
+	return count, err
+}
+
+func classifyRuntimeDecodeFailure(
+	ctx context.Context,
+	err error,
+	bytesRead int64,
+	label string,
+) *browserprotocol.Failure {
+	if ctx.Err() != nil {
+		return contextFailure(ctx, "read "+label+" response")
+	}
+	var timeoutError net.Error
+	if errors.As(err, &timeoutError) && timeoutError.Timeout() ||
+		errors.Is(err, os.ErrDeadlineExceeded) {
+		return browserprotocol.NewFailure(
+			browserprotocol.ErrorRuntimeUnavailable,
+			label+" response timed out",
+			true,
+		)
+	}
+	if bytesRead == 0 {
+		return browserprotocol.NewFailure(
+			browserprotocol.ErrorRuntimeUnavailable,
+			label+" closed without a response",
+			true,
+		)
+	}
+	return browserprotocol.NewFailure(
+		browserprotocol.ErrorOutputInvalid,
+		label+" response is invalid",
+		false,
+	)
 }
 
 func contextFailure(

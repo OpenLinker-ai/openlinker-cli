@@ -16,7 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclient"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserruntime"
 )
@@ -38,6 +40,7 @@ const (
 	defaultFontContractVersion = "openlinker.browser.fonts.v1"
 	defaultEgressLabel         = "default"
 	defaultOfficialChromeLock  = "/opt/openlinker/native-chrome/assets.lock.json"
+	defaultHealthcheckTimeout  = 2 * time.Second
 	maxCredentialBytes         = 4096
 )
 
@@ -49,6 +52,12 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 {
+		if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
+			return runHealthcheck()
+		}
+		return errors.New("Browser Runtime command is invalid")
+	}
 	socketPath := strings.TrimSpace(os.Getenv("OPENLINKER_BROWSER_SOCKET"))
 	if socketPath == "" {
 		socketPath = defaultBrowserSocket
@@ -151,6 +160,27 @@ func run() error {
 	serveErr := server.Serve(ctx)
 	closeErr := engine.Close()
 	return errors.Join(serveErr, closeErr)
+}
+
+func runHealthcheck() error {
+	socketPath := strings.TrimSpace(os.Getenv("OPENLINKER_BROWSER_SOCKET"))
+	if socketPath == "" {
+		socketPath = defaultBrowserSocket
+	}
+	credential, err := readCredentialFile(
+		os.Getenv("OPENLINKER_BROWSER_CHANNEL_CREDENTIAL_FILE"),
+	)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultHealthcheckTimeout)
+	defer cancel()
+	return browserclient.CheckHealth(
+		ctx,
+		socketPath,
+		credential,
+		defaultHealthcheckTimeout,
+	)
 }
 
 func browserEngineEnvironment(environment browserruntime.ProfileEnvironment) []string {

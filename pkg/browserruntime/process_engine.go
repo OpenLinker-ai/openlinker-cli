@@ -49,6 +49,7 @@ type engineProcess struct {
 	instanceID uint64
 	command    *exec.Cmd
 	stdin      io.WriteCloser
+	stdoutPipe io.ReadCloser
 	stdout     *bufio.Reader
 	diagnostic *engineDiagnosticWriter
 }
@@ -178,8 +179,7 @@ func (engine *ProcessEngine) Execute(
 
 	select {
 	case <-ctx.Done():
-		engine.resetProcess()
-		<-result
+		_ = engine.resetProcess()
 		return browserprotocol.Observation{}, processResetFailure(contextFailure(ctx.Err()))
 	case output := <-result:
 		if err := ctx.Err(); err != nil {
@@ -320,8 +320,7 @@ func (engine *ProcessEngine) ExecuteViewer(
 	}()
 	select {
 	case <-ctx.Done():
-		engine.resetProcess()
-		<-result
+		_ = engine.resetProcess()
 		return nil, processResetFailure(contextFailure(ctx.Err()))
 	case output := <-result:
 		if err := ctx.Err(); err != nil {
@@ -400,6 +399,7 @@ func (engine *ProcessEngine) ensureProcess() (*engineProcess, error) {
 		return engine.process, nil
 	}
 	command := exec.Command(engine.options.Command[0], engine.options.Command[1:]...) // #nosec G204 -- trusted fixed image configuration, never caller input.
+	configureEngineProcess(command)
 	command.Env = make([]string, len(engine.options.Environment))
 	copy(command.Env, engine.options.Environment)
 	diagnosticTarget := engine.options.DiagnosticWriter
@@ -425,6 +425,7 @@ func (engine *ProcessEngine) ensureProcess() (*engineProcess, error) {
 		instanceID: processEngineInstanceSequence.Add(1),
 		command:    command,
 		stdin:      stdin,
+		stdoutPipe: stdout,
 		stdout:     bufio.NewReaderSize(stdout, 64<<10),
 		diagnostic: diagnostic,
 	}
@@ -442,8 +443,13 @@ func (engine *ProcessEngine) closeProcess(graceful bool) error {
 		return nil
 	}
 	_ = process.stdin.Close()
+	var killErr error
 	if !graceful && process.command.Process != nil {
-		_ = process.command.Process.Kill()
+		killErr = killEngineProcessGroup(process.command)
+		if errors.Is(killErr, os.ErrProcessDone) {
+			killErr = nil
+		}
+		_ = process.stdoutPipe.Close()
 	}
 	waited := make(chan error, 1)
 	go func() {
@@ -454,20 +460,40 @@ func (engine *ProcessEngine) closeProcess(graceful bool) error {
 		select {
 		case waitErr = <-waited:
 		case <-time.After(10 * time.Second):
-			if process.command.Process != nil {
-				_ = process.command.Process.Kill()
+			killErr = killEngineProcessGroup(process.command)
+			if errors.Is(killErr, os.ErrProcessDone) {
+				killErr = nil
 			}
-			waitErr = <-waited
+			_ = process.stdoutPipe.Close()
+			select {
+			case waitErr = <-waited:
+			case <-time.After(engineProcessWaitDelay + time.Second):
+				waitErr = errors.New("browser engine process cleanup timed out")
+			}
 		}
 	} else {
-		waitErr = <-waited
+		select {
+		case waitErr = <-waited:
+		case <-time.After(engineProcessWaitDelay + time.Second):
+			waitErr = errors.New("browser engine process reset timed out")
+		}
+	}
+	if graceful {
+		survivorKillErr := killEngineProcessGroup(process.command)
+		if errors.Is(survivorKillErr, os.ErrProcessDone) {
+			survivorKillErr = nil
+		}
+		killErr = errors.Join(killErr, survivorKillErr)
+		if errors.Is(waitErr, exec.ErrWaitDelay) {
+			waitErr = nil
+		}
 	}
 	process.diagnostic.Flush()
 	var exitError *exec.ExitError
 	if errors.As(waitErr, &exitError) {
-		return nil
+		waitErr = nil
 	}
-	return waitErr
+	return errors.Join(killErr, waitErr)
 }
 
 var (

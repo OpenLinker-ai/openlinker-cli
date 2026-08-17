@@ -29,9 +29,15 @@ func (server *Server) handleConnection(parent context.Context, connection *net.U
 		ContractID string `json:"contract_id"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err == nil &&
-		envelope.ContractID == browserprotocol.ViewerContractID {
-		server.handleViewerConnection(parent, connection, raw, now)
-		return
+		envelope.ContractID != "" {
+		switch envelope.ContractID {
+		case browserprotocol.ViewerContractID:
+			server.handleViewerConnection(parent, connection, raw, now)
+			return
+		case browserprotocol.HealthContractID:
+			server.handleHealthConnection(connection, raw)
+			return
+		}
 	}
 	request, failure := server.decodeRequest(bytes.NewReader(raw))
 	if failure != nil {
@@ -154,6 +160,41 @@ func (server *Server) handleConnection(parent context.Context, connection *net.U
 		server.resetClickNavigationBaseline(request.Identity)
 	}
 	server.writeResponse(connection, browserprotocol.SuccessResponse(request.RequestID, observation))
+}
+
+func (server *Server) handleHealthConnection(
+	connection *net.UnixConn,
+	raw []byte,
+) {
+	if len(raw) > browserprotocol.MaxHealthRequestBytes {
+		_ = server.writeHealthResponse(connection, browserprotocol.HealthErrorResponse(
+			"",
+			browserprotocol.HealthReasonInvalidRequest,
+		))
+		return
+	}
+	request, err := browserprotocol.DecodeHealthRequest(raw)
+	if err != nil || request.Validate() != nil {
+		_ = server.writeHealthResponse(connection, browserprotocol.HealthErrorResponse(
+			request.RequestID,
+			browserprotocol.HealthReasonInvalidRequest,
+		))
+		return
+	}
+	if subtle.ConstantTimeCompare(
+		[]byte(request.ChannelCredential),
+		[]byte(server.options.ChannelCredential),
+	) != 1 {
+		_ = server.writeHealthResponse(connection, browserprotocol.HealthErrorResponse(
+			request.RequestID,
+			browserprotocol.HealthReasonUnauthorized,
+		))
+		return
+	}
+	_ = server.writeHealthResponse(
+		connection,
+		browserprotocol.HealthSuccessResponse(request.RequestID),
+	)
 }
 
 func (server *Server) handleViewerConnection(
@@ -617,7 +658,7 @@ func (server *Server) readRequest(reader io.Reader) ([]byte, *browserprotocol.Fa
 	return raw, nil
 }
 
-func (server *Server) writeResponse(writer io.Writer, response browserprotocol.Response) {
+func (server *Server) writeResponse(writer io.Writer, response browserprotocol.Response) error {
 	raw, err := json.Marshal(response)
 	if err != nil || len(raw)+1 > server.options.MaxResponseBytes {
 		raw, _ = json.Marshal(browserprotocol.ErrorResponse(
@@ -630,13 +671,13 @@ func (server *Server) writeResponse(writer io.Writer, response browserprotocol.R
 		))
 	}
 	raw = append(raw, '\n')
-	_, _ = writer.Write(raw)
+	return writeAllResponse(writer, raw)
 }
 
 func (server *Server) writeViewerResponse(
 	writer io.Writer,
 	response browserprotocol.ViewerResponse,
-) {
+) error {
 	raw, err := json.Marshal(response)
 	if err != nil || len(raw)+1 > server.options.MaxResponseBytes {
 		raw, _ = json.Marshal(browserprotocol.ViewerErrorResponse(
@@ -649,5 +690,37 @@ func (server *Server) writeViewerResponse(
 		))
 	}
 	raw = append(raw, '\n')
-	_, _ = writer.Write(raw)
+	return writeAllResponse(writer, raw)
+}
+
+func (server *Server) writeHealthResponse(
+	writer io.Writer,
+	response browserprotocol.HealthResponse,
+) error {
+	raw, err := json.Marshal(response)
+	if err != nil || len(raw)+1 > browserprotocol.MaxHealthResponseBytes {
+		raw, _ = json.Marshal(browserprotocol.HealthErrorResponse(
+			response.RequestID,
+			browserprotocol.HealthReasonInvalidRequest,
+		))
+	}
+	raw = append(raw, '\n')
+	return writeAllResponse(writer, raw)
+}
+
+func writeAllResponse(writer io.Writer, value []byte) error {
+	for len(value) > 0 {
+		written, err := writer.Write(value)
+		if written < 0 || written > len(value) {
+			return io.ErrShortWrite
+		}
+		value = value[written:]
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }

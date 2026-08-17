@@ -22,6 +22,7 @@ services:
       context: ..
       dockerfile: Dockerfile.browser
     image: openlinker-browser-runtime:dev
+    init: true
     depends_on:
       - openlinker-egress-gateway
     user: "10001:10001"
@@ -52,10 +53,10 @@ services:
       - claude-browser-profile:/browser-state
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "test -S /browser-control/openlinker.browser.sock && test -s /browser-control/channel-credential"]
+      test: ["CMD", "/usr/local/bin/openlinker-browser-runtime", "healthcheck"]
       interval: 5s
       timeout: 2s
-      retries: 12
+      retries: 30
     pids_limit: 512
     mem_limit: 3g
     cpus: 2.0
