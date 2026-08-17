@@ -111,7 +111,7 @@ func TestBackendSelectorAutoPrefersOfficialAndLocksSelection(t *testing.T) {
 	}
 }
 
-func TestBackendSelectorOpsObserverIsRunBoundAndActionPriority(t *testing.T) {
+func TestBackendSelectorOpsObserverIsRunBoundAndUsesPublishedSelection(t *testing.T) {
 	official := &selectorTestBackend{}
 	selector, err := NewBackendSelector(BackendSelectorOptions{
 		Official: official, OfficialEvidence: validOfficialSelectionEvidence(),
@@ -129,26 +129,27 @@ func TestBackendSelectorOpsObserverIsRunBoundAndActionPriority(t *testing.T) {
 	); failure != nil {
 		t.Fatal(failure)
 	}
-	selector.pending.Add(1)
+	selector.mu.Lock()
 	started := time.Now()
-	_, busy, observerErr := selector.ObserveOps(
+	observation, busy, observerErr := selector.ObserveOps(
 		context.Background(), identity.RunID, browserprotocol.OpsObserverStatusOperation,
 	)
-	selector.pending.Add(-1)
-	if observerErr != nil || !busy || official.opsCalls != 0 ||
+	selector.mu.Unlock()
+	if observerErr != nil || busy || official.opsCalls != 1 ||
+		observation.SelectedBackend != BackendOfficialChrome || observation.ProfileGeneration != 7 ||
 		time.Since(started) > 100*time.Millisecond {
-		t.Fatalf("pending action observation busy=%v error=%v calls=%d", busy, observerErr, official.opsCalls)
+		t.Fatalf("published action observation = %#v, busy=%v error=%v calls=%d", observation, busy, observerErr, official.opsCalls)
 	}
 	if _, busy, observerErr = selector.ObserveOps(
 		context.Background(), "22222222-2222-4222-8222-222222222222",
 		browserprotocol.OpsObserverStatusOperation,
-	); observerErr == nil || observerErr.Code != browserprotocol.OpsObserverRunNotActive || busy || official.opsCalls != 0 {
+	); observerErr == nil || observerErr.Code != browserprotocol.OpsObserverRunNotActive || busy || official.opsCalls != 1 {
 		t.Fatalf("wrong Run observation busy=%v error=%v calls=%d", busy, observerErr, official.opsCalls)
 	}
-	observation, busy, observerErr := selector.ObserveOps(
+	observation, busy, observerErr = selector.ObserveOps(
 		context.Background(), identity.RunID, browserprotocol.OpsObserverStatusOperation,
 	)
-	if observerErr != nil || busy || official.opsCalls != 1 ||
+	if observerErr != nil || busy || official.opsCalls != 2 ||
 		observation.SelectedBackend != BackendOfficialChrome || observation.ProfileGeneration != 7 {
 		t.Fatalf("Run observation = %#v, busy=%v error=%v calls=%d", observation, busy, observerErr, official.opsCalls)
 	}

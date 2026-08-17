@@ -46,7 +46,13 @@ type BackendSelector struct {
 	evidence browserprotocol.BackendSelectionEvidence
 	scope    backendSelectionScope
 	closed   bool
-	pending  atomic.Int64
+	ops      atomic.Pointer[backendOpsSnapshot]
+}
+
+type backendOpsSnapshot struct {
+	observer OpsObserverEngine
+	evidence browserprotocol.BackendSelectionEvidence
+	runID    string
 }
 
 type backendSelectionScope struct {
@@ -100,8 +106,6 @@ func (selector *BackendSelector) Execute(
 	identity browserprotocol.Identity,
 	action browserprotocol.Action,
 ) (browserprotocol.Observation, *browserprotocol.Failure) {
-	selector.pending.Add(1)
-	defer selector.pending.Add(-1)
 	selector.mu.Lock()
 	defer selector.mu.Unlock()
 	if selector.closed {
@@ -135,6 +139,7 @@ func (selector *BackendSelector) Execute(
 					selector.selected = nil
 					selector.evidence = browserprotocol.BackendSelectionEvidence{}
 					selector.scope = backendSelectionScope{}
+					selector.publishOpsSnapshotLocked()
 				}
 				return browserprotocol.Observation{}, failure
 			}
@@ -153,6 +158,7 @@ func (selector *BackendSelector) Execute(
 				}
 				observation.BackendSelection = &evidence
 			}
+			selector.publishOpsSnapshotLocked()
 			return observation, nil
 		}
 		if action.BackendMode != "" {
@@ -168,6 +174,7 @@ func (selector *BackendSelector) Execute(
 				selector.selected = nil
 				selector.evidence = browserprotocol.BackendSelectionEvidence{}
 				selector.scope = backendSelectionScope{}
+				selector.publishOpsSnapshotLocked()
 			} else {
 				return browserprotocol.Observation{}, browserprotocol.NewFailure(
 					browserprotocol.ErrorProtocolInvalid,
@@ -196,6 +203,7 @@ func (selector *BackendSelector) Execute(
 				selector.evidence = evidence
 			}
 			observation.BackendSelection = &evidence
+			selector.publishOpsSnapshotLocked()
 			return observation, nil
 		}
 	}
@@ -274,6 +282,7 @@ func (selector *BackendSelector) selectAuto(
 			selector.selected = selector.options.Official
 			selector.evidence = evidence
 			selector.scope = newBackendSelectionScope(identity)
+			selector.publishOpsSnapshotLocked()
 			selection := selector.evidence
 			observation.BackendSelection = &selection
 			return observation, nil
@@ -339,6 +348,7 @@ func (selector *BackendSelector) selectBackend(
 	selector.selected = backend
 	selector.evidence = evidence
 	selector.scope = newBackendSelectionScope(identity)
+	selector.publishOpsSnapshotLocked()
 	selection := selector.evidence
 	observation.BackendSelection = &selection
 	return observation, nil
@@ -379,8 +389,6 @@ func (selector *BackendSelector) ExecuteViewer(
 	operation browserprotocol.ViewerOperation,
 	input *browserprotocol.ViewerInput,
 ) (*browserprotocol.ViewerFrame, *browserprotocol.Failure) {
-	selector.pending.Add(1)
-	defer selector.pending.Add(-1)
 	selector.mu.Lock()
 	defer selector.mu.Unlock()
 	if selector.closed {
@@ -420,39 +428,43 @@ func (selector *BackendSelector) ObserveOps(
 				"requested Run is not active",
 			)
 	}
-	if selector.pending.Load() > 0 || !selector.mu.TryLock() {
-		return browserprotocol.OpsObserverObservation{}, true, nil
-	}
-	defer selector.mu.Unlock()
-	if selector.pending.Load() > 0 {
-		return browserprotocol.OpsObserverObservation{}, true, nil
-	}
-	if selector.closed || selector.selected == nil || selector.scope.RunID != runID {
+	snapshot := selector.ops.Load()
+	if snapshot == nil || snapshot.runID != runID {
 		return browserprotocol.OpsObserverObservation{}, false,
 			browserprotocol.NewOpsObserverError(
 				browserprotocol.OpsObserverRunNotActive,
 				"requested Run is not active",
 			)
 	}
-	selected := selector.selected
-	evidence := selector.evidence
-	observer, ok := selected.(OpsObserverEngine)
-	if !ok {
-		return browserprotocol.OpsObserverObservation{}, false,
-			browserprotocol.NewOpsObserverError(
-				browserprotocol.OpsObserverInternalError,
-				"selected Browser backend does not support Ops observation",
-			)
-	}
-	observation, busy, observerErr := observer.ObserveOps(ctx, runID, operation)
+	observation, busy, observerErr := snapshot.observer.ObserveOps(ctx, runID, operation)
 	if observerErr != nil || busy {
 		return browserprotocol.OpsObserverObservation{}, busy, observerErr
 	}
-	observation.SelectedBackend = evidence.SelectedBackend
-	if evidence.ProfileGeneration > 0 {
-		observation.ProfileGeneration = evidence.ProfileGeneration
+	observation.SelectedBackend = snapshot.evidence.SelectedBackend
+	if snapshot.evidence.ProfileGeneration > 0 {
+		observation.ProfileGeneration = snapshot.evidence.ProfileGeneration
 	}
 	return observation, false, nil
+}
+
+func (selector *BackendSelector) publishOpsSnapshotLocked() {
+	if selector == nil {
+		return
+	}
+	if selector.closed || selector.selected == nil || selector.scope.RunID == "" {
+		selector.ops.Store(nil)
+		return
+	}
+	observer, ok := selector.selected.(OpsObserverEngine)
+	if !ok {
+		selector.ops.Store(nil)
+		return
+	}
+	selector.ops.Store(&backendOpsSnapshot{
+		observer: observer,
+		evidence: selector.evidence,
+		runID:    selector.scope.RunID,
+	})
 }
 
 func newBackendSelectionScope(identity browserprotocol.Identity) backendSelectionScope {
@@ -525,6 +537,7 @@ func (selector *BackendSelector) Close() error {
 	selector.selected = nil
 	selector.evidence = browserprotocol.BackendSelectionEvidence{}
 	selector.scope = backendSelectionScope{}
+	selector.publishOpsSnapshotLocked()
 	selector.mu.Unlock()
 	var officialErr error
 	if selector.options.Official != nil {

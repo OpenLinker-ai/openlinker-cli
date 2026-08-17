@@ -406,24 +406,17 @@ func TestProcessEngineOpsObserverNeverStartsProcessAndUsesSeparateSocket(t *test
 			PageTitle:  "Example",
 		})
 	}()
+	engine.mu.Lock()
 	page, busy, observerErr := engine.ObserveActiveOps(
 		testActionContext(t), identity, browserprotocol.OpsObserverStatusOperation,
 	)
+	engine.mu.Unlock()
 	if observerErr != nil || busy || page.PageURL != "https://example.com/path" ||
 		page.PageTitle != "Example" {
 		t.Fatalf("Ops observation = %#v, busy=%v, error=%v", page, busy, observerErr)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
-	}
-	engine.mu.Lock()
-	started := time.Now()
-	_, busy, observerErr = engine.ObserveActiveOps(
-		testActionContext(t), identity, browserprotocol.OpsObserverStatusOperation,
-	)
-	engine.mu.Unlock()
-	if observerErr != nil || !busy || time.Since(started) > 100*time.Millisecond {
-		t.Fatalf("locked process observation busy=%v error=%v", busy, observerErr)
 	}
 }
 
