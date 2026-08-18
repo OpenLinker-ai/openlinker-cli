@@ -1044,3 +1044,133 @@ func assertPersistentProfileDoesNotContain(t *testing.T, root, value string) {
 		t.Fatal(err)
 	}
 }
+
+// samplingObserverStub drives ObserveOps through the exact interleavings the
+// action_in_flight evidence must distinguish. The capture callback runs between
+// the two Engine samples, mirroring a real frame capture.
+type samplingObserverStub struct {
+	samples   [][2]any
+	next      int
+	reportsIn bool
+	onCapture func()
+}
+
+func (stub *samplingObserverStub) ObserveActiveOps(
+	context.Context,
+	browserprotocol.Identity,
+	browserprotocol.OpsObserverOperation,
+) (opsPageObservation, bool, *browserprotocol.OpsObserverError) {
+	if stub.onCapture != nil {
+		stub.onCapture()
+	}
+	return opsPageObservation{PageURL: "https://example.com/", PageTitle: "t"}, false, nil
+}
+
+func (stub *samplingObserverStub) ActionInFlightSample() (uint64, bool) {
+	sample := stub.samples[stub.next]
+	if stub.next < len(stub.samples)-1 {
+		stub.next++
+	}
+	return uint64(sample[0].(int)), sample[1].(bool)
+}
+
+type plainObserverStub struct{}
+
+func (plainObserverStub) ObserveActiveOps(
+	context.Context,
+	browserprotocol.Identity,
+	browserprotocol.OpsObserverOperation,
+) (opsPageObservation, bool, *browserprotocol.OpsObserverError) {
+	return opsPageObservation{PageURL: "https://example.com/", PageTitle: "t"}, false, nil
+}
+
+func TestProfileEngineObserveOpsReportsActionContinuity(t *testing.T) {
+	t.Parallel()
+	identity := validRuntimeRequest().Identity
+	identity.Controller = browserprotocol.ControllerAgent
+
+	for _, testCase := range []struct {
+		name     string
+		observer activeOpsObserverEngine
+		want     *bool
+	}{
+		{
+			name: "one action spans the capture",
+			observer: &samplingObserverStub{
+				samples: [][2]any{{7, true}, {7, true}},
+			},
+			want: processBoolPointer(true),
+		},
+		{
+			name: "a different action started mid capture",
+			observer: &samplingObserverStub{
+				samples: [][2]any{{7, true}, {8, true}},
+			},
+			want: processBoolPointer(false),
+		},
+		{
+			name: "engine was idle for the capture",
+			observer: &samplingObserverStub{
+				samples: [][2]any{{7, false}, {7, false}},
+			},
+			want: processBoolPointer(false),
+		},
+		{
+			name:     "engine cannot report the evidence",
+			observer: plainObserverStub{},
+			want:     nil,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			engine := &ProfileEngine{}
+			engine.ops.Store(&profileOpsSnapshot{
+				identity:          identity,
+				profileGeneration: 3,
+				observer:          testCase.observer,
+			})
+			observation, busy, observerErr := engine.ObserveOps(
+				context.Background(),
+				identity.RunID,
+				browserprotocol.OpsObserverStatusOperation,
+			)
+			if busy || observerErr != nil {
+				t.Fatalf("busy=%v err=%v", busy, observerErr)
+			}
+			switch {
+			case testCase.want == nil && observation.ActionInFlight != nil:
+				t.Fatalf("expected no evidence, got %v", *observation.ActionInFlight)
+			case testCase.want != nil && observation.ActionInFlight == nil:
+				t.Fatal("expected evidence, got none")
+			case testCase.want != nil && *observation.ActionInFlight != *testCase.want:
+				t.Fatalf("action_in_flight = %v, want %v", *observation.ActionInFlight, *testCase.want)
+			}
+		})
+	}
+}
+
+func TestProfileEngineObserveOpsRejectsActionStartedAfterCapture(t *testing.T) {
+	t.Parallel()
+	identity := validRuntimeRequest().Identity
+	identity.Controller = browserprotocol.ControllerAgent
+
+	// Idle when the capture began, busy by the time it finished: the frame did
+	// not span an action, so a single post-capture sample would have lied.
+	observer := &samplingObserverStub{samples: [][2]any{{7, false}, {8, true}}}
+	engine := &ProfileEngine{}
+	engine.ops.Store(&profileOpsSnapshot{
+		identity:          identity,
+		profileGeneration: 3,
+		observer:          observer,
+	})
+	observation, _, observerErr := engine.ObserveOps(
+		context.Background(),
+		identity.RunID,
+		browserprotocol.OpsObserverStatusOperation,
+	)
+	if observerErr != nil {
+		t.Fatal(observerErr)
+	}
+	if observation.ActionInFlight == nil || *observation.ActionInFlight {
+		t.Fatal("a frame captured before the action started must not claim continuity")
+	}
+}
