@@ -30,6 +30,7 @@ func (engine *opsObserverTestEngine) ObserveOps(
 		RunID:                "11111111-1111-4111-8111-111111111111",
 		Controller:           browserprotocol.ControllerAgent,
 		SessionEpoch:         1,
+		ControlEpoch:         3,
 		BrowserSessionSHA256: strings.Repeat("a", 64),
 		AttachmentSHA256:     strings.Repeat("b", 64),
 		SelectedBackend:      BackendOfficialChrome,
