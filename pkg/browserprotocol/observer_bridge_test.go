@@ -38,7 +38,7 @@ func bridgeEvent(kind ObserverBridgeEventKind) ObserverBridgeEvent {
 		event.CapturedAt = &captured
 		event.Frame = validViewerFrame()
 	case ObserverBridgeError:
-		event.Error = NewOpsObserverError(OpsObserverProtocolError, "boom")
+		event.ErrorCode = string(OpsObserverProtocolError)
 	}
 	return event
 }
@@ -136,7 +136,7 @@ func TestObserverBridgeEventValidationPerKind(t *testing.T) {
 	}
 
 	silent := bridgeEvent(ObserverBridgeError)
-	silent.Error = nil
+	silent.ErrorCode = ""
 	if silent.Validate() == nil {
 		t.Fatal("an error event without an error must be refused")
 	}

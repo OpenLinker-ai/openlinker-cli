@@ -85,7 +85,9 @@ type ObserverBridgeEvent struct {
 	Kind            ObserverBridgeEventKind `json:"kind"`
 	CapturedAt      *time.Time              `json:"captured_at,omitempty"`
 	Frame           *ViewerFrame            `json:"frame,omitempty"`
-	Error           *OpsObserverError       `json:"error,omitempty"`
+	// Only the code crosses the wire. The message is free text that could carry
+	// local detail, and Core records the code as an end reason anyway.
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 type ObserverBridgeEventAck struct {
@@ -122,7 +124,7 @@ func (event ObserverBridgeEvent) Validate() *OpsObserverError {
 	}
 	switch event.Kind {
 	case ObserverBridgeStarted, ObserverBridgeStopped:
-		if event.Frame != nil || event.Error != nil {
+		if event.Frame != nil || event.ErrorCode != "" {
 			return NewOpsObserverError(OpsObserverProtocolError, "Observer lifecycle event carries a payload")
 		}
 	case ObserverBridgeFrame:
@@ -133,7 +135,7 @@ func (event ObserverBridgeEvent) Validate() *OpsObserverError {
 			return NewOpsObserverError(OpsObserverInternalError, "Observer frame is invalid")
 		}
 	case ObserverBridgeError:
-		if event.Error == nil || strings.TrimSpace(string(event.Error.Code)) == "" {
+		if strings.TrimSpace(event.ErrorCode) == "" {
 			return NewOpsObserverError(OpsObserverProtocolError, "Observer error event has no code")
 		}
 	default:

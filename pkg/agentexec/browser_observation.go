@@ -296,7 +296,7 @@ func (observation *browserObservation) emitError(
 	ctx, cancel := context.WithTimeout(context.Background(), browserprotocol.MaxOpsObserverDeadline)
 	defer cancel()
 	observation.emitEvent(ctx, command, browserprotocol.ObserverBridgeEvent{
-		Kind:  browserprotocol.ObserverBridgeError,
-		Error: failure,
+		Kind:      browserprotocol.ObserverBridgeError,
+		ErrorCode: string(failure.Code),
 	})
 }
