@@ -18,6 +18,10 @@ type browserHumanControl struct {
 	lease      *browserRunLease
 	extensions *openlinker.RuntimeExtensions
 	emit       func(string, any) error
+	// observation is demultiplexed from the same command channel. Extensions
+	// share one channel, so a second reader would steal commands from this one;
+	// the two capabilities stay separate in state and lifecycle, not in wiring.
+	observation *browserObservation
 
 	mu          sync.Mutex
 	paused      bool
@@ -37,10 +41,11 @@ func newBrowserHumanControl(
 	emit func(string, any) error,
 ) *browserHumanControl {
 	return &browserHumanControl{
-		lease:      lease,
-		extensions: extensions,
-		emit:       emit,
-		resumed:    make(chan struct{}),
+		lease:       lease,
+		extensions:  extensions,
+		emit:        emit,
+		observation: newBrowserObservation(lease, extensions),
+		resumed:     make(chan struct{}),
 	}
 }
 
@@ -147,11 +152,21 @@ func (control *browserHumanControl) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			control.stopFrames()
+			control.observation.stop()
 			return
 		case extension, ok := <-commands:
 			if !ok {
 				control.stopFrames()
+				control.observation.stop()
 				return
+			}
+			if extension.Type == browserprotocol.ObserverBridgeCommandType {
+				control.observation.handleCommand(
+					ctx,
+					extension.Payload,
+					extension.AttemptIdentity,
+				)
+				continue
 			}
 			if extension.Type != browserprotocol.RuntimeViewerCommandMessage {
 				continue
