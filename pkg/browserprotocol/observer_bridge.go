@@ -3,16 +3,19 @@ package browserprotocol
 import (
 	"strings"
 	"time"
+
+	openlinker "github.com/OpenLinker-ai/openlinker-go"
 )
 
 // The authenticated observation extension. A Runtime command has no reply
 // channel, so every outcome the caller needs -- started, a frame, a normal stop
 // and any error -- travels back on the event stream instead.
 const (
-	ObserverBridgeFeature      = "browser_authenticated_observation.v1"
-	ObserverBridgeCommandType  = "browser.observer.command"
-	ObserverBridgeEventType    = "browser.observer.event"
-	ObserverBridgeEventAckType = "browser.observer.event.ack"
+	ObserverBridgeFeature = "browser_authenticated_observation.v1"
+
+	ObserverBridgeCommandType  openlinker.RuntimeMessageType = "browser.observer.command"
+	ObserverBridgeEventType    openlinker.RuntimeMessageType = "browser.observer.event"
+	ObserverBridgeEventAckType openlinker.RuntimeMessageType = "browser.observer.event.ack"
 )
 
 type ObserverBridgeAction string
@@ -145,4 +148,13 @@ func (event ObserverBridgeEvent) Validate() *OpsObserverError {
 func (ack ObserverBridgeEventAck) Matches(event ObserverBridgeEvent) bool {
 	return ack.LeaseID == event.LeaseID && ack.EventSeq == event.EventSeq &&
 		ack.AttemptIdentity.Equal(event.AttemptIdentity)
+}
+
+// ObserverBridgeExtensionRoute registers the observation extension. The command
+// is a one-way push, so outcomes ride the event request/reply pair rather than a
+// command reply that does not exist.
+var ObserverBridgeExtensionRoute = openlinker.RuntimeExtensionRoute{
+	CommandType: ObserverBridgeCommandType,
+	RequestType: ObserverBridgeEventType,
+	ReplyType:   ObserverBridgeEventAckType,
 }
