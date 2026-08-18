@@ -141,3 +141,30 @@ func observationPayload(
 	}
 	return payload
 }
+
+// The frame carries the identity the Runtime backfilled at capture time, which
+// is stronger evidence than the Worker's own snapshot: it describes the Attempt
+// the pixels actually came from.
+func TestObservationRejectsFramesFromAnotherAttempt(t *testing.T) {
+	t.Parallel()
+	command := observationCommand(browserprotocol.ObserverBridgeStart)
+	matching := browserprotocol.OpsObserverObservation{
+		RunID:        command.AttemptIdentity.RunID,
+		SessionEpoch: command.AttemptIdentity.SessionEpoch,
+	}
+	if capturedFrameIsForeign(command, matching) {
+		t.Fatal("a matching capture was treated as foreign")
+	}
+	for name, mutate := range map[string]func(*browserprotocol.OpsObserverObservation){
+		"run":   func(o *browserprotocol.OpsObserverObservation) { o.RunID = "66666666-6666-4666-8666-666666666666" },
+		"epoch": func(o *browserprotocol.OpsObserverObservation) { o.SessionEpoch++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			drifted := matching
+			mutate(&drifted)
+			if !capturedFrameIsForeign(command, drifted) {
+				t.Fatalf("a capture with a drifted %s was accepted", name)
+			}
+		})
+	}
+}

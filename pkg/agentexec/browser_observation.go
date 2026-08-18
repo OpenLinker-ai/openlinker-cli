@@ -3,12 +3,36 @@ package agentexec
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclient"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
 	openlinker "github.com/OpenLinker-ai/openlinker-go"
 )
+
+const (
+	observationSocketEnvironment     = "OPENLINKER_BROWSER_OBSERVER_SOCKET"
+	observationCredentialEnvironment = "OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE"
+	defaultObservationSocket         = "/browser-control/openlinker.browser.observer.sock"
+	defaultObservationCredential     = "/browser-control/observer-credential"
+)
+
+func observationSocketPath() string {
+	if value := strings.TrimSpace(os.Getenv(observationSocketEnvironment)); value != "" {
+		return value
+	}
+	return defaultObservationSocket
+}
+
+func observationCredentialPath() string {
+	if value := strings.TrimSpace(os.Getenv(observationCredentialEnvironment)); value != "" {
+		return value
+	}
+	return defaultObservationCredential
+}
 
 // browserObservation serves authenticated read-only observation.
 //
@@ -102,6 +126,25 @@ func (observation *browserObservation) stream(
 ) {
 	defer observation.stop()
 
+	// Claiming the bridge lease is what makes the local Viewer and this
+	// observation contend for the one Runtime lease. A refusal here means someone
+	// is already watching, and it has to reach the caller rather than look like a
+	// silent stall.
+	stream, err := browserclient.NewOpsObserverStream(ctx, browserclient.OpsObserverConfig{
+		SocketPath:     observationSocketPath(),
+		CredentialFile: observationCredentialPath(),
+		RunID:          command.AttemptIdentity.RunID,
+		TTL:            time.Until(command.LeaseExpiresAt),
+	})
+	if err != nil {
+		observation.emitError(command, browserprotocol.NewOpsObserverError(
+			browserprotocol.OpsObserverDisabled,
+			"the observation bridge is unavailable",
+		))
+		return
+	}
+	defer stream.Close()
+
 	if !observation.emitEvent(ctx, command, browserprotocol.ObserverBridgeEvent{
 		Kind: browserprotocol.ObserverBridgeStarted,
 	}) {
@@ -135,15 +178,56 @@ func (observation *browserObservation) stream(
 				))
 				return
 			}
-			captured := time.Now().UTC()
+			response, observeErr := stream.Observe(
+				ctx,
+				browserprotocol.OpsObserverFrameOperation,
+			)
+			if observeErr != nil {
+				// Busy is transient: the Engine is occupied authorizing the
+				// observer, so skip this tick rather than ending the lease.
+				if observeErr.Code == browserprotocol.OpsObserverBusyError {
+					continue
+				}
+				observation.emitError(command, observeErr)
+				return
+			}
+			if response.Observation == nil || response.Observation.Frame == nil {
+				continue
+			}
+			// The Runtime backfilled its own identity, so compare that rather
+			// than the local snapshot: it is the identity the frame was actually
+			// captured under.
+			if capturedFrameIsForeign(command, *response.Observation) {
+				observation.emitError(command, browserprotocol.NewOpsObserverError(
+					browserprotocol.OpsObserverRunNotActive,
+					"the captured frame belongs to another Attempt",
+				))
+				return
+			}
+			captured := response.Observation.CapturedAt.UTC()
+			if captured.IsZero() {
+				captured = time.Now().UTC()
+			}
 			if !observation.emitEvent(ctx, command, browserprotocol.ObserverBridgeEvent{
 				Kind:       browserprotocol.ObserverBridgeFrame,
 				CapturedAt: &captured,
+				Frame:      response.Observation.Frame,
 			}) {
 				return
 			}
 		}
 	}
+}
+
+// capturedFrameIsForeign compares the identity the Runtime backfilled at capture
+// time against the one the command named. That evidence is stronger than the
+// Worker's own snapshot because it describes the Attempt the pixels came from.
+func capturedFrameIsForeign(
+	command browserprotocol.ObserverBridgeCommand,
+	observed browserprotocol.OpsObserverObservation,
+) bool {
+	return observed.RunID != command.AttemptIdentity.RunID ||
+		observed.SessionEpoch != command.AttemptIdentity.SessionEpoch
 }
 
 // observedIdentityMatches compares every field the command named. A partial
