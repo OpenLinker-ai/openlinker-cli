@@ -318,6 +318,7 @@ func (engine *ProfileEngine) ObserveOps(
 		RunID:                snapshot.identity.RunID,
 		Controller:           snapshot.identity.Controller,
 		SessionEpoch:         snapshot.identity.SessionEpoch,
+		ControlEpoch:         snapshot.identity.ControlEpoch,
 		BrowserSessionSHA256: opsIdentitySHA256(snapshot.identity.BrowserSessionID),
 		AttachmentSHA256:     opsIdentitySHA256(snapshot.identity.AttachmentID),
 		ProfileGeneration:    snapshot.profileGeneration,

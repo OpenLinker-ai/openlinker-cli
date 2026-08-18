@@ -80,6 +80,11 @@ func TestOpsObserverObservationRejectsUnredactedURLAndInvalidFrame(t *testing.T)
 	if failure := observation.Validate(OpsObserverFrameOperation); failure == nil {
 		t.Fatal("invalid Ops Observer frame was accepted")
 	}
+	observation = validOpsObservation()
+	observation.ControlEpoch = 0
+	if failure := observation.Validate(OpsObserverStatusOperation); failure == nil {
+		t.Fatal("zero control epoch was accepted")
+	}
 }
 
 func TestOpsObserverResponseIsStrict(t *testing.T) {
@@ -119,6 +124,7 @@ func validOpsObservation() OpsObserverObservation {
 		RunID:                "33333333-3333-4333-8333-333333333333",
 		Controller:           ControllerAgent,
 		SessionEpoch:         1,
+		ControlEpoch:         3,
 		BrowserSessionSHA256: strings.Repeat("a", 64),
 		AttachmentSHA256:     strings.Repeat("b", 64),
 		SelectedBackend:      "official_chrome_extension",

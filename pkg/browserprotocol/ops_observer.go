@@ -57,6 +57,7 @@ type OpsObserverObservation struct {
 	RunID                string       `json:"run_id"`
 	Controller           Controller   `json:"controller"`
 	SessionEpoch         uint64       `json:"session_epoch"`
+	ControlEpoch         uint64       `json:"control_epoch"`
 	BrowserSessionSHA256 string       `json:"browser_session_sha256"`
 	AttachmentSHA256     string       `json:"attachment_sha256"`
 	SelectedBackend      string       `json:"selected_backend"`
@@ -118,6 +119,7 @@ func (request OpsObserverRequest) Validate(now time.Time) *OpsObserverError {
 
 func (observation OpsObserverObservation) Validate(operation OpsObserverOperation) *OpsObserverError {
 	if !validUUID(observation.RunID) || observation.SessionEpoch == 0 ||
+		observation.ControlEpoch == 0 ||
 		!validSHA256Hex(observation.BrowserSessionSHA256) ||
 		!validSHA256Hex(observation.AttachmentSHA256) ||
 		observation.FrameSequence == 0 || observation.CapturedAt.IsZero() {
