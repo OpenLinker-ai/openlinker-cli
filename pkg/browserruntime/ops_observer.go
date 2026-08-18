@@ -340,3 +340,12 @@ func (server *OpsObserverServer) writeResponse(connection *net.UnixConn, respons
 	raw = append(raw, '\n')
 	_, _ = connection.Write(raw)
 }
+
+// Leases exposes the shared observation lease so a second listener can be built
+// against the same Runtime-wide lease rather than a private one.
+func (server *OpsObserverServer) Leases() *OpsObserverLeaseManager {
+	if server == nil {
+		return nil
+	}
+	return server.leaseManager()
+}
