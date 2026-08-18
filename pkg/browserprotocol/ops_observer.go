@@ -21,6 +21,10 @@ const (
 	MaxOpsObserverCapture      = 500 * time.Millisecond
 	MaxOpsObserverTitleBytes   = 512
 	MaxOpsObserverURLBytes     = 4096
+	// A probe response carries only contract, request identity and status, so it
+	// gets a small bound of its own. Reusing a frame-sized limit would let a
+	// health check accept a megabyte from a listener it is meant to be checking.
+	MaxOpsObserverProbeResponseBytes = 4 << 10
 )
 
 type OpsObserverOperation string
@@ -28,6 +32,12 @@ type OpsObserverOperation string
 const (
 	OpsObserverStatusOperation OpsObserverOperation = "observe_status"
 	OpsObserverFrameOperation  OpsObserverOperation = "observe_frame"
+	// OpsObserverProbeOperation answers "is this listener serving its protocol"
+	// without touching the Runtime-wide lease or capturing a frame. A probe that
+	// claimed the lease would periodically evict the real observer, and one that
+	// only checked the socket file would repeat the empty-probe failure this
+	// repository already fixed once for the Browser Runtime healthcheck.
+	OpsObserverProbeOperation OpsObserverOperation = "observe_probe"
 )
 
 type OpsObserverErrorCode string
@@ -101,6 +111,22 @@ func (request OpsObserverRequest) Validate(now time.Time) *OpsObserverError {
 	if len(request.ChannelCredential) < 32 || len(request.ChannelCredential) > 512 {
 		return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer credential shape is invalid")
 	}
+	now = now.UTC()
+	if request.Operation == OpsObserverProbeOperation {
+		// A probe carries no lease, so it must not be held to the lease rules.
+		if !validUUID(request.RequestID) {
+			return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer identity is invalid")
+		}
+		if request.ObserverLeaseID != "" || request.RunID != "" ||
+			!request.LeaseExpiresAt.IsZero() {
+			return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer probe must not carry a lease")
+		}
+		if request.Deadline.IsZero() || !request.Deadline.After(now) ||
+			request.Deadline.After(now.Add(MaxOpsObserverDeadline)) {
+			return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer deadline is invalid")
+		}
+		return nil
+	}
 	if !validUUID(request.RequestID) || !validUUID(request.ObserverLeaseID) ||
 		!validUUID(request.RunID) {
 		return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer identity is invalid")
@@ -110,7 +136,6 @@ func (request OpsObserverRequest) Validate(now time.Time) *OpsObserverError {
 	default:
 		return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer operation is invalid")
 	}
-	now = now.UTC()
 	if request.Deadline.IsZero() || !request.Deadline.After(now) ||
 		request.Deadline.After(now.Add(MaxOpsObserverDeadline)) {
 		return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer deadline is invalid")
@@ -120,6 +145,16 @@ func (request OpsObserverRequest) Validate(now time.Time) *OpsObserverError {
 		return NewOpsObserverError(OpsObserverProtocolError, "Ops Observer lease expiry is invalid")
 	}
 	return nil
+}
+
+// OpsObserverProbeResponse answers a probe with contract and request identity
+// only. It carries no observation, so a probe can never leak page content.
+func OpsObserverProbeResponse(requestID string) OpsObserverResponse {
+	return OpsObserverResponse{
+		ContractID: OpsObserverContractID,
+		RequestID:  requestID,
+		Status:     "ok",
+	}
 }
 
 func (observation OpsObserverObservation) Validate(operation OpsObserverOperation) *OpsObserverError {

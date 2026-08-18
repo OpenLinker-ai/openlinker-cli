@@ -300,10 +300,37 @@ func runHealthcheck() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultHealthcheckTimeout)
 	defer cancel()
-	return browserclient.CheckHealth(
+	if err := browserclient.CheckHealth(
 		ctx,
 		socketPath,
 		credential,
+		defaultHealthcheckTimeout,
+	); err != nil {
+		return err
+	}
+	observationEnabled, err := booleanValue(
+		"OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED",
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if !observationEnabled {
+		return nil
+	}
+	// With the bridge enabled the Worker declares the observation feature, so an
+	// unserved listener would leave Core believing observation works while every
+	// start fails. Probing here surfaces that at the deployment gate instead.
+	observerCredential, err := readCredentialFile(
+		value("OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE", defaultObserverCredential),
+	)
+	if err != nil {
+		return err
+	}
+	return browserclient.ProbeObserverBridge(
+		ctx,
+		value("OPENLINKER_BROWSER_OBSERVER_SOCKET", defaultObserverSocket),
+		observerCredential,
 		defaultHealthcheckTimeout,
 	)
 }

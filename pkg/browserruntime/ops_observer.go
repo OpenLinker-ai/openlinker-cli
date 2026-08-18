@@ -235,6 +235,13 @@ func (server *OpsObserverServer) handleConnection(parent context.Context, connec
 			server.writeResponse(connection, browserprotocol.OpsObserverErrorResponse(request.RequestID, observerErr))
 			return
 		}
+		if request.Operation == browserprotocol.OpsObserverProbeOperation {
+			// Answered before lease admission on purpose: the probe proves the
+			// listener is serving its protocol without competing for the single
+			// Runtime lease, so a health check cannot evict a real observer.
+			server.writeResponse(connection, browserprotocol.OpsObserverProbeResponse(request.RequestID))
+			continue
+		}
 		if admittedLeaseID == "" {
 			if request.LeaseExpiresAt.Before(now.Add(
 				browserprotocol.MinOpsObserverTTL - browserprotocol.MaxOpsObserverDeadline,
