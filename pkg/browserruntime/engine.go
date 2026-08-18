@@ -41,6 +41,13 @@ type activeOpsObserverEngine interface {
 	) (opsPageObservation, bool, *browserprotocol.OpsObserverError)
 }
 
+// opsActionInFlightReporter is implemented by Engines that can report whether a
+// provider-issued Browser action is executing. It stays optional so an Engine
+// without the capability still serves observations, only without the evidence.
+type opsActionInFlightReporter interface {
+	ActionInFlightSample() (started uint64, inFlight bool)
+}
+
 type opsPageObservation struct {
 	PageURL   string
 	PageTitle string

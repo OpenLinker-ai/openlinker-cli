@@ -47,6 +47,12 @@ type ProcessEngine struct {
 	closed        bool
 	opsSocketPath string
 	opsReady      atomic.Bool
+	// actionsInFlight counts provider-issued Browser actions currently being
+	// executed by this Engine, and actionsStarted counts how many have begun.
+	// ObserveActiveOps never takes engine.mu, so the Ops Observer can sample
+	// both while an action occupies the Engine.
+	actionsInFlight atomic.Int64
+	actionsStarted  atomic.Uint64
 }
 
 type engineProcess struct {
@@ -156,6 +162,9 @@ func (engine *ProcessEngine) Execute(
 	if engine.closed {
 		return browserprotocol.Observation{}, runtimeUnavailable("browser engine is closed")
 	}
+	engine.actionsStarted.Add(1)
+	engine.actionsInFlight.Add(1)
+	defer engine.actionsInFlight.Add(-1)
 	if err := ctx.Err(); err != nil {
 		return browserprotocol.Observation{}, contextFailure(err)
 	}
@@ -406,6 +415,21 @@ func (engine *ProcessEngine) ExecuteViewer(
 		}
 		return response.Frame, nil
 	}
+}
+
+// ActionInFlightSample reports how many provider-issued Browser actions this
+// Engine has started and whether one is executing right now. Callers that need
+// to prove an action spanned a whole window sample twice and require both an
+// in-flight result and an unchanged started count. It reads atomics rather than
+// engine.mu so an observer can sample it while the Engine is occupied.
+func (engine *ProcessEngine) ActionInFlightSample() (uint64, bool) {
+	if engine == nil {
+		return 0, false
+	}
+	// Load the counter first so a concurrent start cannot make a stale
+	// "started" value look unchanged across the caller's window.
+	inFlight := engine.actionsInFlight.Load() > 0
+	return engine.actionsStarted.Load(), inFlight
 }
 
 func (engine *ProcessEngine) ObserveActiveOps(

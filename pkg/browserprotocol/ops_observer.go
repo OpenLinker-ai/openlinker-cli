@@ -54,19 +54,24 @@ type OpsObserverRequest struct {
 }
 
 type OpsObserverObservation struct {
-	RunID                string       `json:"run_id"`
-	Controller           Controller   `json:"controller"`
-	SessionEpoch         uint64       `json:"session_epoch"`
-	ControlEpoch         uint64       `json:"control_epoch"`
-	BrowserSessionSHA256 string       `json:"browser_session_sha256"`
-	AttachmentSHA256     string       `json:"attachment_sha256"`
-	SelectedBackend      string       `json:"selected_backend"`
-	ProfileGeneration    uint64       `json:"profile_generation"`
-	FrameSequence        uint64       `json:"frame_sequence"`
-	CapturedAt           time.Time    `json:"captured_at"`
-	PageURL              string       `json:"page_url,omitempty"`
-	PageTitle            string       `json:"page_title,omitempty"`
-	Frame                *ViewerFrame `json:"frame,omitempty"`
+	RunID                string     `json:"run_id"`
+	Controller           Controller `json:"controller"`
+	SessionEpoch         uint64     `json:"session_epoch"`
+	ControlEpoch         uint64     `json:"control_epoch"`
+	BrowserSessionSHA256 string     `json:"browser_session_sha256"`
+	AttachmentSHA256     string     `json:"attachment_sha256"`
+	SelectedBackend      string     `json:"selected_backend"`
+	ProfileGeneration    uint64     `json:"profile_generation"`
+	FrameSequence        uint64     `json:"frame_sequence"`
+	CapturedAt           time.Time  `json:"captured_at"`
+	PageURL              string     `json:"page_url,omitempty"`
+	PageTitle            string     `json:"page_title,omitempty"`
+	// ActionInFlight reports whether a provider-issued Browser action was
+	// executing on the Engine when this observation was captured. It stays
+	// optional so an older Runtime that cannot report it is still accepted;
+	// gates that need the evidence must require an explicit true.
+	ActionInFlight *bool        `json:"action_in_flight,omitempty"`
+	Frame          *ViewerFrame `json:"frame,omitempty"`
 }
 
 type OpsObserverError struct {

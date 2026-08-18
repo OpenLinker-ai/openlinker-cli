@@ -306,6 +306,14 @@ func (engine *ProfileEngine) ObserveOps(
 				"requested Run is not active",
 			)
 	}
+	// Sample the Engine on both sides of the capture. Reporting true only when
+	// one action was in flight at both ends and no further action started keeps
+	// a frame captured in an idle gap from claiming it spanned an action.
+	reporter, canReportAction := snapshot.observer.(opsActionInFlightReporter)
+	startedBefore, inFlightBefore := uint64(0), false
+	if canReportAction {
+		startedBefore, inFlightBefore = reporter.ActionInFlightSample()
+	}
 	page, busy, observerErr := snapshot.observer.ObserveActiveOps(
 		ctx,
 		snapshot.identity,
@@ -313,6 +321,12 @@ func (engine *ProfileEngine) ObserveOps(
 	)
 	if observerErr != nil || busy {
 		return browserprotocol.OpsObserverObservation{}, busy, observerErr
+	}
+	var actionInFlight *bool
+	if canReportAction {
+		startedAfter, inFlightAfter := reporter.ActionInFlightSample()
+		executing := inFlightBefore && inFlightAfter && startedBefore == startedAfter
+		actionInFlight = &executing
 	}
 	return browserprotocol.OpsObserverObservation{
 		RunID:                snapshot.identity.RunID,
@@ -324,6 +338,7 @@ func (engine *ProfileEngine) ObserveOps(
 		ProfileGeneration:    snapshot.profileGeneration,
 		PageURL:              page.PageURL,
 		PageTitle:            page.PageTitle,
+		ActionInFlight:       actionInFlight,
 		Frame:                page.Frame,
 	}, false, nil
 }

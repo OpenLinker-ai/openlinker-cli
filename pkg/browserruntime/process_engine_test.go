@@ -605,3 +605,57 @@ func processExists(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
+
+func TestProcessEngineReportsActionInFlightOnlyWhileExecuting(t *testing.T) {
+	t.Parallel()
+	engine := testProcessEngine(t)
+	identity := validRuntimeRequest().Identity
+
+	if started, inFlight := engine.ActionInFlightSample(); started != 0 || inFlight {
+		t.Fatalf("idle Engine sample = (%d, %v)", started, inFlight)
+	}
+
+	sampled := make(chan [2]uint64, 1)
+	go func() {
+		// The helper holds a wait action open, so this samples the Engine while
+		// exactly one provider-issued action occupies it.
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			started, inFlight := engine.ActionInFlightSample()
+			if inFlight {
+				sampled <- [2]uint64{started, 1}
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		sampled <- [2]uint64{0, 0}
+	}()
+
+	// The helper sleeps a fixed 5s for any wait action, so give the call room to
+	// finish and leave a wide window for the concurrent sampler.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, failure := engine.Execute(
+		ctx,
+		identity,
+		browserprotocol.Action{Kind: browserprotocol.ActionWait, DurationMS: processIntPointer(250)},
+	); failure != nil {
+		t.Fatal(failure)
+	}
+
+	observed := <-sampled
+	if observed[1] != 1 {
+		t.Fatal("Ops sampling never observed the in-flight action")
+	}
+	if observed[0] != 1 {
+		t.Fatalf("in-flight sample reported started = %d, want 1", observed[0])
+	}
+
+	started, inFlight := engine.ActionInFlightSample()
+	if inFlight {
+		t.Fatal("settled Engine still reports an in-flight action")
+	}
+	if started != 1 {
+		t.Fatalf("settled started count = %d, want 1", started)
+	}
+}
