@@ -26,6 +26,10 @@ type OpsObserverServerOptions struct {
 	ChannelCredential string
 	Observer          OpsObserverEngine
 	Now               func() time.Time
+	// Leases lets several listeners share one Runtime-wide observation lease.
+	// When nil the server owns a private manager, which keeps the single-socket
+	// deployment behaving exactly as before.
+	Leases *OpsObserverLeaseManager
 }
 
 type OpsObserverServer struct {
@@ -34,7 +38,7 @@ type OpsObserverServer struct {
 	listener    *net.UnixListener
 	socketInfo  os.FileInfo
 	closed      bool
-	active      *opsObserverLease
+	leases      *OpsObserverLeaseManager
 	connections map[*net.UnixConn]struct{}
 	wg          sync.WaitGroup
 }
@@ -67,8 +71,13 @@ func NewOpsObserverServer(options OpsObserverServerOptions) (*OpsObserverServer,
 	if options.SocketMode.Perm()&0o077 != 0 {
 		return nil, errors.New("Ops Observer socket must be owner-only")
 	}
+	leases := options.Leases
+	if leases == nil {
+		leases = NewOpsObserverLeaseManager(options.Now)
+	}
 	return &OpsObserverServer{
 		options:     options,
+		leases:      leases,
 		connections: make(map[*net.UnixConn]struct{}),
 	}, nil
 }
@@ -291,64 +300,35 @@ func (server *OpsObserverServer) admitLease(request browserprotocol.OpsObserverR
 	if server.closed {
 		return browserprotocol.NewOpsObserverError(browserprotocol.OpsObserverDisabled, "Ops Observer is unavailable")
 	}
-	if server.active != nil {
-		return browserprotocol.NewOpsObserverError(browserprotocol.OpsObserverAlreadyActive, "another Ops Observer is active")
-	}
-	server.active = &opsObserverLease{
-		id:        request.ObserverLeaseID,
-		runID:     request.RunID,
-		expiresAt: request.LeaseExpiresAt.UTC(),
-		seen:      make(map[string]struct{}, maxOpsObserverRequestsPerLease),
-	}
-	return nil
+	leases := server.leases
+	server.mu.Unlock()
+	failure := leases.Admit(request)
+	server.mu.Lock()
+	return failure
 }
 
 func (server *OpsObserverServer) validateLeaseRequest(request browserprotocol.OpsObserverRequest) *browserprotocol.OpsObserverError {
-	server.mu.Lock()
-	defer server.mu.Unlock()
-	lease := server.active
-	if lease == nil || lease.id != request.ObserverLeaseID || lease.runID != request.RunID ||
-		!lease.expiresAt.Equal(request.LeaseExpiresAt.UTC()) ||
-		!server.options.Now().UTC().Before(lease.expiresAt) {
-		return browserprotocol.NewOpsObserverError(browserprotocol.OpsObserverProtocolError, "Ops Observer lease is stale")
-	}
-	return nil
+	return server.leaseManager().Validate(request)
 }
 
 func (server *OpsObserverServer) admitRequest(leaseID, requestID string) *browserprotocol.OpsObserverError {
-	server.mu.Lock()
-	defer server.mu.Unlock()
-	lease := server.active
-	if lease == nil || lease.id != leaseID {
-		return browserprotocol.NewOpsObserverError(browserprotocol.OpsObserverProtocolError, "Ops Observer lease is stale")
-	}
-	if _, exists := lease.seen[requestID]; exists {
-		return browserprotocol.NewOpsObserverError(browserprotocol.OpsObserverProtocolError, "Ops Observer request was replayed")
-	}
-	if len(lease.seen) >= maxOpsObserverRequestsPerLease {
-		return browserprotocol.NewOpsObserverError(browserprotocol.OpsObserverProtocolError, "Ops Observer request limit reached")
-	}
-	lease.seen[requestID] = struct{}{}
-	return nil
+	return server.leaseManager().AdmitRequest(leaseID, requestID)
 }
 
 func (server *OpsObserverServer) nextSequence(leaseID string) (uint64, *browserprotocol.OpsObserverError) {
-	server.mu.Lock()
-	defer server.mu.Unlock()
-	lease := server.active
-	if lease == nil || lease.id != leaseID {
-		return 0, browserprotocol.NewOpsObserverError(browserprotocol.OpsObserverProtocolError, "Ops Observer lease is stale")
-	}
-	lease.sequence++
-	return lease.sequence, nil
+	return server.leaseManager().NextSequence(leaseID)
 }
 
 func (server *OpsObserverServer) releaseLease(leaseID string) {
+	server.leaseManager().Release(leaseID)
+}
+
+// leaseManager reads the shared manager under the server lock so a listener that
+// is concurrently closing cannot race the pointer read.
+func (server *OpsObserverServer) leaseManager() *OpsObserverLeaseManager {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if server.active != nil && server.active.id == leaseID {
-		server.active = nil
-	}
+	return server.leases
 }
 
 func (server *OpsObserverServer) writeResponse(connection *net.UnixConn, response browserprotocol.OpsObserverResponse) {

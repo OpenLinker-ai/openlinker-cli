@@ -185,3 +185,103 @@ func newOpsObserverTestStream(
 	}
 	return stream
 }
+
+func observerLeaseRequest(leaseID, runID string, expires time.Time) browserprotocol.OpsObserverRequest {
+	return browserprotocol.OpsObserverRequest{
+		ObserverLeaseID: leaseID,
+		RunID:           runID,
+		LeaseExpiresAt:  expires,
+	}
+}
+
+// Two listeners front one Runtime. If each kept its own lease pointer both would
+// be admitted and the single-observer guarantee would vanish, so this asserts the
+// contention in both directions rather than only the local-Viewer-first case.
+func TestOpsObserverLeaseManagerIsSharedAcrossListeners(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	expires := now.Add(10 * time.Minute)
+	runID := "11111111-1111-4111-8111-111111111111"
+
+	for _, order := range []struct {
+		name         string
+		firstLeaseID string
+		laterLeaseID string
+	}{
+		{name: "local Viewer first", firstLeaseID: "lease-local", laterLeaseID: "lease-core"},
+		{name: "Core Observer first", firstLeaseID: "lease-core", laterLeaseID: "lease-local"},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			manager := NewOpsObserverLeaseManager(func() time.Time { return now })
+
+			if failure := manager.Admit(observerLeaseRequest(order.firstLeaseID, runID, expires)); failure != nil {
+				t.Fatalf("first listener was refused: %v", failure)
+			}
+			second := manager.Admit(observerLeaseRequest(order.laterLeaseID, runID, expires))
+			if second == nil {
+				t.Fatal("both listeners held the Runtime lease at the same time")
+			}
+			if second.Code != browserprotocol.OpsObserverAlreadyActive {
+				t.Fatalf("contention code = %v, want %v", second.Code, browserprotocol.OpsObserverAlreadyActive)
+			}
+
+			// A release from the listener that does not own the lease must not
+			// free it for anyone else.
+			manager.Release(order.laterLeaseID)
+			if !manager.held() {
+				t.Fatal("a non-owner release dropped the active lease")
+			}
+
+			manager.Release(order.firstLeaseID)
+			if manager.held() {
+				t.Fatal("the owner release did not drop the lease")
+			}
+			if failure := manager.Admit(observerLeaseRequest(order.laterLeaseID, runID, expires)); failure != nil {
+				t.Fatalf("second listener was refused after release: %v", failure)
+			}
+		})
+	}
+}
+
+// Two servers built from the same manager must contend; two servers built
+// without one must not, so the single-socket deployment is unchanged.
+func TestOpsObserverServersShareOrIsolateLeasesByOption(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	expires := now.Add(10 * time.Minute)
+	runID := "22222222-2222-4222-8222-222222222222"
+	request := observerLeaseRequest("lease-a", runID, expires)
+
+	shared := NewOpsObserverLeaseManager(func() time.Time { return now })
+	first := newObserverTestServer(t, shared)
+	second := newObserverTestServer(t, shared)
+	if failure := first.admitLease(request); failure != nil {
+		t.Fatalf("shared first admit: %v", failure)
+	}
+	if failure := second.admitLease(observerLeaseRequest("lease-b", runID, expires)); failure == nil {
+		t.Fatal("servers sharing a manager both admitted a lease")
+	}
+
+	isolatedFirst := newObserverTestServer(t, nil)
+	isolatedSecond := newObserverTestServer(t, nil)
+	if failure := isolatedFirst.admitLease(request); failure != nil {
+		t.Fatalf("isolated first admit: %v", failure)
+	}
+	if failure := isolatedSecond.admitLease(request); failure != nil {
+		t.Fatalf("a server with its own manager must stay independent: %v", failure)
+	}
+}
+
+func newObserverTestServer(t *testing.T, leases *OpsObserverLeaseManager) *OpsObserverServer {
+	t.Helper()
+	server, err := NewOpsObserverServer(OpsObserverServerOptions{
+		SocketPath:        filepath.Join(t.TempDir(), "observer.sock"),
+		ChannelCredential: strings.Repeat("c", 64),
+		Observer:          &opsObserverTestEngine{},
+		Leases:            leases,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
