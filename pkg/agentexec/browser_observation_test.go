@@ -2,6 +2,7 @@ package agentexec
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,11 +18,12 @@ func observationCommand(action browserprotocol.ObserverBridgeAction) browserprot
 	now := time.Now().UTC()
 	return browserprotocol.ObserverBridgeCommand{
 		AttemptIdentity: browserprotocol.ObserverBridgeIdentity{
-			RunID:            "11111111-1111-4111-8111-111111111111",
-			AttemptID:        "22222222-2222-4222-8222-222222222222",
-			SessionEpoch:     4,
-			AttachmentID:     "attachment-a",
-			RuntimeSessionID: "33333333-3333-4333-8333-333333333333",
+			RunID:                "11111111-1111-4111-8111-111111111111",
+			AttemptID:            "22222222-2222-4222-8222-222222222222",
+			SessionEpoch:         4,
+			BrowserSessionSHA256: strings.Repeat("a", 64),
+			AttachmentSHA256:     strings.Repeat("b", 64),
+			RuntimeSessionID:     "33333333-3333-4333-8333-333333333333",
 		},
 		CommandID:       "44444444-4444-4444-8444-444444444444",
 		Action:          action,
@@ -35,27 +37,38 @@ func observationCommand(action browserprotocol.ObserverBridgeAction) browserprot
 // A frame captured after the Runtime moved on belongs to a different Run. The
 // comparison has to cover every field the command named, so each one is drifted
 // independently.
-func TestObservedIdentityRequiresEveryFieldToMatch(t *testing.T) {
+// The command names an Attempt in hashed form; the Worker rehashes its own
+// identity to check. Every field must participate, or Core could start an
+// observation against an Attempt this Runtime has already left.
+func TestCommandMustNameTheLocalAttempt(t *testing.T) {
 	t.Parallel()
-	command := observationCommand(browserprotocol.ObserverBridgeStart)
-	actual := browserprotocol.Identity{
-		RunID:        command.AttemptIdentity.RunID,
-		SessionEpoch: command.AttemptIdentity.SessionEpoch,
-		AttachmentID: command.AttemptIdentity.AttachmentID,
+	local := browserprotocol.Identity{
+		RunID:            "11111111-1111-4111-8111-111111111111",
+		SessionEpoch:     4,
+		BrowserSessionID: "browser-session-a",
+		AttachmentID:     "attachment-a",
 	}
-	if !observedIdentityMatches(command.AttemptIdentity, actual) {
-		t.Fatal("an unchanged identity was treated as drifted")
+	command := observationCommand(browserprotocol.ObserverBridgeStart)
+	command.AttemptIdentity.BrowserSessionSHA256 = browserIdentityEvidenceSHA256(
+		browserSessionEvidenceDomain, local.BrowserSessionID,
+	)
+	command.AttemptIdentity.AttachmentSHA256 = browserIdentityEvidenceSHA256(
+		browserAttachmentEvidenceDomain, local.AttachmentID,
+	)
+	if !commandNamesLocalAttempt(command, local) {
+		t.Fatal("a matching command was rejected")
 	}
 	for name, mutate := range map[string]func(*browserprotocol.Identity){
-		"run":        func(i *browserprotocol.Identity) { i.RunID = "66666666-6666-4666-8666-666666666666" },
-		"epoch":      func(i *browserprotocol.Identity) { i.SessionEpoch++ },
-		"attachment": func(i *browserprotocol.Identity) { i.AttachmentID = "attachment-b" },
+		"run":     func(i *browserprotocol.Identity) { i.RunID = "66666666-6666-4666-8666-666666666666" },
+		"epoch":   func(i *browserprotocol.Identity) { i.SessionEpoch++ },
+		"session": func(i *browserprotocol.Identity) { i.BrowserSessionID = "browser-session-b" },
+		"attach":  func(i *browserprotocol.Identity) { i.AttachmentID = "attachment-b" },
 	} {
 		t.Run(name, func(t *testing.T) {
-			drifted := actual
+			drifted := local
 			mutate(&drifted)
-			if observedIdentityMatches(command.AttemptIdentity, drifted) {
-				t.Fatalf("%s drift was accepted as the same Attempt", name)
+			if commandNamesLocalAttempt(command, drifted) {
+				t.Fatalf("%s drift was accepted", name)
 			}
 		})
 	}
@@ -145,32 +158,37 @@ func observationPayload(
 // The frame carries the identity the Runtime backfilled at capture time, which
 // is stronger evidence than the Worker's own snapshot: it describes the Attempt
 // the pixels actually came from.
+// The capture is compared against the Worker's own live identity, using the bare
+// digest the Runtime returns. An attachment can rotate between the snapshot and
+// the capture, so the digest has to participate.
 func TestObservationRejectsFramesFromAnotherAttempt(t *testing.T) {
 	t.Parallel()
-	command := observationCommand(browserprotocol.ObserverBridgeStart)
-	matching := browserprotocol.OpsObserverObservation{
-		RunID:            command.AttemptIdentity.RunID,
-		SessionEpoch:     command.AttemptIdentity.SessionEpoch,
-		AttachmentSHA256: observedAttachmentDigest(command),
+	local := browserprotocol.Identity{
+		RunID:        "11111111-1111-4111-8111-111111111111",
+		SessionEpoch: 4,
+		AttachmentID: "attachment-a",
 	}
-	if capturedFrameIsForeign(command, matching) {
+	matching := browserprotocol.OpsObserverObservation{
+		RunID:            local.RunID,
+		SessionEpoch:     local.SessionEpoch,
+		AttachmentSHA256: capturedAttachmentDigest(local),
+	}
+	if capturedFrameIsForeign(local, matching) {
 		t.Fatal("a matching capture was treated as foreign")
 	}
 	for name, mutate := range map[string]func(*browserprotocol.OpsObserverObservation){
 		"run":   func(o *browserprotocol.OpsObserverObservation) { o.RunID = "66666666-6666-4666-8666-666666666666" },
 		"epoch": func(o *browserprotocol.OpsObserverObservation) { o.SessionEpoch++ },
-		// An attachment can rotate between the snapshot and the capture, so this
-		// is the drift a Run-and-epoch-only check would have let through.
 		"attachment": func(o *browserprotocol.OpsObserverObservation) {
-			rotated := observationCommand(browserprotocol.ObserverBridgeStart)
-			rotated.AttemptIdentity.AttachmentID = "attachment-rotated"
-			o.AttachmentSHA256 = observedAttachmentDigest(rotated)
+			rotated := local
+			rotated.AttachmentID = "attachment-rotated"
+			o.AttachmentSHA256 = capturedAttachmentDigest(rotated)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			drifted := matching
 			mutate(&drifted)
-			if !capturedFrameIsForeign(command, drifted) {
+			if !capturedFrameIsForeign(local, drifted) {
 				t.Fatalf("a capture with a drifted %s was accepted", name)
 			}
 		})

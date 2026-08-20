@@ -49,12 +49,20 @@ const (
 // every event must still match. Comparing it per frame is what stops a frame
 // captured after the Runtime moved to another Run from being reported under the
 // previous one.
+// ObserverBridgeIdentity carries hashed Browser identity rather than raw IDs.
+//
+// Core only ever learns the hashed form: the ready lifecycle event publishes
+// browser_session_sha256 and browser_attachment_sha256, never the underlying
+// UUIDs. Sending raw IDs here would require Core to know something it is
+// deliberately not told, and the Worker can verify a hash against its own local
+// identity just as strictly.
 type ObserverBridgeIdentity struct {
-	RunID            string `json:"run_id"`
-	AttemptID        string `json:"attempt_id"`
-	SessionEpoch     uint64 `json:"session_epoch"`
-	AttachmentID     string `json:"attachment_id"`
-	RuntimeSessionID string `json:"runtime_session_id"`
+	RunID                string `json:"run_id"`
+	AttemptID            string `json:"attempt_id"`
+	SessionEpoch         uint64 `json:"session_epoch"`
+	BrowserSessionSHA256 string `json:"browser_session_sha256"`
+	AttachmentSHA256     string `json:"browser_attachment_sha256"`
+	RuntimeSessionID     string `json:"runtime_session_id"`
 }
 
 func (identity ObserverBridgeIdentity) Equal(other ObserverBridgeIdentity) bool {
@@ -63,7 +71,9 @@ func (identity ObserverBridgeIdentity) Equal(other ObserverBridgeIdentity) bool 
 
 func (identity ObserverBridgeIdentity) validate() bool {
 	return validUUID(identity.RunID) && validUUID(identity.AttemptID) &&
-		identity.SessionEpoch > 0 && identity.AttachmentID != "" &&
+		identity.SessionEpoch > 0 &&
+		validSHA256Hex(identity.BrowserSessionSHA256) &&
+		validSHA256Hex(identity.AttachmentSHA256) &&
 		validUUID(identity.RuntimeSessionID)
 }
 

@@ -188,7 +188,7 @@ func (observation *browserObservation) stream(
 				))
 				return
 			}
-			if !observedIdentityMatches(command.AttemptIdentity, identity) {
+			if !commandNamesLocalAttempt(command, identity) {
 				observation.emitError(command, browserprotocol.NewOpsObserverError(
 					browserprotocol.OpsObserverRunNotActive,
 					"the Runtime moved to another Attempt",
@@ -214,7 +214,7 @@ func (observation *browserObservation) stream(
 			// The Runtime backfilled its own identity, so compare that rather
 			// than the local snapshot: it is the identity the frame was actually
 			// captured under.
-			if capturedFrameIsForeign(command, *response.Observation) {
+			if capturedFrameIsForeign(identity, *response.Observation) {
 				observation.emitError(command, browserprotocol.NewOpsObserverError(
 					browserprotocol.OpsObserverRunNotActive,
 					"the captured frame belongs to another Attempt",
@@ -239,23 +239,49 @@ func (observation *browserObservation) stream(
 // capturedFrameIsForeign compares the identity the Runtime backfilled at capture
 // time against the one the command named. That evidence is stronger than the
 // Worker's own snapshot because it describes the Attempt the pixels came from.
+// capturedFrameIsForeign compares the capture against the Worker's own live
+// identity. The Runtime can rotate an attachment between the snapshot and the
+// capture, so without the attachment digest a frame from the new one would be
+// reported under the old.
 func capturedFrameIsForeign(
-	command browserprotocol.ObserverBridgeCommand,
+	local browserprotocol.Identity,
 	observed browserprotocol.OpsObserverObservation,
 ) bool {
-	// AttachmentSHA256 is compared too: the Runtime can rotate an attachment
-	// between the snapshot and the capture, and without this a frame from the
-	// new attachment would be reported under the old one.
-	return observed.RunID != command.AttemptIdentity.RunID ||
-		observed.SessionEpoch != command.AttemptIdentity.SessionEpoch ||
-		observed.AttachmentSHA256 != observedAttachmentDigest(command)
+	return observed.RunID != local.RunID ||
+		observed.SessionEpoch != local.SessionEpoch ||
+		observed.AttachmentSHA256 != capturedAttachmentDigest(local)
 }
 
-// observedAttachmentDigest mirrors the Runtime's opsIdentitySHA256 so the two
-// sides derive the same value from the same attachment.
-func observedAttachmentDigest(command browserprotocol.ObserverBridgeCommand) string {
-	digest := sha256.Sum256([]byte(command.AttemptIdentity.AttachmentID))
+// capturedAttachmentDigest mirrors the Runtime's opsIdentitySHA256, which hashes
+// the raw attachment with no domain prefix. The Worker holds the raw value
+// locally, so it can derive this even though Core never sees it.
+func capturedAttachmentDigest(identity browserprotocol.Identity) string {
+	digest := sha256.Sum256([]byte(identity.AttachmentID))
 	return hex.EncodeToString(digest[:])
+}
+
+// commandNamesLocalAttempt checks that the Attempt Core asked about is the one
+// this Worker currently holds.
+//
+// Core knows only the domain-separated hashes the ready lifecycle event
+// publishes, so the comparison is done in that space: the Worker rehashes its
+// own identity the same way. This is the check that stops Core from starting an
+// observation against an Attempt this Runtime has already moved on from.
+func commandNamesLocalAttempt(
+	command browserprotocol.ObserverBridgeCommand,
+	local browserprotocol.Identity,
+) bool {
+	expected := command.AttemptIdentity
+	return expected.RunID == local.RunID &&
+		expected.SessionEpoch == local.SessionEpoch &&
+		expected.BrowserSessionSHA256 == browserIdentityEvidenceSHA256(
+			browserSessionEvidenceDomain,
+			local.BrowserSessionID,
+		) &&
+		expected.AttachmentSHA256 == browserIdentityEvidenceSHA256(
+			browserAttachmentEvidenceDomain,
+			local.AttachmentID,
+		)
 }
 
 // emitUnguarded publishes an event that must reach Core even when this handler
@@ -285,18 +311,6 @@ func (observation *browserObservation) emitUnguarded(
 		Type:    browserprotocol.ObserverBridgeEventType,
 		Payload: payload,
 	})
-}
-
-// observedIdentityMatches compares every field// observedIdentityMatches compares every field the command named. A partial
-// comparison would let a frame captured after an attachment or epoch change be
-// reported under the previous identity.
-func observedIdentityMatches(
-	expected browserprotocol.ObserverBridgeIdentity,
-	actual browserprotocol.Identity,
-) bool {
-	return expected.RunID == actual.RunID &&
-		expected.SessionEpoch == actual.SessionEpoch &&
-		expected.AttachmentID == actual.AttachmentID
 }
 
 // emitEvent publishes one event and waits for its ack. The window is a single
