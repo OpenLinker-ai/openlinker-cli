@@ -149,8 +149,9 @@ func TestObservationRejectsFramesFromAnotherAttempt(t *testing.T) {
 	t.Parallel()
 	command := observationCommand(browserprotocol.ObserverBridgeStart)
 	matching := browserprotocol.OpsObserverObservation{
-		RunID:        command.AttemptIdentity.RunID,
-		SessionEpoch: command.AttemptIdentity.SessionEpoch,
+		RunID:            command.AttemptIdentity.RunID,
+		SessionEpoch:     command.AttemptIdentity.SessionEpoch,
+		AttachmentSHA256: observedAttachmentDigest(command),
 	}
 	if capturedFrameIsForeign(command, matching) {
 		t.Fatal("a matching capture was treated as foreign")
@@ -158,6 +159,13 @@ func TestObservationRejectsFramesFromAnotherAttempt(t *testing.T) {
 	for name, mutate := range map[string]func(*browserprotocol.OpsObserverObservation){
 		"run":   func(o *browserprotocol.OpsObserverObservation) { o.RunID = "66666666-6666-4666-8666-666666666666" },
 		"epoch": func(o *browserprotocol.OpsObserverObservation) { o.SessionEpoch++ },
+		// An attachment can rotate between the snapshot and the capture, so this
+		// is the drift a Run-and-epoch-only check would have let through.
+		"attachment": func(o *browserprotocol.OpsObserverObservation) {
+			rotated := observationCommand(browserprotocol.ObserverBridgeStart)
+			rotated.AttemptIdentity.AttachmentID = "attachment-rotated"
+			o.AttachmentSHA256 = observedAttachmentDigest(rotated)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			drifted := matching

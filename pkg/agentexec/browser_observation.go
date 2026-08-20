@@ -2,6 +2,8 @@ package agentexec
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
@@ -78,7 +80,7 @@ func (observation *browserObservation) handleCommand(
 	}
 	switch command.Action {
 	case browserprotocol.ObserverBridgeStop:
-		observation.stop()
+		observation.stopLease(command.LeaseID)
 	case browserprotocol.ObserverBridgeStart:
 		observation.start(parent, command)
 	}
@@ -91,7 +93,11 @@ func (observation *browserObservation) start(
 	observation.mu.Lock()
 	if observation.leaseID != "" {
 		observation.mu.Unlock()
-		observation.emitError(command, browserprotocol.NewOpsObserverError(
+		// Reported without the lease guard: emitEvent only publishes for the
+		// lease it owns, so routing a busy refusal through it would drop the
+		// very message telling Core the start failed, leaving a phantom active
+		// record until its TTL.
+		observation.emitUnguarded(command, browserprotocol.NewOpsObserverError(
 			browserprotocol.OpsObserverAlreadyActive,
 			"an observation is already active",
 		))
@@ -105,8 +111,19 @@ func (observation *browserObservation) start(
 	go observation.stream(ctx, command)
 }
 
+// stop ends the current observation. stopLease ends only the named one: a
+// stream that exits late must not clear a lease a newer start already took, or
+// the new observation would be torn down by its predecessor's teardown.
 func (observation *browserObservation) stop() {
+	observation.stopLease("")
+}
+
+func (observation *browserObservation) stopLease(leaseID string) {
 	observation.mu.Lock()
+	if leaseID != "" && observation.leaseID != leaseID {
+		observation.mu.Unlock()
+		return
+	}
 	cancel := observation.cancel
 	observation.cancel = nil
 	observation.leaseID = ""
@@ -124,7 +141,7 @@ func (observation *browserObservation) stream(
 	ctx context.Context,
 	command browserprotocol.ObserverBridgeCommand,
 ) {
-	defer observation.stop()
+	defer observation.stopLease(command.LeaseID)
 
 	// Claiming the bridge lease is what makes the local Viewer and this
 	// observation contend for the one Runtime lease. A refusal here means someone
@@ -226,11 +243,51 @@ func capturedFrameIsForeign(
 	command browserprotocol.ObserverBridgeCommand,
 	observed browserprotocol.OpsObserverObservation,
 ) bool {
+	// AttachmentSHA256 is compared too: the Runtime can rotate an attachment
+	// between the snapshot and the capture, and without this a frame from the
+	// new attachment would be reported under the old one.
 	return observed.RunID != command.AttemptIdentity.RunID ||
-		observed.SessionEpoch != command.AttemptIdentity.SessionEpoch
+		observed.SessionEpoch != command.AttemptIdentity.SessionEpoch ||
+		observed.AttachmentSHA256 != observedAttachmentDigest(command)
 }
 
-// observedIdentityMatches compares every field the command named. A partial
+// observedAttachmentDigest mirrors the Runtime's opsIdentitySHA256 so the two
+// sides derive the same value from the same attachment.
+func observedAttachmentDigest(command browserprotocol.ObserverBridgeCommand) string {
+	digest := sha256.Sum256([]byte(command.AttemptIdentity.AttachmentID))
+	return hex.EncodeToString(digest[:])
+}
+
+// emitUnguarded publishes an event that must reach Core even when this handler
+// does not own the lease, which is the case for a busy refusal.
+func (observation *browserObservation) emitUnguarded(
+	command browserprotocol.ObserverBridgeCommand,
+	failure *browserprotocol.OpsObserverError,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), browserprotocol.MaxOpsObserverDeadline)
+	defer cancel()
+	event := browserprotocol.ObserverBridgeEvent{
+		AttemptIdentity: command.AttemptIdentity,
+		CommandID:       command.CommandID,
+		LeaseID:         command.LeaseID,
+		EventSeq:        1,
+		Kind:            browserprotocol.ObserverBridgeError,
+		ErrorCode:       string(failure.Code),
+	}
+	if event.Validate() != nil {
+		return
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	_, _ = observation.extensions.Publish(ctx, openlinker.RuntimeExtensionRequest{
+		Type:    browserprotocol.ObserverBridgeEventType,
+		Payload: payload,
+	})
+}
+
+// observedIdentityMatches compares every field// observedIdentityMatches compares every field the command named. A partial
 // comparison would let a frame captured after an attachment or epoch change be
 // reported under the previous identity.
 func observedIdentityMatches(

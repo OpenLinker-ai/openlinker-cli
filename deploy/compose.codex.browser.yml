@@ -12,6 +12,11 @@ services:
       OPENLINKER_BROWSER_CLIENT_MODE: ${OPENLINKER_BROWSER_CLIENT_MODE:-auto}
       OPENLINKER_AGENT_CAPACITY: "1"
       OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED: "true"
+      # Observation is a separate capability from takeover, so it has its own
+      # flag. The Worker and the Browser Runtime must agree: the Worker declares
+      # the feature and the Runtime creates the bridge, and one without the other
+      # leaves Core believing observation works while every start fails.
+      OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED: ${OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED:-false}
     volumes:
       - codex-browser-control:/browser-control
     tmpfs:
@@ -47,6 +52,11 @@ services:
       OPENLINKER_BROWSER_PROFILE_WORK_ROOT: /browser-tmp/profiles
       OPENLINKER_BROWSER_PROFILE_ROOT_KEY_FILE: /browser-key/profile-root-key
       OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED: "true"
+      # Observation is a separate capability from takeover, so it has its own
+      # flag. The Worker and the Browser Runtime must agree: the Worker declares
+      # the feature and the Runtime creates the bridge, and one without the other
+      # leaves Core believing observation works while every start fails.
+      OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED: ${OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED:-false}
       OPENLINKER_BROWSER_OPS_VIEWER_ENABLED: ${OPENLINKER_BROWSER_OPS_VIEWER_ENABLED:-false}
     volumes:
       - codex-browser-control:/browser-control
