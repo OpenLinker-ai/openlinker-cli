@@ -1,9 +1,13 @@
 package browserprotocol
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
+
+	openlinker "github.com/OpenLinker-ai/openlinker-go"
 )
 
 func validViewerFrame() *ViewerFrame {
@@ -17,23 +21,36 @@ func validViewerFrame() *ViewerFrame {
 
 func bridgeIdentity() ObserverBridgeIdentity {
 	return ObserverBridgeIdentity{
-		RunID:                "11111111-1111-4111-8111-111111111111",
-		AttemptID:            "22222222-2222-4222-8222-222222222222",
 		SessionEpoch:         3,
 		BrowserSessionSHA256: strings.Repeat("a", 64),
 		AttachmentSHA256:     strings.Repeat("b", 64),
-		RuntimeSessionID:     "33333333-3333-4333-8333-333333333333",
+	}
+}
+
+func bridgeAttemptIdentity() openlinker.RuntimeAttemptIdentity {
+	return openlinker.RuntimeAttemptIdentity{
+		RunID:            "11111111-1111-4111-8111-111111111111",
+		AttemptID:        "22222222-2222-4222-8222-222222222222",
+		LeaseID:          "33333333-3333-4333-8333-333333333333",
+		FencingToken:     7,
+		NodeID:           "44444444-4444-4444-8444-444444444444",
+		AgentID:          "55555555-5555-4555-8555-555555555555",
+		WorkerID:         "99999999-9999-4999-8999-999999999999",
+		RuntimeSessionID: "66666666-6666-4666-8666-666666666666",
 	}
 }
 
 func bridgeEvent(kind ObserverBridgeEventKind) ObserverBridgeEvent {
 	captured := time.Now().UTC()
 	event := ObserverBridgeEvent{
-		AttemptIdentity: bridgeIdentity(),
-		CommandID:       "44444444-4444-4444-8444-444444444444",
-		LeaseID:         "55555555-5555-4555-8555-555555555555",
-		EventSeq:        1,
-		Kind:            kind,
+		AttemptIdentity:      bridgeAttemptIdentity(),
+		SessionEpoch:         bridgeIdentity().SessionEpoch,
+		BrowserSessionSHA256: bridgeIdentity().BrowserSessionSHA256,
+		AttachmentSHA256:     bridgeIdentity().AttachmentSHA256,
+		CommandID:            "77777777-7777-4777-8777-777777777777",
+		LeaseID:              "88888888-8888-4888-8888-888888888888",
+		EventSeq:             1,
+		Kind:                 kind,
 	}
 	switch kind {
 	case ObserverBridgeFrame:
@@ -52,11 +69,9 @@ func TestObserverBridgeIdentityRejectsEveryFieldDrift(t *testing.T) {
 	t.Parallel()
 	base := bridgeIdentity()
 	for name, mutate := range map[string]func(*ObserverBridgeIdentity){
-		"run":        func(i *ObserverBridgeIdentity) { i.RunID = "66666666-6666-4666-8666-666666666666" },
-		"attempt":    func(i *ObserverBridgeIdentity) { i.AttemptID = "77777777-7777-4777-8777-777777777777" },
 		"epoch":      func(i *ObserverBridgeIdentity) { i.SessionEpoch = base.SessionEpoch + 1 },
 		"attachment": func(i *ObserverBridgeIdentity) { i.AttachmentSHA256 = strings.Repeat("c", 64) },
-		"session":    func(i *ObserverBridgeIdentity) { i.RuntimeSessionID = "88888888-8888-4888-8888-888888888888" },
+		"session":    func(i *ObserverBridgeIdentity) { i.BrowserSessionSHA256 = strings.Repeat("d", 64) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			drifted := base
@@ -74,13 +89,16 @@ func TestObserverBridgeIdentityRejectsEveryFieldDrift(t *testing.T) {
 func TestObserverBridgeCommandValidation(t *testing.T) {
 	t.Parallel()
 	valid := ObserverBridgeCommand{
-		AttemptIdentity: bridgeIdentity(),
-		CommandID:       "44444444-4444-4444-8444-444444444444",
-		Action:          ObserverBridgeStart,
-		LeaseID:         "55555555-5555-4555-8555-555555555555",
-		LeaseExpiresAt:  time.Now().UTC().Add(time.Minute),
-		DeadlineAt:      time.Now().UTC().Add(time.Minute),
-		FrameIntervalMS: ObserverBridgeDefaultFrameIntervalMS,
+		AttemptIdentity:      bridgeAttemptIdentity(),
+		SessionEpoch:         bridgeIdentity().SessionEpoch,
+		BrowserSessionSHA256: bridgeIdentity().BrowserSessionSHA256,
+		AttachmentSHA256:     bridgeIdentity().AttachmentSHA256,
+		CommandID:            "77777777-7777-4777-8777-777777777777",
+		Action:               ObserverBridgeStart,
+		LeaseID:              "88888888-8888-4888-8888-888888888888",
+		LeaseExpiresAt:       time.Now().UTC().Add(time.Minute),
+		DeadlineAt:           time.Now().UTC().Add(time.Minute),
+		FrameIntervalMS:      ObserverBridgeDefaultFrameIntervalMS,
 	}
 	if failure := valid.Validate(); failure != nil {
 		t.Fatalf("valid start command rejected: %v", failure)
@@ -110,6 +128,42 @@ func TestObserverBridgeCommandValidation(t *testing.T) {
 	stop.FrameIntervalMS = 0
 	if failure := stop.Validate(); failure != nil {
 		t.Fatalf("stop command rejected: %v", failure)
+	}
+}
+
+// The SDK owns the reserved attempt_identity field and strictly decodes it as
+// RuntimeAttemptIdentity before the extension handler sees the command. Browser
+// evidence therefore has to live beside it, not replace it with a lookalike.
+func TestObserverBridgeCommandKeepsSDKAttemptIdentityAtReservedField(t *testing.T) {
+	t.Parallel()
+	command := ObserverBridgeCommand{
+		AttemptIdentity:      bridgeAttemptIdentity(),
+		SessionEpoch:         bridgeIdentity().SessionEpoch,
+		BrowserSessionSHA256: bridgeIdentity().BrowserSessionSHA256,
+		AttachmentSHA256:     bridgeIdentity().AttachmentSHA256,
+		CommandID:            "77777777-7777-4777-8777-777777777777",
+		Action:               ObserverBridgeStart,
+		LeaseID:              "88888888-8888-4888-8888-888888888888",
+		LeaseExpiresAt:       time.Now().UTC().Add(time.Minute),
+		DeadlineAt:           time.Now().UTC().Add(time.Minute),
+		FrameIntervalMS:      ObserverBridgeDefaultFrameIntervalMS,
+	}
+	payload, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil {
+		t.Fatal(err)
+	}
+	var decoded openlinker.RuntimeAttemptIdentity
+	decoder := json.NewDecoder(bytes.NewReader(object["attempt_identity"]))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatalf("SDK attempt identity rejected: %v", err)
+	}
+	if decoded != command.AttemptIdentity {
+		t.Fatalf("SDK attempt identity changed: %#v", decoded)
 	}
 }
 
@@ -150,9 +204,12 @@ func TestObserverBridgeAckMustNameTheExactEvent(t *testing.T) {
 	t.Parallel()
 	event := bridgeEvent(ObserverBridgeFrame)
 	exact := ObserverBridgeEventAck{
-		AttemptIdentity: event.AttemptIdentity,
-		LeaseID:         event.LeaseID,
-		EventSeq:        event.EventSeq,
+		AttemptIdentity:      event.AttemptIdentity,
+		SessionEpoch:         event.SessionEpoch,
+		BrowserSessionSHA256: event.BrowserSessionSHA256,
+		AttachmentSHA256:     event.AttachmentSHA256,
+		LeaseID:              event.LeaseID,
+		EventSeq:             event.EventSeq,
 	}
 	if !exact.Matches(event) {
 		t.Fatal("the exact ack did not settle its event")
@@ -161,6 +218,7 @@ func TestObserverBridgeAckMustNameTheExactEvent(t *testing.T) {
 		"stale sequence": func(a *ObserverBridgeEventAck) { a.EventSeq = event.EventSeq + 1 },
 		"other lease":    func(a *ObserverBridgeEventAck) { a.LeaseID = "99999999-9999-4999-8999-999999999999" },
 		"other attempt":  func(a *ObserverBridgeEventAck) { a.AttemptIdentity.AttemptID = "99999999-9999-4999-8999-999999999999" },
+		"other browser":  func(a *ObserverBridgeEventAck) { a.SessionEpoch++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			ack := exact

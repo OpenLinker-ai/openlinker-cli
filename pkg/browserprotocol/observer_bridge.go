@@ -45,10 +45,6 @@ const (
 	ObserverBridgeMaxFrameIntervalMS     = 5_000
 )
 
-// ObserverBridgeIdentity is the Attempt-scoped identity a command carries and
-// every event must still match. Comparing it per frame is what stops a frame
-// captured after the Runtime moved to another Run from being reported under the
-// previous one.
 // ObserverBridgeIdentity carries hashed Browser identity rather than raw IDs.
 //
 // Core only ever learns the hashed form: the ready lifecycle event publishes
@@ -57,12 +53,9 @@ const (
 // deliberately not told, and the Worker can verify a hash against its own local
 // identity just as strictly.
 type ObserverBridgeIdentity struct {
-	RunID                string `json:"run_id"`
-	AttemptID            string `json:"attempt_id"`
 	SessionEpoch         uint64 `json:"session_epoch"`
 	BrowserSessionSHA256 string `json:"browser_session_sha256"`
 	AttachmentSHA256     string `json:"browser_attachment_sha256"`
-	RuntimeSessionID     string `json:"runtime_session_id"`
 }
 
 func (identity ObserverBridgeIdentity) Equal(other ObserverBridgeIdentity) bool {
@@ -70,44 +63,76 @@ func (identity ObserverBridgeIdentity) Equal(other ObserverBridgeIdentity) bool 
 }
 
 func (identity ObserverBridgeIdentity) validate() bool {
-	return validUUID(identity.RunID) && validUUID(identity.AttemptID) &&
-		identity.SessionEpoch > 0 &&
+	return identity.SessionEpoch > 0 &&
 		validSHA256Hex(identity.BrowserSessionSHA256) &&
-		validSHA256Hex(identity.AttachmentSHA256) &&
-		validUUID(identity.RuntimeSessionID)
+		validSHA256Hex(identity.AttachmentSHA256)
 }
 
 type ObserverBridgeCommand struct {
-	AttemptIdentity ObserverBridgeIdentity `json:"attempt_identity"`
-	CommandID       string                 `json:"command_id"`
-	Action          ObserverBridgeAction   `json:"action"`
-	LeaseID         string                 `json:"lease_id"`
-	LeaseExpiresAt  time.Time              `json:"lease_expires_at"`
-	DeadlineAt      time.Time              `json:"deadline_at"`
-	FrameIntervalMS int                    `json:"frame_interval_ms"`
+	AttemptIdentity      openlinker.RuntimeAttemptIdentity `json:"attempt_identity"`
+	SessionEpoch         uint64                            `json:"session_epoch"`
+	BrowserSessionSHA256 string                            `json:"browser_session_sha256"`
+	AttachmentSHA256     string                            `json:"browser_attachment_sha256"`
+	CommandID            string                            `json:"command_id"`
+	Action               ObserverBridgeAction              `json:"action"`
+	LeaseID              string                            `json:"lease_id"`
+	LeaseExpiresAt       time.Time                         `json:"lease_expires_at"`
+	DeadlineAt           time.Time                         `json:"deadline_at"`
+	FrameIntervalMS      int                               `json:"frame_interval_ms"`
 }
 
 type ObserverBridgeEvent struct {
-	AttemptIdentity ObserverBridgeIdentity  `json:"attempt_identity"`
-	CommandID       string                  `json:"command_id"`
-	LeaseID         string                  `json:"lease_id"`
-	EventSeq        uint64                  `json:"event_seq"`
-	Kind            ObserverBridgeEventKind `json:"kind"`
-	CapturedAt      *time.Time              `json:"captured_at,omitempty"`
-	Frame           *ViewerFrame            `json:"frame,omitempty"`
+	AttemptIdentity      openlinker.RuntimeAttemptIdentity `json:"attempt_identity"`
+	SessionEpoch         uint64                            `json:"session_epoch"`
+	BrowserSessionSHA256 string                            `json:"browser_session_sha256"`
+	AttachmentSHA256     string                            `json:"browser_attachment_sha256"`
+	CommandID            string                            `json:"command_id"`
+	LeaseID              string                            `json:"lease_id"`
+	EventSeq             uint64                            `json:"event_seq"`
+	Kind                 ObserverBridgeEventKind           `json:"kind"`
+	CapturedAt           *time.Time                        `json:"captured_at,omitempty"`
+	Frame                *ViewerFrame                      `json:"frame,omitempty"`
 	// Only the code crosses the wire. The message is free text that could carry
 	// local detail, and Core records the code as an end reason anyway.
 	ErrorCode string `json:"error_code,omitempty"`
 }
 
 type ObserverBridgeEventAck struct {
-	AttemptIdentity ObserverBridgeIdentity `json:"attempt_identity"`
-	LeaseID         string                 `json:"lease_id"`
-	EventSeq        uint64                 `json:"event_seq"`
+	AttemptIdentity      openlinker.RuntimeAttemptIdentity `json:"attempt_identity"`
+	SessionEpoch         uint64                            `json:"session_epoch"`
+	BrowserSessionSHA256 string                            `json:"browser_session_sha256"`
+	AttachmentSHA256     string                            `json:"browser_attachment_sha256"`
+	LeaseID              string                            `json:"lease_id"`
+	EventSeq             uint64                            `json:"event_seq"`
+}
+
+func (command ObserverBridgeCommand) browserIdentity() ObserverBridgeIdentity {
+	return ObserverBridgeIdentity{
+		SessionEpoch:         command.SessionEpoch,
+		BrowserSessionSHA256: command.BrowserSessionSHA256,
+		AttachmentSHA256:     command.AttachmentSHA256,
+	}
+}
+
+func (event ObserverBridgeEvent) browserIdentity() ObserverBridgeIdentity {
+	return ObserverBridgeIdentity{
+		SessionEpoch:         event.SessionEpoch,
+		BrowserSessionSHA256: event.BrowserSessionSHA256,
+		AttachmentSHA256:     event.AttachmentSHA256,
+	}
+}
+
+func (ack ObserverBridgeEventAck) browserIdentity() ObserverBridgeIdentity {
+	return ObserverBridgeIdentity{
+		SessionEpoch:         ack.SessionEpoch,
+		BrowserSessionSHA256: ack.BrowserSessionSHA256,
+		AttachmentSHA256:     ack.AttachmentSHA256,
+	}
 }
 
 func (command ObserverBridgeCommand) Validate() *OpsObserverError {
-	if !command.AttemptIdentity.validate() || !validUUID(command.CommandID) ||
+	if !validRuntimeAttemptIdentity(command.AttemptIdentity) ||
+		!command.browserIdentity().validate() || !validUUID(command.CommandID) ||
 		!validUUID(command.LeaseID) {
 		return NewOpsObserverError(OpsObserverProtocolError, "Observer command identity is invalid")
 	}
@@ -128,7 +153,8 @@ func (command ObserverBridgeCommand) Validate() *OpsObserverError {
 }
 
 func (event ObserverBridgeEvent) Validate() *OpsObserverError {
-	if !event.AttemptIdentity.validate() || !validUUID(event.CommandID) ||
+	if !validRuntimeAttemptIdentity(event.AttemptIdentity) ||
+		!event.browserIdentity().validate() || !validUUID(event.CommandID) ||
 		!validUUID(event.LeaseID) || event.EventSeq == 0 {
 		return NewOpsObserverError(OpsObserverProtocolError, "Observer event identity is invalid")
 	}
@@ -159,7 +185,8 @@ func (event ObserverBridgeEvent) Validate() *OpsObserverError {
 // the current window.
 func (ack ObserverBridgeEventAck) Matches(event ObserverBridgeEvent) bool {
 	return ack.LeaseID == event.LeaseID && ack.EventSeq == event.EventSeq &&
-		ack.AttemptIdentity.Equal(event.AttemptIdentity)
+		ack.AttemptIdentity == event.AttemptIdentity &&
+		ack.browserIdentity().Equal(event.browserIdentity())
 }
 
 // ObserverBridgeExtensionRoute registers the observation extension. The command
