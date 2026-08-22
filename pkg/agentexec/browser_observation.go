@@ -74,8 +74,7 @@ func (observation *browserObservation) handleCommand(
 	if failure := command.Validate(); failure != nil {
 		return
 	}
-	if command.AttemptIdentity.RunID != attemptIdentity.RunID ||
-		command.AttemptIdentity.AttemptID != attemptIdentity.AttemptID {
+	if command.AttemptIdentity != attemptIdentity {
 		return
 	}
 	switch command.Action {
@@ -271,8 +270,12 @@ func commandNamesLocalAttempt(
 	command browserprotocol.ObserverBridgeCommand,
 	local browserprotocol.Identity,
 ) bool {
-	expected := command.AttemptIdentity
-	return expected.RunID == local.RunID &&
+	expected := browserprotocol.ObserverBridgeIdentity{
+		SessionEpoch:         command.SessionEpoch,
+		BrowserSessionSHA256: command.BrowserSessionSHA256,
+		AttachmentSHA256:     command.AttachmentSHA256,
+	}
+	return command.AttemptIdentity.RunID == local.RunID &&
 		expected.SessionEpoch == local.SessionEpoch &&
 		expected.BrowserSessionSHA256 == browserIdentityEvidenceSHA256(
 			browserSessionEvidenceDomain,
@@ -293,12 +296,15 @@ func (observation *browserObservation) emitUnguarded(
 	ctx, cancel := context.WithTimeout(context.Background(), browserprotocol.MaxOpsObserverDeadline)
 	defer cancel()
 	event := browserprotocol.ObserverBridgeEvent{
-		AttemptIdentity: command.AttemptIdentity,
-		CommandID:       command.CommandID,
-		LeaseID:         command.LeaseID,
-		EventSeq:        1,
-		Kind:            browserprotocol.ObserverBridgeError,
-		ErrorCode:       string(failure.Code),
+		AttemptIdentity:      command.AttemptIdentity,
+		SessionEpoch:         command.SessionEpoch,
+		BrowserSessionSHA256: command.BrowserSessionSHA256,
+		AttachmentSHA256:     command.AttachmentSHA256,
+		CommandID:            command.CommandID,
+		LeaseID:              command.LeaseID,
+		EventSeq:             1,
+		Kind:                 browserprotocol.ObserverBridgeError,
+		ErrorCode:            string(failure.Code),
 	}
 	if event.Validate() != nil {
 		return
@@ -331,6 +337,9 @@ func (observation *browserObservation) emitEvent(
 	observation.mu.Unlock()
 
 	event.AttemptIdentity = command.AttemptIdentity
+	event.SessionEpoch = command.SessionEpoch
+	event.BrowserSessionSHA256 = command.BrowserSessionSHA256
+	event.AttachmentSHA256 = command.AttachmentSHA256
 	event.CommandID = command.CommandID
 	event.LeaseID = command.LeaseID
 	if failure := event.Validate(); failure != nil {

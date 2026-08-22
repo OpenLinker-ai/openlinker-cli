@@ -11,26 +11,34 @@ import (
 )
 
 func runtimeAttemptIdentityFor(runID, attemptID string) openlinker.RuntimeAttemptIdentity {
-	return openlinker.RuntimeAttemptIdentity{RunID: runID, AttemptID: attemptID}
+	return openlinker.RuntimeAttemptIdentity{
+		RunID:            runID,
+		AttemptID:        attemptID,
+		LeaseID:          "33333333-3333-4333-8333-333333333333",
+		FencingToken:     7,
+		NodeID:           "44444444-4444-4444-8444-444444444444",
+		AgentID:          "55555555-5555-4555-8555-555555555555",
+		WorkerID:         "99999999-9999-4999-8999-999999999999",
+		RuntimeSessionID: "66666666-6666-4666-8666-666666666666",
+	}
 }
 
 func observationCommand(action browserprotocol.ObserverBridgeAction) browserprotocol.ObserverBridgeCommand {
 	now := time.Now().UTC()
 	return browserprotocol.ObserverBridgeCommand{
-		AttemptIdentity: browserprotocol.ObserverBridgeIdentity{
-			RunID:                "11111111-1111-4111-8111-111111111111",
-			AttemptID:            "22222222-2222-4222-8222-222222222222",
-			SessionEpoch:         4,
-			BrowserSessionSHA256: strings.Repeat("a", 64),
-			AttachmentSHA256:     strings.Repeat("b", 64),
-			RuntimeSessionID:     "33333333-3333-4333-8333-333333333333",
-		},
-		CommandID:       "44444444-4444-4444-8444-444444444444",
-		Action:          action,
-		LeaseID:         "55555555-5555-4555-8555-555555555555",
-		LeaseExpiresAt:  now.Add(5 * time.Minute),
-		DeadlineAt:      now.Add(time.Minute),
-		FrameIntervalMS: browserprotocol.ObserverBridgeDefaultFrameIntervalMS,
+		AttemptIdentity: runtimeAttemptIdentityFor(
+			"11111111-1111-4111-8111-111111111111",
+			"22222222-2222-4222-8222-222222222222",
+		),
+		SessionEpoch:         4,
+		BrowserSessionSHA256: strings.Repeat("a", 64),
+		AttachmentSHA256:     strings.Repeat("b", 64),
+		CommandID:            "44444444-4444-4444-8444-444444444444",
+		Action:               action,
+		LeaseID:              "55555555-5555-4555-8555-555555555555",
+		LeaseExpiresAt:       now.Add(5 * time.Minute),
+		DeadlineAt:           now.Add(time.Minute),
+		FrameIntervalMS:      browserprotocol.ObserverBridgeDefaultFrameIntervalMS,
 	}
 }
 
@@ -49,10 +57,10 @@ func TestCommandMustNameTheLocalAttempt(t *testing.T) {
 		AttachmentID:     "attachment-a",
 	}
 	command := observationCommand(browserprotocol.ObserverBridgeStart)
-	command.AttemptIdentity.BrowserSessionSHA256 = browserIdentityEvidenceSHA256(
+	command.BrowserSessionSHA256 = browserIdentityEvidenceSHA256(
 		browserSessionEvidenceDomain, local.BrowserSessionID,
 	)
-	command.AttemptIdentity.AttachmentSHA256 = browserIdentityEvidenceSHA256(
+	command.AttachmentSHA256 = browserIdentityEvidenceSHA256(
 		browserAttachmentEvidenceDomain, local.AttachmentID,
 	)
 	if !commandNamesLocalAttempt(command, local) {
