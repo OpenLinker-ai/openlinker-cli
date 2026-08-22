@@ -199,9 +199,15 @@ func (observation *browserObservation) stream(
 				browserprotocol.OpsObserverFrameOperation,
 			)
 			if observeErr != nil {
-				// Busy is transient: the Engine is occupied authorizing the
-				// observer, so skip this tick rather than ending the lease.
-				if observeErr.Code == browserprotocol.OpsObserverBusyError {
+				// Both answers are transient while the Worker's own Attempt
+				// identity above remains live. Busy means the Engine is occupied
+				// authorizing the observer. Run-not-active means the provider has
+				// not entered its first Browser action yet, or is between actions;
+				// a lease opened from the ready lifecycle must wait for that action
+				// rather than close on its first 500ms tick. Attempt termination and
+				// rotation still fail closed through identitySnapshot and
+				// commandNamesLocalAttempt before this call.
+				if observerEngineErrorIsTransient(observeErr) {
 					continue
 				}
 				observation.emitError(command, observeErr)
@@ -233,6 +239,14 @@ func (observation *browserObservation) stream(
 			}
 		}
 	}
+}
+
+func observerEngineErrorIsTransient(observerErr *browserprotocol.OpsObserverError) bool {
+	if observerErr == nil {
+		return false
+	}
+	return observerErr.Code == browserprotocol.OpsObserverBusyError ||
+		observerErr.Code == browserprotocol.OpsObserverRunNotActive
 }
 
 // capturedFrameIsForeign compares the identity the Runtime backfilled at capture
