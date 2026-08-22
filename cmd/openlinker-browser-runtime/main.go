@@ -100,6 +100,10 @@ func run() error {
 			return err
 		}
 	}
+	engineOpsEnabled := engineOpsObservationEnabled(
+		opsObserverEnabled,
+		observationEnabled,
+	)
 	socketPath := strings.TrimSpace(os.Getenv("OPENLINKER_BROWSER_SOCKET"))
 	if socketPath == "" {
 		socketPath = defaultBrowserSocket
@@ -119,7 +123,7 @@ func run() error {
 	isolated, err := browserruntime.NewProfileEngine(browserruntime.ProfileEngineOptions{
 		Process: browserruntime.ProcessEngineOptions{
 			Command:     []string{defaultEngineExecutable, defaultEngineScript},
-			Environment: browserEngineEnvironment(profileEnvironment, opsObserverEnabled),
+			Environment: browserEngineEnvironment(profileEnvironment, engineOpsEnabled),
 		},
 		Environment: profileEnvironment,
 		StoreRoot:   value("OPENLINKER_BROWSER_PROFILE_STORE", defaultProfileStore),
@@ -144,7 +148,7 @@ func run() error {
 		officialBackend, officialErr := browserruntime.NewOfficialChromeBackend(
 			browserruntime.OfficialChromeBackendOptions{
 				Assets:             assets,
-				BaseEnvironment:    browserEngineEnvironment(profileEnvironment, opsObserverEnabled),
+				BaseEnvironment:    browserEngineEnvironment(profileEnvironment, engineOpsEnabled),
 				Locale:             profileEnvironment.Evidence.BrowserLocale,
 				Timezone:           profileEnvironment.Evidence.BrowserTimezone,
 				FontContract:       profileEnvironment.Evidence.FontContractVersion,
@@ -371,6 +375,17 @@ func browserEngineEnvironment(
 		result = append(result, "OPENLINKER_BROWSER_OPS_OBSERVER_ENABLED=true")
 	}
 	return result
+}
+
+// Both read-only entry points depend on the same private Engine Ops socket.
+// The operator Viewer and authenticated platform observation have independent
+// admission and credentials, but neither can capture a frame without enabling
+// this Engine capability.
+func engineOpsObservationEnabled(
+	opsViewerEnabled bool,
+	authenticatedObservationEnabled bool,
+) bool {
+	return opsViewerEnabled || authenticatedObservationEnabled
 }
 
 func runOpsViewerStream(arguments []string, output io.Writer) error {
