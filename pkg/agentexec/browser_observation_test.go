@@ -202,3 +202,34 @@ func TestObservationRejectsFramesFromAnotherAttempt(t *testing.T) {
 		})
 	}
 }
+
+// Core authorizes observation from the ready lifecycle, which is intentionally
+// published before the provider's first Browser action. Engine inactivity is
+// therefore a wait state while the Worker's Attempt identity is still live, not
+// proof that the Run ended. The identity checks in stream remain the terminal
+// authority; protocol/internal failures must still close the lease.
+func TestObservationWaitsForTheFirstBrowserAction(t *testing.T) {
+	t.Parallel()
+	for _, code := range []browserprotocol.OpsObserverErrorCode{
+		browserprotocol.OpsObserverRunNotActive,
+		browserprotocol.OpsObserverBusyError,
+	} {
+		failure := browserprotocol.NewOpsObserverError(code, "transient")
+		if !observerEngineErrorIsTransient(failure) {
+			t.Fatalf("%s ended an otherwise live Attempt observation", code)
+		}
+	}
+	for _, code := range []browserprotocol.OpsObserverErrorCode{
+		browserprotocol.OpsObserverInternalError,
+		browserprotocol.OpsObserverProtocolError,
+		browserprotocol.OpsObserverDisabled,
+	} {
+		failure := browserprotocol.NewOpsObserverError(code, "terminal")
+		if observerEngineErrorIsTransient(failure) {
+			t.Fatalf("%s was treated as a transient Engine state", code)
+		}
+	}
+	if observerEngineErrorIsTransient(nil) {
+		t.Fatal("nil observer failure was treated as transient")
+	}
+}
