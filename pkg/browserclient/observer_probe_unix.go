@@ -89,7 +89,7 @@ func ProbeObserverBridge(
 	if len(raw) == 0 || len(raw) > browserprotocol.MaxOpsObserverProbeResponseBytes {
 		return errors.New("Browser observation probe response size is invalid")
 	}
-	response, err := browserprotocol.DecodeOpsObserverResponse(raw)
+	response, err := browserprotocol.DecodeOpsObserverProbeResponse(raw)
 	if err != nil {
 		return errors.New("Browser observation probe response is invalid")
 	}

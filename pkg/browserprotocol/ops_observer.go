@@ -248,6 +248,17 @@ func DecodeOpsObserverRequest(raw []byte) (OpsObserverRequest, error) {
 }
 
 func DecodeOpsObserverResponse(raw []byte) (OpsObserverResponse, error) {
+	return decodeOpsObserverResponse(raw, false)
+}
+
+// DecodeOpsObserverProbeResponse decodes the deliberately content-free success
+// response returned by the health probe. A normal successful observation must
+// carry an observation, while a successful probe must not carry page content.
+func DecodeOpsObserverProbeResponse(raw []byte) (OpsObserverResponse, error) {
+	return decodeOpsObserverResponse(raw, true)
+}
+
+func decodeOpsObserverResponse(raw []byte, probe bool) (OpsObserverResponse, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var response OpsObserverResponse
@@ -266,7 +277,8 @@ func DecodeOpsObserverResponse(raw []byte) (OpsObserverResponse, error) {
 	}
 	switch response.Status {
 	case "ok":
-		if response.Observation == nil || response.Error != nil {
+		if response.Error != nil || (probe && response.Observation != nil) ||
+			(!probe && response.Observation == nil) {
 			return OpsObserverResponse{}, errors.New("Ops Observer success response is invalid")
 		}
 	case "busy":

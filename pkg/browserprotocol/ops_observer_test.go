@@ -106,6 +106,37 @@ func TestOpsObserverResponseIsStrict(t *testing.T) {
 	}
 }
 
+func TestOpsObserverProbeResponseIsContentFreeAndStrict(t *testing.T) {
+	requestID := "11111111-1111-4111-8111-111111111111"
+	response := OpsObserverProbeResponse(requestID)
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeOpsObserverProbeResponse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Status != "ok" || decoded.Observation != nil || decoded.Error != nil {
+		t.Fatalf("decoded probe response = %#v", decoded)
+	}
+	if _, err := DecodeOpsObserverResponse(raw); err == nil {
+		t.Fatal("content-free probe response was accepted as a normal observation")
+	}
+	if _, err := DecodeOpsObserverProbeResponse(append(raw, []byte(" {}")...)); err == nil {
+		t.Fatal("trailing Ops Observer probe response value was accepted")
+	}
+
+	response.Observation = &OpsObserverObservation{}
+	raw, err = json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeOpsObserverProbeResponse(raw); err == nil {
+		t.Fatal("probe response carrying page content was accepted")
+	}
+}
+
 func validOpsObserverRequest(now time.Time) OpsObserverRequest {
 	return OpsObserverRequest{
 		ContractID:        OpsObserverContractID,
