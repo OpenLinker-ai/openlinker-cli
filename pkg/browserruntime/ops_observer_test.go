@@ -15,7 +15,8 @@ import (
 )
 
 type opsObserverTestEngine struct {
-	busy bool
+	busy                 bool
+	runNotActiveFailures int
 }
 
 func (engine *opsObserverTestEngine) ObserveOps(
@@ -23,6 +24,14 @@ func (engine *opsObserverTestEngine) ObserveOps(
 	_ string,
 	operation browserprotocol.OpsObserverOperation,
 ) (browserprotocol.OpsObserverObservation, bool, *browserprotocol.OpsObserverError) {
+	if engine.runNotActiveFailures > 0 {
+		engine.runNotActiveFailures--
+		return browserprotocol.OpsObserverObservation{}, false,
+			browserprotocol.NewOpsObserverError(
+				browserprotocol.OpsObserverRunNotActive,
+				"requested Run is not active",
+			)
+	}
 	if engine.busy {
 		return browserprotocol.OpsObserverObservation{}, true, nil
 	}
@@ -162,6 +171,54 @@ func TestOpsObserverServerReturnsBusyWithoutConsumingFrameSequence(t *testing.T)
 	if observerErr != nil || response.Observation.FrameSequence != 1 {
 		t.Fatalf("post-busy observation = %#v, %v", response, observerErr)
 	}
+	_ = stream.Close()
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpsObserverServerKeepsTheLeaseAcrossARunActionGap(t *testing.T) {
+	t.Parallel()
+	root, err := os.MkdirTemp("", "ol-ops-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credentialFile := filepath.Join(root, "credential")
+	credential := strings.Repeat("e", 64)
+	if err := os.WriteFile(credentialFile, []byte(credential+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(root, "observer.sock")
+	observer := &opsObserverTestEngine{runNotActiveFailures: 1}
+	server, err := NewOpsObserverServer(OpsObserverServerOptions{
+		SocketPath: socketPath, ChannelCredential: credential, Observer: observer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	if err := server.open(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { done <- server.Serve(ctx) }()
+	stream := newOpsObserverTestStream(t, ctx, socketPath, credentialFile)
+
+	_, observerErr := stream.Observe(ctx, browserprotocol.OpsObserverFrameOperation)
+	if observerErr == nil || observerErr.Code != browserprotocol.OpsObserverRunNotActive {
+		t.Fatalf("inactive observation error = %v", observerErr)
+	}
+	response, observerErr := stream.Observe(ctx, browserprotocol.OpsObserverFrameOperation)
+	if observerErr != nil || response.Status != "ok" ||
+		response.Observation.FrameSequence != 1 {
+		t.Fatalf("observation after the action gap = %#v, %v", response, observerErr)
+	}
+
 	_ = stream.Close()
 	cancel()
 	if err := <-done; err != nil {
