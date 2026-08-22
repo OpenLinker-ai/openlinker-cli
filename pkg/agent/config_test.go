@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -277,21 +278,21 @@ func TestAgentModeLockIsExclusiveAndReusable(t *testing.T) {
 }
 
 func TestRuntimeOptionalFeaturesOnlyAdvertiseBrowserProfile(t *testing.T) {
-	if features := runtimeOptionalFeatures("standard", "restricted", true); features != nil {
+	if features := runtimeOptionalFeatures("standard", "restricted", true, false); features != nil {
 		t.Fatalf("standard Runtime features = %#v", features)
 	}
-	features := runtimeOptionalFeatures("browser", "restricted", false)
+	features := runtimeOptionalFeatures("browser", "restricted", false, false)
 	if len(features) != 1 ||
 		features[0] != browserExecutionProfileFeature {
 		t.Fatalf("Browser Runtime features without Viewer = %#v", features)
 	}
-	features = runtimeOptionalFeatures("browser", "restricted", true)
+	features = runtimeOptionalFeatures("browser", "restricted", true, false)
 	if len(features) != 2 ||
 		features[0] != browserExecutionProfileFeature ||
 		features[1] != browserHumanControlFeature {
 		t.Fatalf("browser Runtime features = %#v", features)
 	}
-	features = runtimeOptionalFeatures("browser", "full", false)
+	features = runtimeOptionalFeatures("browser", "full", false, false)
 	if len(features) != 2 ||
 		features[0] != browserExecutionProfileFeature ||
 		features[1] != browserFullInteractionFeature {
@@ -300,13 +301,13 @@ func TestRuntimeOptionalFeaturesOnlyAdvertiseBrowserProfile(t *testing.T) {
 }
 
 func TestRuntimeViewerExtensionIsRegisteredOnlyWithHumanControl(t *testing.T) {
-	if routes := runtimeExtensionRoutes("standard", true); routes != nil {
+	if routes := runtimeExtensionRoutes("standard", true, false); routes != nil {
 		t.Fatalf("standard Agent Runtime extension routes = %#v", routes)
 	}
-	if routes := runtimeExtensionRoutes("browser", false); routes != nil {
+	if routes := runtimeExtensionRoutes("browser", false, false); routes != nil {
 		t.Fatalf("Browser Agent without human control routes = %#v", routes)
 	}
-	routes := runtimeExtensionRoutes("browser", true)
+	routes := runtimeExtensionRoutes("browser", true, false)
 	if len(routes) != 1 ||
 		routes[0] != browserprotocol.RuntimeViewerExtensionRoute {
 		t.Fatalf("Browser human-control Runtime extension routes = %#v", routes)
@@ -332,5 +333,74 @@ func TestRuntimeHumanControlIsAnExplicitDeploymentCapability(t *testing.T) {
 	values[browserHumanControlEnvironment] = "site-response"
 	if _, err := runtimeHumanControlEnabled(getenv, "browser"); err == nil {
 		t.Fatal("invalid human-control capability value was accepted")
+	}
+}
+
+// A Worker that announces observation but registers no route would make Core
+// send commands into a channel nobody reads, so the flag has to drive both.
+func TestObservationFeatureAndRouteMoveTogether(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name        string
+		observation bool
+	}{
+		{name: "disabled", observation: false},
+		{name: "enabled", observation: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			features := runtimeOptionalFeatures("browser", "restricted", false, testCase.observation)
+			routes := runtimeExtensionRoutes("browser", false, testCase.observation)
+
+			declared := slices.Contains(features, browserprotocol.ObserverBridgeFeature)
+			routed := false
+			for _, route := range routes {
+				if route.CommandType == browserprotocol.ObserverBridgeCommandType {
+					routed = true
+				}
+			}
+			if declared != testCase.observation || routed != testCase.observation {
+				t.Fatalf("observation=%v declared=%v routed=%v", testCase.observation, declared, routed)
+			}
+		})
+	}
+
+	// The two Browser extensions are independent: enabling one must not drag the
+	// other in, or a deployment could gain takeover by asking only to observe.
+	observeOnly := runtimeExtensionRoutes("browser", false, true)
+	for _, route := range observeOnly {
+		if route.CommandType == browserprotocol.RuntimeViewerCommandMessage {
+			t.Fatal("observation alone registered the human-control route")
+		}
+	}
+	controlOnly := runtimeExtensionRoutes("browser", true, false)
+	for _, route := range controlOnly {
+		if route.CommandType == browserprotocol.ObserverBridgeCommandType {
+			t.Fatal("human control alone registered the observation route")
+		}
+	}
+}
+
+func TestObservationFlagParsing(t *testing.T) {
+	t.Parallel()
+	getenv := func(value string) func(string) string {
+		return func(name string) string {
+			if name == browserObservationEnvironment {
+				return value
+			}
+			return ""
+		}
+	}
+	for value, want := range map[string]bool{"": false, "false": false, "true": true} {
+		enabled, err := runtimeObservationEnabled(getenv(value), "browser")
+		if err != nil || enabled != want {
+			t.Fatalf("%q -> (%v, %v), want (%v, nil)", value, enabled, err, want)
+		}
+	}
+	if _, err := runtimeObservationEnabled(getenv("yes"), "browser"); err == nil {
+		t.Fatal("an unparseable flag must fail closed")
+	}
+	// A non-browser profile has no bridge at all, so the flag cannot turn it on.
+	if enabled, err := runtimeObservationEnabled(getenv("true"), "standard"); err != nil || enabled {
+		t.Fatalf("standard profile observation = (%v, %v)", enabled, err)
 	}
 }

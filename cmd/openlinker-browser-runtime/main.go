@@ -48,8 +48,13 @@ const (
 	defaultOfficialChromeLock  = "/opt/openlinker/native-chrome/assets.lock.json"
 	defaultOpsObserverSocket   = "/browser-ops/openlinker.browser.ops-viewer.sock"
 	defaultOpsCredential       = "/browser-ops/channel-credential"
-	defaultHealthcheckTimeout  = 2 * time.Second
-	maxCredentialBytes         = 4096
+	// The authenticated observation bridge lives beside the Worker's existing
+	// browser-control mount. It deliberately does not reuse the operator ops
+	// credential, whose authority is wider than observation needs.
+	defaultObserverSocket     = "/browser-control/openlinker.browser.observer.sock"
+	defaultObserverCredential = "/browser-control/observer-credential"
+	defaultHealthcheckTimeout = 2 * time.Second
+	maxCredentialBytes        = 4096
 )
 
 func main() {
@@ -78,6 +83,20 @@ func run() error {
 	}
 	if !opsObserverEnabled {
 		if err := removeDisabledOpsObserverArtifacts(); err != nil {
+			return err
+		}
+	}
+	observationEnabled, err := booleanValue(
+		"OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED",
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if !observationEnabled {
+		// Leaving the socket or credential behind would let a Worker believe the
+		// bridge exists after the feature was turned off.
+		if err := removeDisabledObservationArtifacts(); err != nil {
 			return err
 		}
 	}
@@ -200,16 +219,50 @@ func run() error {
 			return errors.Join(err, engine.Close())
 		}
 	}
+	var observerServer *browserruntime.OpsObserverServer
+	if observationEnabled {
+		observerCredential, credentialErr := loadOrCreateCredentialFile(
+			value("OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE", defaultObserverCredential),
+		)
+		if credentialErr != nil {
+			return errors.Join(credentialErr, engine.Close())
+		}
+		// One Runtime, one observation lease. Sharing the manager is what keeps
+		// the operator Viewer and the authenticated bridge from both being
+		// admitted; a second private manager would silently allow both.
+		leases := browserruntime.NewOpsObserverLeaseManager(nil)
+		if opsServer != nil {
+			leases = opsServer.Leases()
+		}
+		observerServer, err = browserruntime.NewOpsObserverServer(
+			browserruntime.OpsObserverServerOptions{
+				SocketPath: value(
+					"OPENLINKER_BROWSER_OBSERVER_SOCKET",
+					defaultObserverSocket,
+				),
+				ChannelCredential: observerCredential,
+				Observer:          engine,
+				Leases:            leases,
+			},
+		)
+		if err != nil {
+			return errors.Join(err, engine.Close())
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	serveContext, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
 	serverCount := 1
-	serveResults := make(chan error, 2)
+	serveResults := make(chan error, 3)
 	go func() { serveResults <- server.Serve(serveContext) }()
 	if opsServer != nil {
 		serverCount++
 		go func() { serveResults <- opsServer.Serve(serveContext) }()
+	}
+	if observerServer != nil {
+		serverCount++
+		go func() { serveResults <- observerServer.Serve(serveContext) }()
 	}
 	var serveErr error
 	completed := 0
@@ -247,10 +300,37 @@ func runHealthcheck() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultHealthcheckTimeout)
 	defer cancel()
-	return browserclient.CheckHealth(
+	if err := browserclient.CheckHealth(
 		ctx,
 		socketPath,
 		credential,
+		defaultHealthcheckTimeout,
+	); err != nil {
+		return err
+	}
+	observationEnabled, err := booleanValue(
+		"OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED",
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if !observationEnabled {
+		return nil
+	}
+	// With the bridge enabled the Worker declares the observation feature, so an
+	// unserved listener would leave Core believing observation works while every
+	// start fails. Probing here surfaces that at the deployment gate instead.
+	observerCredential, err := readCredentialFile(
+		value("OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE", defaultObserverCredential),
+	)
+	if err != nil {
+		return err
+	}
+	return browserclient.ProbeObserverBridge(
+		ctx,
+		value("OPENLINKER_BROWSER_OBSERVER_SOCKET", defaultObserverSocket),
+		observerCredential,
 		defaultHealthcheckTimeout,
 	)
 }
@@ -368,6 +448,49 @@ func parseOpsViewerStreamArguments(arguments []string) (string, time.Duration, e
 		return "", 0, errors.New("Ops Viewer TTL must be between 1m and 30m")
 	}
 	return arguments[1], ttl, nil
+}
+
+// removeDisabledObservationArtifacts mirrors the Ops Viewer cleanup: a leftover
+// socket or credential would let a Worker keep declaring the observation feature
+// after the flag was turned off, so the disabled state has to be enforced on
+// disk rather than only in configuration.
+func removeDisabledObservationArtifacts() error {
+	for _, artifact := range []struct {
+		path       string
+		credential bool
+	}{
+		{
+			path: value("OPENLINKER_BROWSER_OBSERVER_SOCKET", defaultObserverSocket),
+		},
+		{
+			path:       value("OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE", defaultObserverCredential),
+			credential: true,
+		},
+	} {
+		path := filepath.Clean(artifact.path)
+		if !filepath.IsAbs(path) {
+			return errors.New("Browser observation artifact path must be absolute")
+		}
+		info, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("Browser observation disabled artifact is invalid")
+		}
+		stat, owned := info.Sys().(*syscall.Stat_t)
+		if !owned || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
+			return errors.New("Browser observation disabled artifact is not private")
+		}
+		if (artifact.credential && !info.Mode().IsRegular()) ||
+			(!artifact.credential && info.Mode()&os.ModeSocket == 0) {
+			return errors.New("Browser observation disabled artifact type is invalid")
+		}
+		if err := os.Remove(path); err != nil {
+			return errors.New("remove disabled Browser observation artifact")
+		}
+	}
+	return nil
 }
 
 func removeDisabledOpsObserverArtifacts() error {

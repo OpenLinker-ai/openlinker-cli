@@ -28,12 +28,14 @@ const (
 	browserFullInteractionFeature  = "browser_full_interaction.v1"
 	browserHumanControlFeature     = "browser_human_control.v1"
 	browserHumanControlEnvironment = "OPENLINKER_BROWSER_HUMAN_CONTROL_ENABLED"
+	browserObservationEnvironment  = "OPENLINKER_BROWSER_AUTHENTICATED_OBSERVATION_ENABLED"
 )
 
 func runtimeOptionalFeatures(
 	executionProfile string,
 	interactionPolicy string,
 	humanControlEnabled bool,
+	observationEnabled bool,
 ) []string {
 	if strings.TrimSpace(executionProfile) != "browser" {
 		return nil
@@ -45,20 +47,54 @@ func runtimeOptionalFeatures(
 	if humanControlEnabled {
 		features = append(features, browserHumanControlFeature)
 	}
+	if observationEnabled {
+		features = append(features, browserprotocol.ObserverBridgeFeature)
+	}
 	return features
 }
 
 func runtimeExtensionRoutes(
 	executionProfile string,
 	humanControlEnabled bool,
+	observationEnabled bool,
 ) []openlinker.RuntimeExtensionRoute {
-	if strings.TrimSpace(executionProfile) != "browser" ||
-		!humanControlEnabled {
+	if strings.TrimSpace(executionProfile) != "browser" {
 		return nil
 	}
-	return []openlinker.RuntimeExtensionRoute{
-		browserprotocol.RuntimeViewerExtensionRoute,
+	// The feature declaration and the route registration are driven by the same
+	// flags on purpose: a Worker that announces a capability it cannot route
+	// would make Core send commands into a channel nobody reads.
+	var routes []openlinker.RuntimeExtensionRoute
+	if humanControlEnabled {
+		routes = append(routes, browserprotocol.RuntimeViewerExtensionRoute)
 	}
+	if observationEnabled {
+		routes = append(routes, browserprotocol.ObserverBridgeExtensionRoute)
+	}
+	return routes
+}
+
+// runtimeObservationEnabled mirrors runtimeHumanControlEnabled so the Worker and
+// the Browser Runtime read the same flag name.
+func runtimeObservationEnabled(
+	getenv func(string) string,
+	executionProfile string,
+) (bool, error) {
+	if strings.TrimSpace(executionProfile) != "browser" {
+		return false, nil
+	}
+	raw := strings.TrimSpace(getenv(browserObservationEnvironment))
+	if raw == "" {
+		return false, nil
+	}
+	enabled, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf(
+			"%s must be true or false",
+			browserObservationEnvironment,
+		)
+	}
+	return enabled, nil
 }
 
 func runtimeHumanControlEnabled(
@@ -184,6 +220,14 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 		service.setStatus(Status{State: "error", Message: boundedStatusMessage(err), UpdatedAt: nowText()})
 		return err
 	}
+	observationEnabled, err := runtimeObservationEnabled(
+		service.getenv,
+		resolved.config.ExecutionProfile,
+	)
+	if err != nil {
+		service.setStatus(Status{State: "error", Message: boundedStatusMessage(err), UpdatedAt: nowText()})
+		return err
+	}
 	workerLock := resolved.workerLock
 	ready := make(chan struct{})
 	readyOnce := sync.Once{}
@@ -199,10 +243,12 @@ func (service *Service) Enable(parent context.Context, providerOverride string) 
 			resolved.config.ExecutionProfile,
 			resolved.config.BrowserInteractionPolicy,
 			humanControlEnabled,
+			observationEnabled,
 		),
 		ExtensionRoutes: runtimeExtensionRoutes(
 			resolved.config.ExecutionProfile,
 			humanControlEnabled,
+			observationEnabled,
 		),
 		OnReady: func(_ openlinker.RuntimeReadyPayload) {
 			service.setStatus(Status{
