@@ -238,3 +238,38 @@ func TestObservationRetriesOnlyTransientActivationErrors(t *testing.T) {
 		t.Fatal("a terminal or missing observation error was treated as transient")
 	}
 }
+
+type observationStreamCloseRecorder struct {
+	closeCalls int
+}
+
+func (stream *observationStreamCloseRecorder) Close() error {
+	stream.closeCalls++
+	return nil
+}
+
+func TestObservationDiscardsClosedTransientStreamsBeforeRetry(t *testing.T) {
+	t.Parallel()
+	stream := &observationStreamCloseRecorder{}
+	notActive := browserprotocol.NewOpsObserverError(
+		browserprotocol.OpsObserverRunNotActive,
+		"not active",
+	)
+	if !discardTransientObservationStream(stream, notActive, time.Second) {
+		t.Fatal("a transient RUN_NOT_ACTIVE stream was retained")
+	}
+	if stream.closeCalls != 1 {
+		t.Fatalf("transient stream close calls = %d, want 1", stream.closeCalls)
+	}
+
+	internal := browserprotocol.NewOpsObserverError(
+		browserprotocol.OpsObserverInternalError,
+		"internal",
+	)
+	if discardTransientObservationStream(stream, internal, 0) {
+		t.Fatal("a terminal stream was discarded for retry")
+	}
+	if stream.closeCalls != 1 {
+		t.Fatalf("terminal stream close calls = %d, want 1", stream.closeCalls)
+	}
+}

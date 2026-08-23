@@ -147,12 +147,13 @@ func (observation *browserObservation) stream(
 	// observation contend for the one Runtime lease. A refusal here means someone
 	// is already watching, and it has to reach the caller rather than look like a
 	// silent stall.
-	stream, err := browserclient.NewOpsObserverStream(ctx, browserclient.OpsObserverConfig{
+	streamConfig := browserclient.OpsObserverConfig{
 		SocketPath:     observationSocketPath(),
 		CredentialFile: observationCredentialPath(),
 		RunID:          command.AttemptIdentity.RunID,
 		TTL:            time.Until(command.LeaseExpiresAt),
-	})
+	}
+	stream, err := browserclient.NewOpsObserverStream(ctx, streamConfig)
 	if err != nil {
 		observation.emitError(command, browserprotocol.NewOpsObserverError(
 			browserprotocol.OpsObserverDisabled,
@@ -160,7 +161,7 @@ func (observation *browserObservation) stream(
 		))
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	if !observation.emitEvent(ctx, command, browserprotocol.ObserverBridgeEvent{
 		Kind: browserprotocol.ObserverBridgeStarted,
@@ -181,6 +182,17 @@ func (observation *browserObservation) stream(
 			})
 			return
 		case <-ticker.C:
+			if stream == nil {
+				streamConfig.TTL = time.Until(command.LeaseExpiresAt)
+				stream, err = browserclient.NewOpsObserverStream(ctx, streamConfig)
+				if err != nil {
+					observation.emitError(command, browserprotocol.NewOpsObserverError(
+						browserprotocol.OpsObserverDisabled,
+						"the observation bridge is unavailable",
+					))
+					return
+				}
+			}
 			identity, err := observation.lease.identitySnapshot()
 			if err != nil {
 				observation.emitError(command, browserprotocol.NewOpsObserverError(
@@ -205,10 +217,15 @@ func (observation *browserObservation) stream(
 				// after ready while the selected Engine publishes its first live
 				// snapshot. The Worker's own lease and the command identity remain
 				// the authority during this short grace; every retry rechecks both.
-				if transientObservationError(
+				// Error responses that are transient close the Runtime-side stream,
+				// so reconnect before the next tick instead of reading that closed
+				// socket and converting the activation race into OPS_VIEWER_INTERNAL.
+				if discardTransientObservationStream(
+					stream,
 					observeErr,
 					time.Since(activatedAt),
 				) {
+					stream = nil
 					continue
 				}
 				observation.emitError(command, observeErr)
@@ -240,6 +257,24 @@ func (observation *browserObservation) stream(
 			}
 		}
 	}
+}
+
+type observationStreamCloser interface {
+	Close() error
+}
+
+func discardTransientObservationStream(
+	stream observationStreamCloser,
+	failure *browserprotocol.OpsObserverError,
+	sinceActivation time.Duration,
+) bool {
+	if !transientObservationError(failure, sinceActivation) {
+		return false
+	}
+	if stream != nil {
+		_ = stream.Close()
+	}
+	return true
 }
 
 func transientObservationError(
