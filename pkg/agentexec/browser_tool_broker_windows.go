@@ -16,6 +16,7 @@ func startBrowserToolBroker(
 	*browserRunLease,
 	func() (browserplugin.Executor, error),
 	*browserMutationJournal,
+	func(),
 ) (*browserToolBroker, error) {
 	return nil, errors.New("Browser execution profile requires a Linux container or Unix host")
 }
