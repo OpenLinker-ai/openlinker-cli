@@ -121,7 +121,10 @@ func TestProviderPrivilegeDropHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	caps := "missing"
-	if status, err := os.ReadFile("/proc/self/status"); err == nil {
+	// Capabilities are per-thread. The launcher locks this goroutine to the OS
+	// thread that will call exec, so inspect that thread instead of the thread
+	// group leader exposed by /proc/self/status.
+	if status, err := os.ReadFile("/proc/thread-self/status"); err == nil {
 		for _, line := range strings.Split(string(status), "\n") {
 			if strings.HasPrefix(line, "CapEff:") {
 				caps = strings.TrimSpace(strings.TrimPrefix(line, "CapEff:"))
