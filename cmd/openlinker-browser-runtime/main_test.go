@@ -61,6 +61,32 @@ func TestOpsViewerStreamArgumentsAndEngineEnvironmentAreClosed(t *testing.T) {
 	}
 }
 
+func TestBrowserEngineOpsObserverEnabledForEveryObservationSurface(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name                            string
+		opsViewerEnabled                bool
+		authenticatedObservationEnabled bool
+		want                            bool
+	}{
+		{name: "disabled", want: false},
+		{name: "ops viewer", opsViewerEnabled: true, want: true},
+		{name: "authenticated observation", authenticatedObservationEnabled: true, want: true},
+		{name: "both", opsViewerEnabled: true, authenticatedObservationEnabled: true, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := browserEngineOpsObserverEnabled(
+				test.opsViewerEnabled,
+				test.authenticatedObservationEnabled,
+			)
+			if got != test.want {
+				t.Fatalf("engine Ops Observer enabled = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func containsEnvironment(environment []string, expected string) bool {
 	for _, entry := range environment {
 		if entry == expected {
