@@ -106,6 +106,42 @@ func TestOpsObserverResponseIsStrict(t *testing.T) {
 	}
 }
 
+func TestOpsObserverProbeResponseIsStrictAndContentFree(t *testing.T) {
+	requestID := "11111111-1111-4111-8111-111111111111"
+	probe := OpsObserverProbeResponse(requestID)
+	raw, err := json.Marshal(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeOpsObserverProbeResponse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Status != "ok" || decoded.RequestID != requestID ||
+		decoded.Observation != nil || decoded.Error != nil {
+		t.Fatalf("decoded probe response = %#v", decoded)
+	}
+	if _, err := DecodeOpsObserverResponse(raw); err == nil {
+		t.Fatal("content-free probe response was accepted as an observation response")
+	}
+
+	observation, err := json.Marshal(OpsObserverSuccessResponse(requestID, validOpsObservation()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeOpsObserverProbeResponse(observation); err == nil {
+		t.Fatal("frame-bearing observation response was accepted as a probe response")
+	}
+	if _, err := DecodeOpsObserverProbeResponse(append(raw, []byte(" {}")...)); err == nil {
+		t.Fatal("trailing Ops Observer probe response value was accepted")
+	}
+	unknown := append([]byte{}, raw[:len(raw)-1]...)
+	unknown = append(unknown, []byte(`,"frame_data":"forbidden"}`)...)
+	if _, err := DecodeOpsObserverProbeResponse(unknown); err == nil {
+		t.Fatal("unknown Ops Observer probe response field was accepted")
+	}
+}
+
 func validOpsObserverRequest(now time.Time) OpsObserverRequest {
 	return OpsObserverRequest{
 		ContractID:        OpsObserverContractID,
