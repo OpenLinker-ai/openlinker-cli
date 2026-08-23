@@ -19,10 +19,15 @@ func bridgeIdentity() ObserverBridgeIdentity {
 	return ObserverBridgeIdentity{
 		RunID:                "11111111-1111-4111-8111-111111111111",
 		AttemptID:            "22222222-2222-4222-8222-222222222222",
+		LeaseID:              "33333333-3333-4333-8333-333333333333",
+		FencingToken:         7,
+		NodeID:               "44444444-4444-4444-8444-444444444444",
+		AgentID:              "55555555-5555-4555-8555-555555555555",
+		WorkerID:             "66666666-6666-4666-8666-666666666666",
 		SessionEpoch:         3,
 		BrowserSessionSHA256: strings.Repeat("a", 64),
 		AttachmentSHA256:     strings.Repeat("b", 64),
-		RuntimeSessionID:     "33333333-3333-4333-8333-333333333333",
+		RuntimeSessionID:     "77777777-7777-4777-8777-777777777777",
 	}
 }
 
@@ -54,9 +59,14 @@ func TestObserverBridgeIdentityRejectsEveryFieldDrift(t *testing.T) {
 	for name, mutate := range map[string]func(*ObserverBridgeIdentity){
 		"run":        func(i *ObserverBridgeIdentity) { i.RunID = "66666666-6666-4666-8666-666666666666" },
 		"attempt":    func(i *ObserverBridgeIdentity) { i.AttemptID = "77777777-7777-4777-8777-777777777777" },
+		"lease":      func(i *ObserverBridgeIdentity) { i.LeaseID = "88888888-8888-4888-8888-888888888888" },
+		"fence":      func(i *ObserverBridgeIdentity) { i.FencingToken++ },
+		"node":       func(i *ObserverBridgeIdentity) { i.NodeID = "99999999-9999-4999-8999-999999999999" },
+		"agent":      func(i *ObserverBridgeIdentity) { i.AgentID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+		"worker":     func(i *ObserverBridgeIdentity) { i.WorkerID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
 		"epoch":      func(i *ObserverBridgeIdentity) { i.SessionEpoch = base.SessionEpoch + 1 },
 		"attachment": func(i *ObserverBridgeIdentity) { i.AttachmentSHA256 = strings.Repeat("c", 64) },
-		"session":    func(i *ObserverBridgeIdentity) { i.RuntimeSessionID = "88888888-8888-4888-8888-888888888888" },
+		"session":    func(i *ObserverBridgeIdentity) { i.RuntimeSessionID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			drifted := base

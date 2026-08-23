@@ -74,8 +74,7 @@ func (observation *browserObservation) handleCommand(
 	if failure := command.Validate(); failure != nil {
 		return
 	}
-	if command.AttemptIdentity.RunID != attemptIdentity.RunID ||
-		command.AttemptIdentity.AttemptID != attemptIdentity.AttemptID {
+	if command.AttemptIdentity.RuntimeIdentity() != attemptIdentity {
 		return
 	}
 	switch command.Action {

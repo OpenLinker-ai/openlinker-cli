@@ -59,6 +59,11 @@ const (
 type ObserverBridgeIdentity struct {
 	RunID                string `json:"run_id"`
 	AttemptID            string `json:"attempt_id"`
+	LeaseID              string `json:"lease_id"`
+	FencingToken         int64  `json:"fencing_token"`
+	NodeID               string `json:"node_id"`
+	AgentID              string `json:"agent_id"`
+	WorkerID             string `json:"worker_id"`
 	SessionEpoch         uint64 `json:"session_epoch"`
 	BrowserSessionSHA256 string `json:"browser_session_sha256"`
 	AttachmentSHA256     string `json:"browser_attachment_sha256"`
@@ -69,8 +74,21 @@ func (identity ObserverBridgeIdentity) Equal(other ObserverBridgeIdentity) bool 
 	return identity == other
 }
 
+func (identity ObserverBridgeIdentity) RuntimeIdentity() openlinker.RuntimeAttemptIdentity {
+	return openlinker.RuntimeAttemptIdentity{
+		RunID:            identity.RunID,
+		AttemptID:        identity.AttemptID,
+		LeaseID:          identity.LeaseID,
+		FencingToken:     identity.FencingToken,
+		NodeID:           identity.NodeID,
+		AgentID:          identity.AgentID,
+		WorkerID:         identity.WorkerID,
+		RuntimeSessionID: identity.RuntimeSessionID,
+	}
+}
+
 func (identity ObserverBridgeIdentity) validate() bool {
-	return validUUID(identity.RunID) && validUUID(identity.AttemptID) &&
+	return validRuntimeAttemptIdentity(identity.RuntimeIdentity()) &&
 		identity.SessionEpoch > 0 &&
 		validSHA256Hex(identity.BrowserSessionSHA256) &&
 		validSHA256Hex(identity.AttachmentSHA256) &&

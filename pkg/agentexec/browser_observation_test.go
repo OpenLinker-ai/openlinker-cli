@@ -11,7 +11,16 @@ import (
 )
 
 func runtimeAttemptIdentityFor(runID, attemptID string) openlinker.RuntimeAttemptIdentity {
-	return openlinker.RuntimeAttemptIdentity{RunID: runID, AttemptID: attemptID}
+	return openlinker.RuntimeAttemptIdentity{
+		RunID:            runID,
+		AttemptID:        attemptID,
+		LeaseID:          "33333333-3333-4333-8333-333333333333",
+		FencingToken:     7,
+		NodeID:           "44444444-4444-4444-8444-444444444444",
+		AgentID:          "55555555-5555-4555-8555-555555555555",
+		WorkerID:         "66666666-6666-4666-8666-666666666666",
+		RuntimeSessionID: "77777777-7777-4777-8777-777777777777",
+	}
 }
 
 func observationCommand(action browserprotocol.ObserverBridgeAction) browserprotocol.ObserverBridgeCommand {
@@ -20,10 +29,15 @@ func observationCommand(action browserprotocol.ObserverBridgeAction) browserprot
 		AttemptIdentity: browserprotocol.ObserverBridgeIdentity{
 			RunID:                "11111111-1111-4111-8111-111111111111",
 			AttemptID:            "22222222-2222-4222-8222-222222222222",
+			LeaseID:              "33333333-3333-4333-8333-333333333333",
+			FencingToken:         7,
+			NodeID:               "44444444-4444-4444-8444-444444444444",
+			AgentID:              "55555555-5555-4555-8555-555555555555",
+			WorkerID:             "66666666-6666-4666-8666-666666666666",
 			SessionEpoch:         4,
 			BrowserSessionSHA256: strings.Repeat("a", 64),
 			AttachmentSHA256:     strings.Repeat("b", 64),
-			RuntimeSessionID:     "33333333-3333-4333-8333-333333333333",
+			RuntimeSessionID:     "77777777-7777-4777-8777-777777777777",
 		},
 		CommandID:       "44444444-4444-4444-8444-444444444444",
 		Action:          action,
