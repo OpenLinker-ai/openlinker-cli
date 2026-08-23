@@ -21,11 +21,6 @@ const (
 	observationCredentialEnvironment = "OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE"
 	defaultObservationSocket         = "/browser-control/openlinker.browser.observer.sock"
 	defaultObservationCredential     = "/browser-control/observer-credential"
-	// Browser-ready proves the attachment preflight, but the provider can spend
-	// several seconds preparing its first Browser action before the Engine has a
-	// live capture surface. Keep that normal gap bounded without stretching it
-	// to the observation lease TTL.
-	browserObservationActivationGrace = 30 * time.Second
 )
 
 func observationSocketPath() string {
@@ -173,7 +168,7 @@ func (observation *browserObservation) stream(
 	}) {
 		return
 	}
-	activatedAt := time.Now()
+	frameDelivered := false
 
 	ticker := time.NewTicker(time.Duration(command.FrameIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
@@ -218,17 +213,17 @@ func (observation *browserObservation) stream(
 				browserprotocol.OpsObserverFrameOperation,
 			)
 			if observeErr != nil {
-				// Busy is transient. RUN_NOT_ACTIVE can also be transient just
-				// after ready while the selected Engine publishes its first live
-				// snapshot. The Worker's own lease and the command identity remain
-				// the authority during this short grace; every retry rechecks both.
+				// Busy is transient. Before the first frame, RUN_NOT_ACTIVE only
+				// means the provider has not opened the Engine capture surface yet;
+				// the Worker's own lease and command identity remain authoritative,
+				// and every retry rechecks both.
 				// Error responses that are transient close the Runtime-side stream,
 				// so reconnect before the next tick instead of reading that closed
 				// socket and converting the activation race into OPS_VIEWER_INTERNAL.
 				if discardTransientObservationStream(
 					stream,
 					observeErr,
-					time.Since(activatedAt),
+					frameDelivered,
 				) {
 					stream = nil
 					continue
@@ -260,6 +255,7 @@ func (observation *browserObservation) stream(
 			}) {
 				return
 			}
+			frameDelivered = true
 		}
 	}
 }
@@ -271,9 +267,9 @@ type observationStreamCloser interface {
 func discardTransientObservationStream(
 	stream observationStreamCloser,
 	failure *browserprotocol.OpsObserverError,
-	sinceActivation time.Duration,
+	frameDelivered bool,
 ) bool {
-	if !transientObservationError(failure, sinceActivation) {
+	if !transientObservationError(failure, frameDelivered) {
 		return false
 	}
 	if stream != nil {
@@ -284,7 +280,7 @@ func discardTransientObservationStream(
 
 func transientObservationError(
 	failure *browserprotocol.OpsObserverError,
-	sinceActivation time.Duration,
+	frameDelivered bool,
 ) bool {
 	if failure == nil {
 		return false
@@ -292,9 +288,12 @@ func transientObservationError(
 	if failure.Code == browserprotocol.OpsObserverBusyError {
 		return true
 	}
-	return failure.Code == browserprotocol.OpsObserverRunNotActive &&
-		sinceActivation >= 0 &&
-		sinceActivation < browserObservationActivationGrace
+	// Browser-ready proves the attachment preflight, but the provider can spend
+	// an unbounded portion of the Run preparing its first Browser action before
+	// the Engine has a live capture surface. The Worker identity checks above are
+	// the authority while no frame has existed. After a frame was delivered,
+	// losing the Runtime surface is a terminal state rather than startup delay.
+	return failure.Code == browserprotocol.OpsObserverRunNotActive && !frameDelivered
 }
 
 // capturedFrameIsForeign compares the identity the Runtime backfilled at capture

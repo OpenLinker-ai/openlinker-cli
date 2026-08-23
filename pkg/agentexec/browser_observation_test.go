@@ -215,7 +215,7 @@ func TestObservationRetriesOnlyTransientActivationErrors(t *testing.T) {
 		browserprotocol.OpsObserverBusyError,
 		"busy",
 	)
-	if !transientObservationError(busy, time.Hour) {
+	if !transientObservationError(busy, true) {
 		t.Fatal("a busy response stopped the observation")
 	}
 
@@ -223,18 +223,18 @@ func TestObservationRetriesOnlyTransientActivationErrors(t *testing.T) {
 		browserprotocol.OpsObserverRunNotActive,
 		"not active",
 	)
-	if !transientObservationError(notActive, browserObservationActivationGrace-time.Nanosecond) {
-		t.Fatal("a startup RUN_NOT_ACTIVE response was not retried")
+	if !transientObservationError(notActive, false) {
+		t.Fatal("a pre-frame RUN_NOT_ACTIVE response was not retried")
 	}
-	if transientObservationError(notActive, browserObservationActivationGrace) {
-		t.Fatal("RUN_NOT_ACTIVE remained transient after the activation grace")
+	if transientObservationError(notActive, true) {
+		t.Fatal("RUN_NOT_ACTIVE remained transient after a frame was delivered")
 	}
 
 	internal := browserprotocol.NewOpsObserverError(
 		browserprotocol.OpsObserverInternalError,
 		"internal",
 	)
-	if transientObservationError(internal, 0) || transientObservationError(nil, 0) {
+	if transientObservationError(internal, false) || transientObservationError(nil, false) {
 		t.Fatal("a terminal or missing observation error was treated as transient")
 	}
 }
@@ -255,7 +255,7 @@ func TestObservationDiscardsClosedTransientStreamsBeforeRetry(t *testing.T) {
 		browserprotocol.OpsObserverRunNotActive,
 		"not active",
 	)
-	if !discardTransientObservationStream(stream, notActive, time.Second) {
+	if !discardTransientObservationStream(stream, notActive, false) {
 		t.Fatal("a transient RUN_NOT_ACTIVE stream was retained")
 	}
 	if stream.closeCalls != 1 {
@@ -266,7 +266,7 @@ func TestObservationDiscardsClosedTransientStreamsBeforeRetry(t *testing.T) {
 		browserprotocol.OpsObserverInternalError,
 		"internal",
 	)
-	if discardTransientObservationStream(stream, internal, 0) {
+	if discardTransientObservationStream(stream, internal, false) {
 		t.Fatal("a terminal stream was discarded for retry")
 	}
 	if stream.closeCalls != 1 {
