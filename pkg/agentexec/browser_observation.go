@@ -16,11 +16,15 @@ import (
 )
 
 const (
-	observationSocketEnvironment      = "OPENLINKER_BROWSER_OBSERVER_SOCKET"
-	observationCredentialEnvironment  = "OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE"
-	defaultObservationSocket          = "/browser-control/openlinker.browser.observer.sock"
-	defaultObservationCredential      = "/browser-control/observer-credential"
-	browserObservationActivationGrace = 10 * time.Second
+	observationSocketEnvironment     = "OPENLINKER_BROWSER_OBSERVER_SOCKET"
+	observationCredentialEnvironment = "OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE"
+	defaultObservationSocket         = "/browser-control/openlinker.browser.observer.sock"
+	defaultObservationCredential     = "/browser-control/observer-credential"
+	// Browser-ready proves the attachment preflight, but the provider can spend
+	// several seconds preparing its first Browser action before the Engine has a
+	// live capture surface. Keep that normal gap bounded without stretching it
+	// to the observation lease TTL.
+	browserObservationActivationGrace = 30 * time.Second
 )
 
 func observationSocketPath() string {
