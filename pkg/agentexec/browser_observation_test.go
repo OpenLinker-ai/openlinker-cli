@@ -208,3 +208,33 @@ func TestObservationRejectsFramesFromAnotherAttempt(t *testing.T) {
 		})
 	}
 }
+
+func TestObservationRetriesOnlyTransientActivationErrors(t *testing.T) {
+	t.Parallel()
+	busy := browserprotocol.NewOpsObserverError(
+		browserprotocol.OpsObserverBusyError,
+		"busy",
+	)
+	if !transientObservationError(busy, time.Hour) {
+		t.Fatal("a busy response stopped the observation")
+	}
+
+	notActive := browserprotocol.NewOpsObserverError(
+		browserprotocol.OpsObserverRunNotActive,
+		"not active",
+	)
+	if !transientObservationError(notActive, browserObservationActivationGrace-time.Nanosecond) {
+		t.Fatal("a startup RUN_NOT_ACTIVE response was not retried")
+	}
+	if transientObservationError(notActive, browserObservationActivationGrace) {
+		t.Fatal("RUN_NOT_ACTIVE remained transient after the activation grace")
+	}
+
+	internal := browserprotocol.NewOpsObserverError(
+		browserprotocol.OpsObserverInternalError,
+		"internal",
+	)
+	if transientObservationError(internal, 0) || transientObservationError(nil, 0) {
+		t.Fatal("a terminal or missing observation error was treated as transient")
+	}
+}

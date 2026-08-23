@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	observationSocketEnvironment     = "OPENLINKER_BROWSER_OBSERVER_SOCKET"
-	observationCredentialEnvironment = "OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE"
-	defaultObservationSocket         = "/browser-control/openlinker.browser.observer.sock"
-	defaultObservationCredential     = "/browser-control/observer-credential"
+	observationSocketEnvironment      = "OPENLINKER_BROWSER_OBSERVER_SOCKET"
+	observationCredentialEnvironment  = "OPENLINKER_BROWSER_OBSERVER_CREDENTIAL_FILE"
+	defaultObservationSocket          = "/browser-control/openlinker.browser.observer.sock"
+	defaultObservationCredential      = "/browser-control/observer-credential"
+	browserObservationActivationGrace = 10 * time.Second
 )
 
 func observationSocketPath() string {
@@ -166,6 +167,7 @@ func (observation *browserObservation) stream(
 	}) {
 		return
 	}
+	activatedAt := time.Now()
 
 	ticker := time.NewTicker(time.Duration(command.FrameIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
@@ -199,9 +201,14 @@ func (observation *browserObservation) stream(
 				browserprotocol.OpsObserverFrameOperation,
 			)
 			if observeErr != nil {
-				// Busy is transient: the Engine is occupied authorizing the
-				// observer, so skip this tick rather than ending the lease.
-				if observeErr.Code == browserprotocol.OpsObserverBusyError {
+				// Busy is transient. RUN_NOT_ACTIVE can also be transient just
+				// after ready while the selected Engine publishes its first live
+				// snapshot. The Worker's own lease and the command identity remain
+				// the authority during this short grace; every retry rechecks both.
+				if transientObservationError(
+					observeErr,
+					time.Since(activatedAt),
+				) {
 					continue
 				}
 				observation.emitError(command, observeErr)
@@ -233,6 +240,21 @@ func (observation *browserObservation) stream(
 			}
 		}
 	}
+}
+
+func transientObservationError(
+	failure *browserprotocol.OpsObserverError,
+	sinceActivation time.Duration,
+) bool {
+	if failure == nil {
+		return false
+	}
+	if failure.Code == browserprotocol.OpsObserverBusyError {
+		return true
+	}
+	return failure.Code == browserprotocol.OpsObserverRunNotActive &&
+		sinceActivation >= 0 &&
+		sinceActivation < browserObservationActivationGrace
 }
 
 // capturedFrameIsForeign compares the identity the Runtime backfilled at capture
