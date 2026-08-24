@@ -18,33 +18,27 @@ func runtimeAttemptIdentityFor(runID, attemptID string) openlinker.RuntimeAttemp
 		FencingToken:     7,
 		NodeID:           "44444444-4444-4444-8444-444444444444",
 		AgentID:          "55555555-5555-4555-8555-555555555555",
-		WorkerID:         "66666666-6666-4666-8666-666666666666",
-		RuntimeSessionID: "77777777-7777-4777-8777-777777777777",
+		WorkerID:         "99999999-9999-4999-8999-999999999999",
+		RuntimeSessionID: "66666666-6666-4666-8666-666666666666",
 	}
 }
 
 func observationCommand(action browserprotocol.ObserverBridgeAction) browserprotocol.ObserverBridgeCommand {
 	now := time.Now().UTC()
 	return browserprotocol.ObserverBridgeCommand{
-		AttemptIdentity: browserprotocol.ObserverBridgeIdentity{
-			RunID:                "11111111-1111-4111-8111-111111111111",
-			AttemptID:            "22222222-2222-4222-8222-222222222222",
-			LeaseID:              "33333333-3333-4333-8333-333333333333",
-			FencingToken:         7,
-			NodeID:               "44444444-4444-4444-8444-444444444444",
-			AgentID:              "55555555-5555-4555-8555-555555555555",
-			WorkerID:             "66666666-6666-4666-8666-666666666666",
-			SessionEpoch:         4,
-			BrowserSessionSHA256: strings.Repeat("a", 64),
-			AttachmentSHA256:     strings.Repeat("b", 64),
-			RuntimeSessionID:     "77777777-7777-4777-8777-777777777777",
-		},
-		CommandID:       "44444444-4444-4444-8444-444444444444",
-		Action:          action,
-		LeaseID:         "55555555-5555-4555-8555-555555555555",
-		LeaseExpiresAt:  now.Add(5 * time.Minute),
-		DeadlineAt:      now.Add(time.Minute),
-		FrameIntervalMS: browserprotocol.ObserverBridgeDefaultFrameIntervalMS,
+		AttemptIdentity: runtimeAttemptIdentityFor(
+			"11111111-1111-4111-8111-111111111111",
+			"22222222-2222-4222-8222-222222222222",
+		),
+		SessionEpoch:         4,
+		BrowserSessionSHA256: strings.Repeat("a", 64),
+		AttachmentSHA256:     strings.Repeat("b", 64),
+		CommandID:            "44444444-4444-4444-8444-444444444444",
+		Action:               action,
+		LeaseID:              "55555555-5555-4555-8555-555555555555",
+		LeaseExpiresAt:       now.Add(5 * time.Minute),
+		DeadlineAt:           now.Add(time.Minute),
+		FrameIntervalMS:      browserprotocol.ObserverBridgeDefaultFrameIntervalMS,
 	}
 }
 
@@ -63,10 +57,10 @@ func TestCommandMustNameTheLocalAttempt(t *testing.T) {
 		AttachmentID:     "attachment-a",
 	}
 	command := observationCommand(browserprotocol.ObserverBridgeStart)
-	command.AttemptIdentity.BrowserSessionSHA256 = browserIdentityEvidenceSHA256(
+	command.BrowserSessionSHA256 = browserIdentityEvidenceSHA256(
 		browserSessionEvidenceDomain, local.BrowserSessionID,
 	)
-	command.AttemptIdentity.AttachmentSHA256 = browserIdentityEvidenceSHA256(
+	command.AttachmentSHA256 = browserIdentityEvidenceSHA256(
 		browserAttachmentEvidenceDomain, local.AttachmentID,
 	)
 	if !commandNamesLocalAttempt(command, local) {
@@ -209,67 +203,33 @@ func TestObservationRejectsFramesFromAnotherAttempt(t *testing.T) {
 	}
 }
 
-func TestObservationRetriesOnlyTransientActivationErrors(t *testing.T) {
+// Core authorizes observation from the ready lifecycle, which is intentionally
+// published before the provider's first Browser action. Engine inactivity is
+// therefore a wait state while the Worker's Attempt identity is still live, not
+// proof that the Run ended. The identity checks in stream remain the terminal
+// authority; protocol/internal failures must still close the lease.
+func TestObservationWaitsForTheFirstBrowserAction(t *testing.T) {
 	t.Parallel()
-	busy := browserprotocol.NewOpsObserverError(
+	for _, code := range []browserprotocol.OpsObserverErrorCode{
+		browserprotocol.OpsObserverRunNotActive,
 		browserprotocol.OpsObserverBusyError,
-		"busy",
-	)
-	if !transientObservationError(busy, true) {
-		t.Fatal("a busy response stopped the observation")
+	} {
+		failure := browserprotocol.NewOpsObserverError(code, "transient")
+		if !observerEngineErrorIsTransient(failure) {
+			t.Fatalf("%s ended an otherwise live Attempt observation", code)
+		}
 	}
-
-	notActive := browserprotocol.NewOpsObserverError(
-		browserprotocol.OpsObserverRunNotActive,
-		"not active",
-	)
-	if !transientObservationError(notActive, false) {
-		t.Fatal("a pre-frame RUN_NOT_ACTIVE response was not retried")
-	}
-	if transientObservationError(notActive, true) {
-		t.Fatal("RUN_NOT_ACTIVE remained transient after a frame was delivered")
-	}
-
-	internal := browserprotocol.NewOpsObserverError(
+	for _, code := range []browserprotocol.OpsObserverErrorCode{
 		browserprotocol.OpsObserverInternalError,
-		"internal",
-	)
-	if transientObservationError(internal, false) || transientObservationError(nil, false) {
-		t.Fatal("a terminal or missing observation error was treated as transient")
+		browserprotocol.OpsObserverProtocolError,
+		browserprotocol.OpsObserverDisabled,
+	} {
+		failure := browserprotocol.NewOpsObserverError(code, "terminal")
+		if observerEngineErrorIsTransient(failure) {
+			t.Fatalf("%s was treated as a transient Engine state", code)
+		}
 	}
-}
-
-type observationStreamCloseRecorder struct {
-	closeCalls int
-}
-
-func (stream *observationStreamCloseRecorder) Close() error {
-	stream.closeCalls++
-	return nil
-}
-
-func TestObservationDiscardsClosedTransientStreamsBeforeRetry(t *testing.T) {
-	t.Parallel()
-	stream := &observationStreamCloseRecorder{}
-	notActive := browserprotocol.NewOpsObserverError(
-		browserprotocol.OpsObserverRunNotActive,
-		"not active",
-	)
-	if !discardTransientObservationStream(stream, notActive, false) {
-		t.Fatal("a transient RUN_NOT_ACTIVE stream was retained")
-	}
-	if stream.closeCalls != 1 {
-		t.Fatalf("transient stream close calls = %d, want 1", stream.closeCalls)
-	}
-
-	internal := browserprotocol.NewOpsObserverError(
-		browserprotocol.OpsObserverInternalError,
-		"internal",
-	)
-	if discardTransientObservationStream(stream, internal, false) {
-		t.Fatal("a terminal stream was discarded for retry")
-	}
-	if stream.closeCalls != 1 {
-		t.Fatalf("terminal stream close calls = %d, want 1", stream.closeCalls)
+	if observerEngineErrorIsTransient(nil) {
+		t.Fatal("nil observer failure was treated as transient")
 	}
 }

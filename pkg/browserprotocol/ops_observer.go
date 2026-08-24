@@ -247,7 +247,18 @@ func DecodeOpsObserverRequest(raw []byte) (OpsObserverRequest, error) {
 	return request, nil
 }
 
-func decodeOpsObserverResponse(raw []byte) (OpsObserverResponse, error) {
+func DecodeOpsObserverResponse(raw []byte) (OpsObserverResponse, error) {
+	return decodeOpsObserverResponse(raw, false)
+}
+
+// DecodeOpsObserverProbeResponse decodes the deliberately content-free success
+// response returned by the health probe. A normal successful observation must
+// carry an observation, while a successful probe must not carry page content.
+func DecodeOpsObserverProbeResponse(raw []byte) (OpsObserverResponse, error) {
+	return decodeOpsObserverResponse(raw, true)
+}
+
+func decodeOpsObserverResponse(raw []byte, probe bool) (OpsObserverResponse, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var response OpsObserverResponse
@@ -264,17 +275,10 @@ func decodeOpsObserverResponse(raw []byte) (OpsObserverResponse, error) {
 	if response.ContractID != OpsObserverContractID || !validUUID(response.RequestID) {
 		return OpsObserverResponse{}, errors.New("Ops Observer response identity is invalid")
 	}
-	return response, nil
-}
-
-func DecodeOpsObserverResponse(raw []byte) (OpsObserverResponse, error) {
-	response, err := decodeOpsObserverResponse(raw)
-	if err != nil {
-		return OpsObserverResponse{}, err
-	}
 	switch response.Status {
 	case "ok":
-		if response.Observation == nil || response.Error != nil {
+		if response.Error != nil || (probe && response.Observation != nil) ||
+			(!probe && response.Observation == nil) {
 			return OpsObserverResponse{}, errors.New("Ops Observer success response is invalid")
 		}
 	case "busy":
@@ -288,22 +292,6 @@ func DecodeOpsObserverResponse(raw []byte) (OpsObserverResponse, error) {
 		}
 	default:
 		return OpsObserverResponse{}, errors.New("Ops Observer response status is invalid")
-	}
-	return response, nil
-}
-
-// DecodeOpsObserverProbeResponse validates the content-free success response
-// used by the Runtime healthcheck. A probe deliberately carries no observation:
-// reading a frame here would contend for the single live observation lease.
-// Keep this separate from DecodeOpsObserverResponse so ordinary successful
-// observation responses still require a frame-bearing observation object.
-func DecodeOpsObserverProbeResponse(raw []byte) (OpsObserverResponse, error) {
-	response, err := decodeOpsObserverResponse(raw)
-	if err != nil {
-		return OpsObserverResponse{}, err
-	}
-	if response.Status != "ok" || response.Observation != nil || response.Error != nil {
-		return OpsObserverResponse{}, errors.New("Ops Observer probe response is invalid")
 	}
 	return response, nil
 }

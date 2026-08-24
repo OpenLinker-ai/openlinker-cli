@@ -61,27 +61,24 @@ func TestOpsViewerStreamArgumentsAndEngineEnvironmentAreClosed(t *testing.T) {
 	}
 }
 
-func TestBrowserEngineOpsObserverEnabledForEveryObservationSurface(t *testing.T) {
+func TestEitherObservationEntryPointEnablesEngineOps(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name                            string
-		opsViewerEnabled                bool
-		authenticatedObservationEnabled bool
-		want                            bool
+		name              string
+		opsViewer         bool
+		authenticated     bool
+		wantEngineEnabled bool
 	}{
-		{name: "disabled", want: false},
-		{name: "ops viewer", opsViewerEnabled: true, want: true},
-		{name: "authenticated observation", authenticatedObservationEnabled: true, want: true},
-		{name: "both", opsViewerEnabled: true, authenticatedObservationEnabled: true, want: true},
+		{name: "both disabled"},
+		{name: "operator Viewer", opsViewer: true, wantEngineEnabled: true},
+		{name: "authenticated observation", authenticated: true, wantEngineEnabled: true},
+		{name: "both enabled", opsViewer: true, authenticated: true, wantEngineEnabled: true},
 	} {
+		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			got := browserEngineOpsObserverEnabled(
-				test.opsViewerEnabled,
-				test.authenticatedObservationEnabled,
-			)
-			if got != test.want {
-				t.Fatalf("engine Ops Observer enabled = %t, want %t", got, test.want)
+			if got := engineOpsObservationEnabled(test.opsViewer, test.authenticated); got != test.wantEngineEnabled {
+				t.Fatalf("engine Ops enabled = %v, want %v", got, test.wantEngineEnabled)
 			}
 		})
 	}

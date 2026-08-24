@@ -100,7 +100,7 @@ func run() error {
 			return err
 		}
 	}
-	engineOpsObserverEnabled := browserEngineOpsObserverEnabled(
+	engineOpsEnabled := engineOpsObservationEnabled(
 		opsObserverEnabled,
 		observationEnabled,
 	)
@@ -123,7 +123,7 @@ func run() error {
 	isolated, err := browserruntime.NewProfileEngine(browserruntime.ProfileEngineOptions{
 		Process: browserruntime.ProcessEngineOptions{
 			Command:     []string{defaultEngineExecutable, defaultEngineScript},
-			Environment: browserEngineEnvironment(profileEnvironment, engineOpsObserverEnabled),
+			Environment: browserEngineEnvironment(profileEnvironment, engineOpsEnabled),
 		},
 		Environment: profileEnvironment,
 		StoreRoot:   value("OPENLINKER_BROWSER_PROFILE_STORE", defaultProfileStore),
@@ -148,7 +148,7 @@ func run() error {
 		officialBackend, officialErr := browserruntime.NewOfficialChromeBackend(
 			browserruntime.OfficialChromeBackendOptions{
 				Assets:             assets,
-				BaseEnvironment:    browserEngineEnvironment(profileEnvironment, engineOpsObserverEnabled),
+				BaseEnvironment:    browserEngineEnvironment(profileEnvironment, engineOpsEnabled),
 				Locale:             profileEnvironment.Evidence.BrowserLocale,
 				Timezone:           profileEnvironment.Evidence.BrowserTimezone,
 				FontContract:       profileEnvironment.Evidence.FontContractVersion,
@@ -377,7 +377,11 @@ func browserEngineEnvironment(
 	return result
 }
 
-func browserEngineOpsObserverEnabled(
+// Both read-only entry points depend on the same private Engine Ops socket.
+// The operator Viewer and authenticated platform observation have independent
+// admission and credentials, but neither can capture a frame without enabling
+// this Engine capability.
+func engineOpsObservationEnabled(
 	opsViewerEnabled bool,
 	authenticatedObservationEnabled bool,
 ) bool {

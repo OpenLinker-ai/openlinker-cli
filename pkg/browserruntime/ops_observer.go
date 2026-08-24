@@ -277,9 +277,11 @@ func (server *OpsObserverServer) handleConnection(parent context.Context, connec
 		cancel()
 		if observerErr != nil {
 			server.writeResponse(connection, browserprotocol.OpsObserverErrorResponse(request.RequestID, observerErr))
-			if observerErr.Code == browserprotocol.OpsObserverRunNotActive {
-				return
-			}
+			// Run-not-active is also the normal state before the provider's first
+			// Browser action and between two actions. Keep the connection-bound
+			// lease alive so an authenticated observer can wait on the same stream;
+			// the caller closes it when its stronger Attempt identity says the Run
+			// actually ended or rotated.
 			continue
 		}
 		if busy {

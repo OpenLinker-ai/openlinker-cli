@@ -75,7 +75,7 @@ func (observation *browserObservation) handleCommand(
 	if failure := command.Validate(); failure != nil {
 		return
 	}
-	if command.AttemptIdentity.RuntimeIdentity() != attemptIdentity {
+	if command.AttemptIdentity != attemptIdentity {
 		return
 	}
 	switch command.Action {
@@ -147,13 +147,12 @@ func (observation *browserObservation) stream(
 	// observation contend for the one Runtime lease. A refusal here means someone
 	// is already watching, and it has to reach the caller rather than look like a
 	// silent stall.
-	streamConfig := browserclient.OpsObserverConfig{
+	stream, err := browserclient.NewOpsObserverStream(ctx, browserclient.OpsObserverConfig{
 		SocketPath:     observationSocketPath(),
 		CredentialFile: observationCredentialPath(),
 		RunID:          command.AttemptIdentity.RunID,
 		TTL:            time.Until(command.LeaseExpiresAt),
-	}
-	stream, err := browserclient.NewOpsObserverStream(ctx, streamConfig)
+	})
 	if err != nil {
 		observation.emitError(command, browserprotocol.NewOpsObserverError(
 			browserprotocol.OpsObserverDisabled,
@@ -161,14 +160,13 @@ func (observation *browserObservation) stream(
 		))
 		return
 	}
-	defer func() { _ = stream.Close() }()
+	defer stream.Close()
 
 	if !observation.emitEvent(ctx, command, browserprotocol.ObserverBridgeEvent{
 		Kind: browserprotocol.ObserverBridgeStarted,
 	}) {
 		return
 	}
-	frameDelivered := false
 
 	ticker := time.NewTicker(time.Duration(command.FrameIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
@@ -182,17 +180,6 @@ func (observation *browserObservation) stream(
 			})
 			return
 		case <-ticker.C:
-			if stream == nil {
-				streamConfig.TTL = time.Until(command.LeaseExpiresAt)
-				stream, err = browserclient.NewOpsObserverStream(ctx, streamConfig)
-				if err != nil {
-					observation.emitError(command, browserprotocol.NewOpsObserverError(
-						browserprotocol.OpsObserverDisabled,
-						"the observation bridge is unavailable",
-					))
-					return
-				}
-			}
 			identity, err := observation.lease.identitySnapshot()
 			if err != nil {
 				observation.emitError(command, browserprotocol.NewOpsObserverError(
@@ -213,19 +200,15 @@ func (observation *browserObservation) stream(
 				browserprotocol.OpsObserverFrameOperation,
 			)
 			if observeErr != nil {
-				// Busy is transient. Before the first frame, RUN_NOT_ACTIVE only
-				// means the provider has not opened the Engine capture surface yet;
-				// the Worker's own lease and command identity remain authoritative,
-				// and every retry rechecks both.
-				// Error responses that are transient close the Runtime-side stream,
-				// so reconnect before the next tick instead of reading that closed
-				// socket and converting the activation race into OPS_VIEWER_INTERNAL.
-				if discardTransientObservationStream(
-					stream,
-					observeErr,
-					frameDelivered,
-				) {
-					stream = nil
+				// Both answers are transient while the Worker's own Attempt
+				// identity above remains live. Busy means the Engine is occupied
+				// authorizing the observer. Run-not-active means the provider has
+				// not entered its first Browser action yet, or is between actions;
+				// a lease opened from the ready lifecycle must wait for that action
+				// rather than close on its first 500ms tick. Attempt termination and
+				// rotation still fail closed through identitySnapshot and
+				// commandNamesLocalAttempt before this call.
+				if observerEngineErrorIsTransient(observeErr) {
 					continue
 				}
 				observation.emitError(command, observeErr)
@@ -255,45 +238,16 @@ func (observation *browserObservation) stream(
 			}) {
 				return
 			}
-			frameDelivered = true
 		}
 	}
 }
 
-type observationStreamCloser interface {
-	Close() error
-}
-
-func discardTransientObservationStream(
-	stream observationStreamCloser,
-	failure *browserprotocol.OpsObserverError,
-	frameDelivered bool,
-) bool {
-	if !transientObservationError(failure, frameDelivered) {
+func observerEngineErrorIsTransient(observerErr *browserprotocol.OpsObserverError) bool {
+	if observerErr == nil {
 		return false
 	}
-	if stream != nil {
-		_ = stream.Close()
-	}
-	return true
-}
-
-func transientObservationError(
-	failure *browserprotocol.OpsObserverError,
-	frameDelivered bool,
-) bool {
-	if failure == nil {
-		return false
-	}
-	if failure.Code == browserprotocol.OpsObserverBusyError {
-		return true
-	}
-	// Browser-ready proves the attachment preflight, but the provider can spend
-	// an unbounded portion of the Run preparing its first Browser action before
-	// the Engine has a live capture surface. The Worker identity checks above are
-	// the authority while no frame has existed. After a frame was delivered,
-	// losing the Runtime surface is a terminal state rather than startup delay.
-	return failure.Code == browserprotocol.OpsObserverRunNotActive && !frameDelivered
+	return observerErr.Code == browserprotocol.OpsObserverBusyError ||
+		observerErr.Code == browserprotocol.OpsObserverRunNotActive
 }
 
 // capturedFrameIsForeign compares the identity the Runtime backfilled at capture
@@ -331,8 +285,12 @@ func commandNamesLocalAttempt(
 	command browserprotocol.ObserverBridgeCommand,
 	local browserprotocol.Identity,
 ) bool {
-	expected := command.AttemptIdentity
-	return expected.RunID == local.RunID &&
+	expected := browserprotocol.ObserverBridgeIdentity{
+		SessionEpoch:         command.SessionEpoch,
+		BrowserSessionSHA256: command.BrowserSessionSHA256,
+		AttachmentSHA256:     command.AttachmentSHA256,
+	}
+	return command.AttemptIdentity.RunID == local.RunID &&
 		expected.SessionEpoch == local.SessionEpoch &&
 		expected.BrowserSessionSHA256 == browserIdentityEvidenceSHA256(
 			browserSessionEvidenceDomain,
@@ -353,12 +311,15 @@ func (observation *browserObservation) emitUnguarded(
 	ctx, cancel := context.WithTimeout(context.Background(), browserprotocol.MaxOpsObserverDeadline)
 	defer cancel()
 	event := browserprotocol.ObserverBridgeEvent{
-		AttemptIdentity: command.AttemptIdentity,
-		CommandID:       command.CommandID,
-		LeaseID:         command.LeaseID,
-		EventSeq:        1,
-		Kind:            browserprotocol.ObserverBridgeError,
-		ErrorCode:       string(failure.Code),
+		AttemptIdentity:      command.AttemptIdentity,
+		SessionEpoch:         command.SessionEpoch,
+		BrowserSessionSHA256: command.BrowserSessionSHA256,
+		AttachmentSHA256:     command.AttachmentSHA256,
+		CommandID:            command.CommandID,
+		LeaseID:              command.LeaseID,
+		EventSeq:             1,
+		Kind:                 browserprotocol.ObserverBridgeError,
+		ErrorCode:            string(failure.Code),
 	}
 	if event.Validate() != nil {
 		return
@@ -391,6 +352,9 @@ func (observation *browserObservation) emitEvent(
 	observation.mu.Unlock()
 
 	event.AttemptIdentity = command.AttemptIdentity
+	event.SessionEpoch = command.SessionEpoch
+	event.BrowserSessionSHA256 = command.BrowserSessionSHA256
+	event.AttachmentSHA256 = command.AttachmentSHA256
 	event.CommandID = command.CommandID
 	event.LeaseID = command.LeaseID
 	if failure := event.Validate(); failure != nil {

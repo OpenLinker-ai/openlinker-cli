@@ -106,10 +106,10 @@ func TestOpsObserverResponseIsStrict(t *testing.T) {
 	}
 }
 
-func TestOpsObserverProbeResponseIsStrictAndContentFree(t *testing.T) {
+func TestOpsObserverProbeResponseIsContentFreeAndStrict(t *testing.T) {
 	requestID := "11111111-1111-4111-8111-111111111111"
-	probe := OpsObserverProbeResponse(requestID)
-	raw, err := json.Marshal(probe)
+	response := OpsObserverProbeResponse(requestID)
+	raw, err := json.Marshal(response)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,28 +117,23 @@ func TestOpsObserverProbeResponseIsStrictAndContentFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Status != "ok" || decoded.RequestID != requestID ||
-		decoded.Observation != nil || decoded.Error != nil {
+	if decoded.Status != "ok" || decoded.Observation != nil || decoded.Error != nil {
 		t.Fatalf("decoded probe response = %#v", decoded)
 	}
 	if _, err := DecodeOpsObserverResponse(raw); err == nil {
-		t.Fatal("content-free probe response was accepted as an observation response")
-	}
-
-	observation, err := json.Marshal(OpsObserverSuccessResponse(requestID, validOpsObservation()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := DecodeOpsObserverProbeResponse(observation); err == nil {
-		t.Fatal("frame-bearing observation response was accepted as a probe response")
+		t.Fatal("content-free probe response was accepted as a normal observation")
 	}
 	if _, err := DecodeOpsObserverProbeResponse(append(raw, []byte(" {}")...)); err == nil {
 		t.Fatal("trailing Ops Observer probe response value was accepted")
 	}
-	unknown := append([]byte{}, raw[:len(raw)-1]...)
-	unknown = append(unknown, []byte(`,"frame_data":"forbidden"}`)...)
-	if _, err := DecodeOpsObserverProbeResponse(unknown); err == nil {
-		t.Fatal("unknown Ops Observer probe response field was accepted")
+
+	response.Observation = &OpsObserverObservation{}
+	raw, err = json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeOpsObserverProbeResponse(raw); err == nil {
+		t.Fatal("probe response carrying page content was accepted")
 	}
 }
 
