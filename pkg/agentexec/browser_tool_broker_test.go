@@ -93,6 +93,15 @@ func (provider *brokerMCPProvider) Run(
 				"arguments": map[string]any{"operation": "observe"},
 			},
 		},
+		{
+			"jsonrpc": "2.0",
+			"id":      3,
+			"method":  "tools/call",
+			"params": map[string]any{
+				"name":      "browser_session",
+				"arguments": map[string]any{"operation": "observe"},
+			},
+		},
 	} {
 		raw, marshalErr := json.Marshal(request)
 		if marshalErr != nil {
@@ -109,7 +118,7 @@ func (provider *brokerMCPProvider) Run(
 		if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
 			return openlinker.RuntimeResult{}, err
 		}
-		if response["id"] != float64(2) {
+		if response["id"] != float64(2) && response["id"] != float64(3) {
 			continue
 		}
 		raw := string(scanner.Bytes())
@@ -120,7 +129,9 @@ func (provider *brokerMCPProvider) Run(
 			!strings.Contains(raw, `"browser_version"`) {
 			provider.observed = true
 		}
-		break
+		if response["id"] == float64(3) {
+			break
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return openlinker.RuntimeResult{}, err
@@ -173,24 +184,38 @@ func TestBrowserToolBrokerKeepsAuthorityOutOfProviderProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.Run(
-		context.Background(),
-		browserProviderTestRun("88888888-8888-4888-8888-888888888888"),
-	); err != nil {
+	var progress []map[string]any
+	run := browserProviderTestRun("88888888-8888-4888-8888-888888888888")
+	run.Emit = func(eventType string, payload any) error {
+		if eventType == "run.status.changed" {
+			progress = append(progress, payload.(map[string]any))
+		}
+		return nil
+	}
+	if _, err := provider.Run(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 	if !base.observed {
 		t.Fatal("MCP Browser observation did not cross trusted broker and Runtime UDS")
 	}
-	if first, second, third := <-actions, <-actions, <-actions; first != browserprotocol.ActionPreflight ||
+	if first, second, third, fourth := <-actions, <-actions, <-actions, <-actions; first != browserprotocol.ActionPreflight ||
 		second != browserprotocol.ActionScreenshot ||
-		third != browserprotocol.ActionClose {
+		third != browserprotocol.ActionScreenshot ||
+		fourth != browserprotocol.ActionClose {
 		t.Fatalf(
-			"Browser actions = [%s %s %s], want preflight, screenshot, close",
+			"Browser actions = [%s %s %s %s], want preflight, screenshot, screenshot, close",
 			first,
 			second,
 			third,
+			fourth,
 		)
+	}
+	if len(progress) != 1 ||
+		progress[0]["status"] != "provider_tool_started" ||
+		progress[0]["provider"] != config.Provider ||
+		progress[0]["phase"] != "started" ||
+		progress[0]["tool_kind"] != "mcp_tool" {
+		t.Fatalf("bounded Browser progress = %#v", progress)
 	}
 	stopRuntime()
 	if err := <-runtimeDone; err != nil {

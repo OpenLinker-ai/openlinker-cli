@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -367,14 +368,42 @@ func (observation *browserObservation) emitEvent(
 		Type:    browserprotocol.ObserverBridgeEventType,
 		Payload: payload,
 	})
-	if err != nil || reply == nil {
+	if err != nil {
+		writeObservationDeliveryDiagnostic(event, err)
+		return false
+	}
+	if reply == nil {
+		writeObservationDeliveryDiagnostic(event, fmt.Errorf("missing acknowledgement"))
 		return false
 	}
 	var ack browserprotocol.ObserverBridgeEventAck
 	if err := json.Unmarshal(reply.Payload, &ack); err != nil {
+		writeObservationDeliveryDiagnostic(event, fmt.Errorf("decode acknowledgement: %w", err))
 		return false
 	}
-	return ack.Matches(event)
+	if !ack.Matches(event) {
+		writeObservationDeliveryDiagnostic(event, fmt.Errorf("acknowledgement identity mismatch"))
+		return false
+	}
+	return true
+}
+
+func writeObservationDeliveryDiagnostic(
+	event browserprotocol.ObserverBridgeEvent,
+	err error,
+) {
+	frameBytes := 0
+	if event.Frame != nil {
+		frameBytes = len(event.Frame.Data)
+	}
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"browser observation event delivery failed: kind=%s event_seq=%d frame_bytes=%d: %v\n",
+		event.Kind,
+		event.EventSeq,
+		frameBytes,
+		err,
+	)
 }
 
 func (observation *browserObservation) emitError(

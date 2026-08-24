@@ -138,6 +138,21 @@ func (provider *browserExecutionProvider) Run(
 		lease,
 		humanControl.executor,
 		mutationJournal,
+		func() {
+			if run.Emit == nil {
+				return
+			}
+			// Browser MCP action events are suppressed to keep durable event
+			// volume O(1). Publish one bounded marker at the trusted broker when
+			// the Agent first obtains an executor, which proves real Browser work
+			// without persisting action inputs, outputs, URLs, or action counts.
+			_ = run.Emit("run.status.changed", map[string]any{
+				"status":    "provider_tool_started",
+				"provider":  provider.config.Provider,
+				"phase":     "started",
+				"tool_kind": "mcp_tool",
+			})
+		},
 	)
 	if err != nil {
 		runtimeErr := lease.closeBrowserRuntimeWithFailureFence()

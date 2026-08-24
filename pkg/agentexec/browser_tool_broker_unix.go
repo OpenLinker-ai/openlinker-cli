@@ -17,12 +17,13 @@ import (
 )
 
 type browserToolBroker struct {
-	socketPath string
-	listener   *net.UnixListener
-	cancel     context.CancelFunc
-	done       chan struct{}
-	info       os.FileInfo
-	closeOnce  sync.Once
+	socketPath        string
+	listener          *net.UnixListener
+	cancel            context.CancelFunc
+	done              chan struct{}
+	info              os.FileInfo
+	closeOnce         sync.Once
+	agentProgressOnce sync.Once
 }
 
 func startBrowserToolBroker(
@@ -32,6 +33,7 @@ func startBrowserToolBroker(
 	lease *browserRunLease,
 	clientFactory func() (browserplugin.Executor, error),
 	journal *browserMutationJournal,
+	onFirstAgentExecutor func(),
 ) (*browserToolBroker, error) {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host != "codex" && host != "claude" {
@@ -104,7 +106,7 @@ func startBrowserToolBroker(
 		done:       make(chan struct{}),
 		info:       info,
 	}
-	go broker.serve(ctx, host, lease, clientFactory, journal)
+	go broker.serve(ctx, host, lease, clientFactory, journal, onFirstAgentExecutor)
 	return broker, nil
 }
 
@@ -114,6 +116,7 @@ func (broker *browserToolBroker) serve(
 	lease *browserRunLease,
 	clientFactory func() (browserplugin.Executor, error),
 	journal *browserMutationJournal,
+	onFirstAgentExecutor func(),
 ) {
 	defer close(broker.done)
 	for {
@@ -128,6 +131,9 @@ func (broker *browserToolBroker) serve(
 			},
 			ClientFactory: func() (browserplugin.Executor, error) {
 				executor, err := clientFactory()
+				if err == nil && onFirstAgentExecutor != nil {
+					broker.agentProgressOnce.Do(onFirstAgentExecutor)
+				}
 				if err != nil || journal == nil {
 					return executor, err
 				}
