@@ -112,13 +112,35 @@ func TestObservationStopIsIdempotent(t *testing.T) {
 	observation.stop()
 	observation.mu.Lock()
 	observation.leaseID = "55555555-5555-4555-8555-555555555555"
+	observation.commandID = "44444444-4444-4444-8444-444444444444"
 	observation.mu.Unlock()
 	observation.stop()
 	observation.stop()
 	observation.mu.Lock()
 	defer observation.mu.Unlock()
-	if observation.leaseID != "" || observation.cancel != nil {
+	if observation.leaseID != "" || observation.commandID != "" || observation.cancel != nil {
 		t.Fatal("stop left observation state behind")
+	}
+}
+
+// Core retries the exact one-way start until its lifecycle handshake settles.
+// The Worker must recognize that delivery replay without replacing the stream
+// or reporting that the same observer conflicts with itself.
+func TestObservationStartReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
+	observation := newBrowserObservation(nil, nil)
+	command := observationCommand(browserprotocol.ObserverBridgeStart)
+	observation.mu.Lock()
+	observation.leaseID = command.LeaseID
+	observation.commandID = command.CommandID
+	observation.mu.Unlock()
+
+	observation.start(t.Context(), command)
+	observation.mu.Lock()
+	defer observation.mu.Unlock()
+	if observation.leaseID != command.LeaseID ||
+		observation.commandID != command.CommandID {
+		t.Fatal("an identical start replay changed the active observation")
 	}
 }
 
