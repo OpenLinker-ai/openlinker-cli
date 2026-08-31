@@ -47,10 +47,11 @@ type browserObservation struct {
 	lease      *browserRunLease
 	extensions *openlinker.RuntimeExtensions
 
-	mu       sync.Mutex
-	leaseID  string
-	cancel   context.CancelFunc
-	eventSeq uint64
+	mu        sync.Mutex
+	leaseID   string
+	commandID string
+	cancel    context.CancelFunc
+	eventSeq  uint64
 }
 
 func newBrowserObservation(
@@ -92,7 +93,15 @@ func (observation *browserObservation) start(
 ) {
 	observation.mu.Lock()
 	if observation.leaseID != "" {
+		replay := observation.leaseID == command.LeaseID &&
+			observation.commandID == command.CommandID
 		observation.mu.Unlock()
+		if replay {
+			// Core can repeat the exact one-way command until it receives the
+			// started event. The replay belongs to the stream already opening;
+			// treating it as another observer would turn recovery into conflict.
+			return
+		}
 		// Reported without the lease guard: emitEvent only publishes for the
 		// lease it owns, so routing a busy refusal through it would drop the
 		// very message telling Core the start failed, leaving a phantom active
@@ -105,6 +114,7 @@ func (observation *browserObservation) start(
 	}
 	ctx, cancel := context.WithDeadline(parent, command.LeaseExpiresAt)
 	observation.leaseID = command.LeaseID
+	observation.commandID = command.CommandID
 	observation.cancel = cancel
 	observation.mu.Unlock()
 
@@ -127,6 +137,7 @@ func (observation *browserObservation) stopLease(leaseID string) {
 	cancel := observation.cancel
 	observation.cancel = nil
 	observation.leaseID = ""
+	observation.commandID = ""
 	observation.mu.Unlock()
 	if cancel != nil {
 		cancel()
