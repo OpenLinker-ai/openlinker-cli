@@ -39,6 +39,7 @@ jobs:
           GOWORK=off go build -trimpath -ldflags="-s -w" ./cmd/openlinker
           GOWORK=off go build -trimpath -ldflags="-s -w" ./cmd/openlinker-browser-runtime ./cmd/openlinker-egress-gateway ./cmd/openlinker-runtime-entrypoint
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOWORK=off go build -trimpath ./cmd/openlinker-provider-launcher
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 GOWORK=off go build -trimpath -o "${RUNNER_TEMP}/openlinker.exe" ./cmd/openlinker
 
       - name: Validate production image topology
         shell: bash
