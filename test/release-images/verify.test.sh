@@ -27,6 +27,14 @@ require_workflow_line() {
   fi
 }
 
+reject_workflow_value() {
+  value=$1
+  if grep -F -q -- "$value" "$workflow"; then
+    echo "Provider image workflow must not contain '$value'" >&2
+    exit 1
+  fi
+}
+
 require_workflow_value "platform: linux/amd64" 1
 require_workflow_value "platform: linux/arm64" 1
 require_workflow_value '    runs-on: ${{ matrix.runner }}' 1
@@ -37,14 +45,16 @@ require_workflow_value '      - "Dockerfile.browser.native-chrome"' 1
 require_workflow_value '      - "native-chrome/**"' 1
 require_workflow_value '      - "cmd/**"' 1
 require_workflow_value '      - "pkg/**"' 1
-require_workflow_value "live_provider: true" 1
-require_workflow_value "live_provider: false" 1
 require_workflow_value '          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}' 1
 require_workflow_value "docker/setup-qemu-action@v3" 1
 require_workflow_value "docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0" 1
 require_workflow_value "platforms: arm64" 1
-require_workflow_value "matrix.live_provider == false" 1
-require_workflow_value "&& matrix.live_provider" 4
+require_workflow_value "run_live_provider:" 1
+require_workflow_value "live-provider-acceptance:" 1
+require_workflow_value "if: github.event_name == 'workflow_dispatch' && inputs.run_live_provider" 1
+require_workflow_value "needs: browser-acceptance" 2
+reject_workflow_value "matrix.live_provider"
+reject_workflow_value "github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'"
 
 temporary_root=$(mktemp -d "${TMPDIR:-/tmp}/openlinker-release-images.XXXXXX")
 cleanup() {
