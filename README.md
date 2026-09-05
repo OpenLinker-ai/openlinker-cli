@@ -2,8 +2,9 @@
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 
-JSON-first CLI and reliable Runtime Worker for OpenLinker. It is intentionally
-thin over `openlinker-go` and has two credential-isolated modes:
+JSON-first CLI for OpenLinker, delivered as one executable. Caller commands use
+`openlinker-go`; Agent and Browser command adapters consume the reusable
+`openlinker-plugin` Go module with two credential-isolated modes:
 
 - stdout is always JSON;
 - diagnostics and errors go to stderr;
@@ -11,7 +12,8 @@ thin over `openlinker-go` and has two credential-isolated modes:
 - `agent serve` accepts only an Agent Token plus the selected provider's auth;
 - command implementations are split by subcommand under `pkg/`.
 
-`agent serve` runs the official SDK Runtime Worker directly, including
+`agent serve` uses Plugin-owned application composition to run the existing
+official SDK Runtime Worker, including
 WebSocket/pull selection, durable delivery, cancellation, and token-only
 registration. The Codex and Claude adapters reuse private provider sessions by
 Core-owned conversation. `plugin serve` exposes the caller and Agent Mode
@@ -21,6 +23,14 @@ Runtime credentials are never interchangeable.
 The CLI calls the public Core contract in either a self-hosted or Hosted
 deployment. It does not call hosted service-listing, order, wallet, billing, or
 marketplace-operation APIs.
+
+
+Source boundary: CLI owns commands, JSON/MCP composition, and the single executable.
+Provider execution, Browser Runtime, containers, and compose definitions live in
+[Plugin](https://github.com/OpenLinker-ai/openlinker-plugin). The SDK retains the
+sole Runtime Worker. Standalone Agents do not require native plugin installation;
+Browser remains a separate process/image. Release the Plugin module, then CLI,
+then update the native CLI lock and images; an old lock does not prove new image readiness.
 
 ## Status and installation
 
@@ -86,7 +96,7 @@ Useful non-secret settings include `OPENLINKER_AGENT_STATE_DIR`,
 `OPENLINKER_AGENT_TIMEOUT_SECONDS`, `OPENLINKER_AGENT_SESSION_REUSE`,
 provider-specific `OPENLINKER_CODEX_MODEL` / `OPENLINKER_CLAUDE_MODEL`, web
 search, sandbox, and permission variables. See
-[`deploy/.env.providers.example`](./deploy/.env.providers.example).
+[`deploy/.env.providers.example`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/.env.providers.example).
 
 The packaged Browser profile accepts
 `OPENLINKER_BROWSER_CLIENT_MODE=auto|official-chrome|isolated-native|isolated-mcp|native|mcp`.
@@ -100,8 +110,8 @@ receives exactly one `browser_session` surface, and a selected backend never
 changes after preflight.
 
 Official Chrome is supplied only as an immutable build input. Use
-[`Dockerfile.browser.native-chrome`](./Dockerfile.browser.native-chrome) and
-[`deploy/compose.codex.native-chrome.yml`](./deploy/compose.codex.native-chrome.yml)
+[`Dockerfile.browser.native-chrome`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/Dockerfile.browser.native-chrome) and
+[`deploy/compose.codex.native-chrome.yml`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/compose.codex.native-chrome.yml)
 to bake the locked Chrome, signed extension CRX, Native Messaging Host, and
 asset manifest into an operator image. Chrome force-installs the extension from
 the image-local CRX through an image-local Omaha update manifest and managed
@@ -246,11 +256,6 @@ pkg/shared
 pkg/context
 pkg/buildinfo
 pkg/agent
-pkg/agentexec
-pkg/browserclient
-pkg/browserplugin
-pkg/browserprotocol
-pkg/browserruntime
 pkg/plugin
 pkg/pluginbridge
 pkg/run
@@ -264,10 +269,6 @@ pkg/runs/events
 pkg/runs/messages
 pkg/runs/artifacts
 pkg/runs/cancel
-cmd/openlinker-runtime-entrypoint
-cmd/openlinker-provider-launcher
-cmd/openlinker-egress-gateway
-deploy
 ```
 
 ## Development

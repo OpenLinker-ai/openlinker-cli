@@ -6,6 +6,15 @@ OpenLinker CLI 从 `main` 发布，前提是 CI 和本地发布门禁都通过�
 契约足够稳定并采用严格语义化版本之前，重要变化记录在
 [CHANGELOG.md](./CHANGELOG.md) 的 `Unreleased` 中。
 
+## 跨仓发布顺序
+
+先发布并验证不可变 Plugin Go module；CLI 再固定该版本与真实 module checksum，使用
+`GOWORK=off` 完成六平台测试/构建后发布。最后更新 Plugin 的 CLI archive/checksum lock，
+显式发布 native 包和兼容镜像。不得把相对 `replace`、未发布候选版本或临时本地代理验证
+当成公开发布成功。Plugin 自身 module CI/发布不依赖新 CLI archive。旧 lock 必须让新
+Provider 镜像的 build-info 门禁失败，直到包含 Plugin 依赖及真实 `vcs.revision` 的 CLI 发布。
+保留上一组不可变 CLI/Plugin/image 以回滚，不迁移或删除运行时卷，不自动部署。
+
 ## 发布前检查
 
 1. 确认 `README.md` 和 `README.zh-CN.md` 对调用方、原生插件、Runtime Worker、

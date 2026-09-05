@@ -3,11 +3,34 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 )
+
+func TestPluginServeCreatesDefaultAgentService(t *testing.T) {
+	for _, host := range []string{"codex", "claude"} {
+		t.Run(host, func(t *testing.T) {
+			var output bytes.Buffer
+			config := filepath.Join(t.TempDir(), "agent.json")
+			command := New(shared.IO{
+				Stdin: strings.NewReader(""), Stdout: &output, Stderr: &output,
+				Getenv: func(name string) string {
+					if name == "OPENLINKER_AGENT_CONFIG" {
+						return config
+					}
+					return ""
+				},
+			}, nil, nil)
+			command.SetArgs([]string{"serve", "--host", host})
+			if err := command.ExecuteContext(context.Background()); err != nil {
+				t.Fatalf("serve without an injected Agent: %v", err)
+			}
+		})
+	}
+}
 
 func TestPluginCommandIncludesBrowserOnlyServer(t *testing.T) {
 	var output bytes.Buffer

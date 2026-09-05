@@ -3,8 +3,9 @@
 Chinese documentation: [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md)
 
 Thanks for helping improve OpenLinker CLI. This repository owns the JSON-first
-caller client, native plugin bridge, reliable Runtime Worker, provider
-adapters, and hardened production images.
+caller client, Cobra adapters, local MCP composition, and single CLI executable.
+Provider/Browser execution and production images belong to `openlinker-plugin`;
+the existing reliable Runtime Worker remains in `openlinker-go`.
 
 ## Development setup
 
@@ -31,12 +32,14 @@ Changes that belong here include:
 - User Token authentication for user-authorized Core API calls
 - Agent discovery, top-level run creation, and run inspection
 - `openlinker-go` integration
-- Agent Mode, token-only Runtime transport, and provider session adapters
+- Agent Mode command adapters consuming the immutable Plugin Go module
 - local stdio MCP bridge and native plugin control tools
-- production entrypoint, provider isolation, and egress gateway
 - bundled Skills, examples, packaging, and CLI documentation
 
 Changes that do not belong here include:
+
+- Provider/session execution, Browser service/assets, container entrypoints, isolation, and egress (Plugin-owned)
+- Runtime Worker delivery/recovery implementation (SDK-owned)
 
 - delegated child-run creation from an executing Agent
 - Core registry storage, server-side scheduling, or Hosted billing, wallet,

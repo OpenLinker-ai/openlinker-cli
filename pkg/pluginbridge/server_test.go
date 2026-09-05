@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agent"
 )
 
 func TestServerInitializeAndToolListUseOnlyProtocolOutput(t *testing.T) {
@@ -25,7 +25,7 @@ func TestServerInitializeAndToolListUseOnlyProtocolOutput(t *testing.T) {
 			`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}` + "\n",
 	)
 	var stdout, stderr bytes.Buffer
-	server := &Server{Host: "codex", IO: shared.IO{Getenv: getenv, Stderr: &stderr}, Agent: agent.NewService(getenv, nil)}
+	server := &Server{Host: "codex", IO: shared.IO{Getenv: getenv, Stderr: &stderr}, Agent: agent.NewService(getenv, nil, "test")}
 	if err := server.Serve(context.Background(), input, &stdout); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestServerAcceptsCodexToolCallMetaAndRejectsOtherOuterFields(t *testing.T) 
 			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"diagnose_agent_mode","arguments":{},"unexpected":true}}` + "\n",
 	)
 	var stdout bytes.Buffer
-	server := &Server{Host: "codex", IO: shared.IO{Getenv: getenv}, Agent: agent.NewService(getenv, nil)}
+	server := &Server{Host: "codex", IO: shared.IO{Getenv: getenv}, Agent: agent.NewService(getenv, nil, "test")}
 	if err := server.Serve(context.Background(), input, &stdout); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestConfigureAgentModePersistsBrowserInteractionPolicy(t *testing.T) {
 	server := &Server{
 		Host:  "codex",
 		IO:    shared.IO{Getenv: getenv},
-		Agent: agent.NewService(getenv, nil),
+		Agent: agent.NewService(getenv, nil, "test"),
 	}
 	result, err := server.configureAgent(map[string]any{
 		"provider":                   "codex",
@@ -163,7 +163,7 @@ func TestServerCancellationDoesNotWaitForStdinEOF(t *testing.T) {
 	defer writer.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	server := &Server{Host: "codex", IO: shared.IO{Getenv: func(string) string { return "" }}, Agent: agent.NewService(func(string) string { return "" }, nil)}
+	server := &Server{Host: "codex", IO: shared.IO{Getenv: func(string) string { return "" }}, Agent: agent.NewService(func(string) string { return "" }, nil, "test")}
 	go func() { done <- server.Serve(ctx, reader, &bytes.Buffer{}) }()
 	cancel()
 	select {

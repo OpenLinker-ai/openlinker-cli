@@ -7,12 +7,14 @@ import (
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agents"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo"
 	contextcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/context"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/plugin"
 	runcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/run"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/runs"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/tasks"
+	agentapp "github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -56,7 +58,7 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 	root.PersistentFlags().StringVar(&opts.UserToken, "token", opts.UserToken, "OpenLinker User Token")
 	root.PersistentFlags().DurationVar(&opts.Timeout, "timeout", opts.Timeout, "request timeout")
 
-	agentService := agent.NewService(ioStreams.Getenv, nil)
+	agentService := agentapp.NewService(ioStreams.Getenv, nil, buildinfo.Version)
 	root.AddCommand(contextcmd.New(ioStreams, opts))
 	root.AddCommand(agent.New(ioStreams, agentService))
 	root.AddCommand(plugin.New(ioStreams, opts, agentService))
