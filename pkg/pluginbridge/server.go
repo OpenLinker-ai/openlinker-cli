@@ -12,21 +12,29 @@ import (
 	"sync"
 	"time"
 
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 	openlinker "github.com/OpenLinker-ai/openlinker-go"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agent"
 )
 
 const protocolVersion = "2025-06-18"
 const bridgeShutdownTimeout = 15 * time.Second
 const agentStartupTimeout = 30 * time.Second
 
+// AgentService is the application lifecycle consumed by the MCP adapter.
+// Implementations live in the Plugin module and reuse the SDK Runtime Worker.
+type AgentService interface {
+	Status() agent.Status
+	Enable(context.Context, string) error
+	Disable(context.Context) error
+}
+
 type Server struct {
 	Host    string
 	IO      shared.IO
 	Options *shared.GlobalOptions
-	Agent   *agent.Service
+	Agent   AgentService
 	mu      sync.Mutex
 	agentMu sync.Mutex
 }
@@ -95,7 +103,7 @@ func (server *Server) Serve(ctx context.Context, input io.Reader, output io.Writ
 		server.Options = &options
 	}
 	if server.Agent == nil {
-		server.Agent = agent.NewService(server.IO.Getenv, nil)
+		server.Agent = agent.NewService(server.IO.Getenv, nil, buildinfo.Version)
 	}
 	if agent.ModeEnabled(server.IO.Getenv) {
 		go func() {

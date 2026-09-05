@@ -2,8 +2,8 @@
 
 English documentation: [README.md](./README.md)
 
-OpenLinker CLI 是 JSON-first 调用客户端和可靠 Runtime Worker，只对
-`openlinker-go` 做轻量封装，并把两类凭据严格分开：
+OpenLinker CLI 是单一可执行文件交付的 JSON-first 客户端。调用方使用 `openlinker-go`，
+Agent/Browser 命令适配器调用可复用的 `openlinker-plugin` Go module，并严格分离两类凭据：
 
 - stdout 始终输出 JSON；
 - 诊断信息和错误写入 stderr；
@@ -11,13 +11,19 @@ OpenLinker CLI 是 JSON-first 调用客户端和可靠 Runtime Worker，只对
 - `agent serve` 只接受 Agent Token 和所选 Provider 的鉴权；
 - 每个子命令的实现分别放在 `pkg/` 下。
 
-`agent serve` 直接运行官方 SDK Runtime Worker，支持 WebSocket/pull 选择、可靠交付、
+`agent serve` 通过 Plugin 所有的应用装配运行现有官方 SDK Runtime Worker，支持 WebSocket/pull 选择、可靠交付、
 取消和 token-only 注册。Codex 与 Claude Adapter 按 Core 管理的 conversation 复用私有
 Provider session。`plugin serve` 为原生插件提供本地 stdio MCP 调用与 Agent Mode 控制面。
 调用方凭据与 Runtime 凭据不可互换。
 
 CLI 只调用自托管或 Hosted 部署中的 Core 公共契约，不调用 Hosted 的服务商品、订单、钱包、
 计费或市场运营 API。
+
+
+源码边界：CLI 保留命令、JSON/MCP 组合和单二进制交付；Provider 执行、Browser Runtime、
+容器与 compose 位于 [Plugin 仓库](https://github.com/OpenLinker-ai/openlinker-plugin)。
+SDK 保留唯一 Runtime Worker。独立 Agent 无须安装原生 Plugin；Browser 仍是独立进程/镜像。
+模块发布须先 Plugin、后 CLI、再更新 native CLI lock 和镜像；当前旧 lock 不代表新镜像已就绪。
 
 ## 状态与安装
 
@@ -78,7 +84,7 @@ API Key；官方生产镜像要求 Provider API Key。Agent Mode 配置文件从
 `OPENLINKER_AGENT_CAPACITY`、`OPENLINKER_AGENT_TIMEOUT_SECONDS`、
 `OPENLINKER_AGENT_SESSION_REUSE`，以及 Provider 对应的 model、web search、sandbox
 和 permission 变量。完整示例见
-[`deploy/.env.providers.example`](./deploy/.env.providers.example)。
+[`deploy/.env.providers.example`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/.env.providers.example)。
 
 封装 Browser Profile 支持
 `OPENLINKER_BROWSER_CLIENT_MODE=auto|official-chrome|isolated-native|isolated-mcp|native|mcp`。
@@ -90,8 +96,8 @@ Direct MCP。`official-chrome`、`isolated-native`、`isolated-mcp` 都是严格
 在会话中途切换后端。
 
 Official Chrome 只作为不可变构建输入提供。使用
-[`Dockerfile.browser.native-chrome`](./Dockerfile.browser.native-chrome) 与
-[`deploy/compose.codex.native-chrome.yml`](./deploy/compose.codex.native-chrome.yml)
+[`Dockerfile.browser.native-chrome`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/Dockerfile.browser.native-chrome) 与
+[`deploy/compose.codex.native-chrome.yml`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/compose.codex.native-chrome.yml)
 可把锁定的 Chrome、签名扩展 CRX、Native Messaging Host 和资产清单打包进 Operator
 镜像；Chrome 通过镜像内 Linux external-extension manifest 安装扩展。运行时不挂载、
 不下载这些原生资产；加密 Profile 继续使用既有 Browser 状态持久卷。
@@ -229,11 +235,6 @@ pkg/shared
 pkg/context
 pkg/buildinfo
 pkg/agent
-pkg/agentexec
-pkg/browserclient
-pkg/browserplugin
-pkg/browserprotocol
-pkg/browserruntime
 pkg/plugin
 pkg/pluginbridge
 pkg/run
@@ -247,10 +248,6 @@ pkg/runs/events
 pkg/runs/messages
 pkg/runs/artifacts
 pkg/runs/cancel
-cmd/openlinker-runtime-entrypoint
-cmd/openlinker-provider-launcher
-cmd/openlinker-egress-gateway
-deploy
 ```
 
 ## 开发

@@ -2,8 +2,9 @@
 
 English documentation: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-感谢你改进 OpenLinker CLI。本仓库维护 JSON-first 调用客户端、原生插件 bridge、可靠
-Runtime Worker、Provider Adapter 和加固的生产镜像。
+感谢你改进 OpenLinker CLI。本仓库维护 JSON-first 调用客户端、Cobra 适配器、本地 MCP
+组合和单 CLI 可执行文件。Provider/Browser 执行与生产镜像属于 `openlinker-plugin`；
+现有可靠 Runtime Worker 保留在 `openlinker-go`。
 
 ## 开发环境
 
@@ -28,12 +29,14 @@ endpoint、本地 `.env`、客户输入，或包含敏感数据的响应 payload
 - 用于用户授权 Core API 调用的 User Token 鉴权
 - Agent 发现、顶层 Run 创建和 Run 查看
 - `openlinker-go` 集成
-- Agent Mode、token-only Runtime transport 和 Provider session Adapter
+- 消费固定版本 Plugin Go module 的 Agent Mode 命令适配器
 - 本地 stdio MCP bridge 与原生插件控制工具
-- 生产 entrypoint、Provider 隔离和 egress gateway
 - CLI 自带的 Skill、示例、打包和文档
 
 不适合放在这里：
+
+- Provider/session 执行、Browser 服务/资源、容器入口、隔离与出口（Plugin 所有）
+- Runtime Worker 交付与恢复实现（SDK 所有）
 
 - 正在执行的 Agent 创建 child Run
 - Core registry 存储、服务端调度，以及 Hosted 计费、钱包、市场和 Dashboard

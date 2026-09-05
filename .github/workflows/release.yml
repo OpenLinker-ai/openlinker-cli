@@ -47,6 +47,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          GOWORK=off go mod download
+          GOWORK=off go mod verify
+          test "$(GOWORK=off go list -m -f '{{.Replace}}' github.com/OpenLinker-ai/openlinker-plugin)" = '<nil>'
+          test -z "$(git status --porcelain --untracked-files=all)"
           version="${GITHUB_REF_NAME}"
           if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
             version="sha-${GITHUB_SHA::12}"
@@ -63,9 +67,13 @@ jobs:
           fi
 
           CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
-            GOWORK=off go build -trimpath \
+            GOWORK=off go build -mod=readonly -buildvcs=true -trimpath \
               -ldflags="-s -w -X github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo.Version=${version}" \
               -o "${work_dir}/${binary_name}" ./cmd/openlinker
+
+          GOWORK=off go version -m "${work_dir}/${binary_name}" > "${work_dir}/build-info.txt"
+          grep -F 'vcs.modified=false' "${work_dir}/build-info.txt"
+          grep -F "vcs.revision=${GITHUB_SHA}" "${work_dir}/build-info.txt"
 
           cp README.md README.zh-CN.md LICENSE "${work_dir}/"
           cp -R skills "${work_dir}/skills"

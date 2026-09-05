@@ -7,12 +7,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserclient"
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserplugin"
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/browserprotocol"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/pluginbridge"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agent"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/browser-runtime/browserclient"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/browser-runtime/browserplugin"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/browser-runtime/browserprotocol"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +70,10 @@ func newServeCommand(ioStreams shared.IO, options *shared.GlobalOptions, agentSe
 			}
 			ctx, stop := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			server := &pluginbridge.Server{Host: host, IO: ioStreams, Options: options, Agent: agentService}
+			server := &pluginbridge.Server{Host: host, IO: ioStreams, Options: options}
+			if agentService != nil {
+				server.Agent = agentService
+			}
 			return server.Serve(ctx, ioStreams.Stdin, ioStreams.Stdout)
 		},
 	}
@@ -103,8 +107,9 @@ func newBrowserServeCommand(ioStreams shared.IO) *cobra.Command {
 			)
 			defer stop()
 			server := &browserplugin.Server{
-				Host: host,
-				IO:   ioStreams,
+				Host:    host,
+				IO:      browserplugin.IO{Getenv: ioStreams.Getenv},
+				Version: buildinfo.Version,
 				IdentitySupplier: func() (browserprotocol.Identity, error) {
 					return browserclient.LoadLeaseIdentityFromEnv(ioStreams.Getenv)
 				},
