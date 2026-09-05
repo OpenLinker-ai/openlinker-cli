@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/OpenLinker-ai/openlinker-go v0.2.0-rc7
-	github.com/OpenLinker-ai/openlinker-plugin v0.1.58-0.20260905115949-373475ffac33
+	github.com/OpenLinker-ai/openlinker-plugin v0.1.58-0.20260905174434-1fea781f2b48
 	github.com/spf13/cobra v1.10.2
 )
 
