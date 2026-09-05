@@ -5,6 +5,29 @@ All notable changes to `openlinker-cli` will be documented in this file.
 The CLI is pre-1.0. Breaking changes may occur while the OpenLinker API and
 runtime boundaries are stabilizing.
 
+## Unreleased
+
+### Changed
+
+- Browser Runtime, Codex/Claude execution adapters, native assets and portable
+  image/deployment definitions now belong to `openlinker-plugin`. CLI remains
+  the single public executable and command/MCP composition layer; CLI commands,
+  flags and Agent registration identity are unchanged by this extraction.
+- Pin the Plugin implementation to the immutable
+  `v0.1.58-0.20260905174434-1fea781f2b48` module with verified checksums. The Go
+  SDK remains pinned to `v0.2.0-rc7` and is still the sole Runtime Worker
+  lifecycle, assignment/ACK and spool implementation.
+- Publish Plugin source before dependent CLI artifacts. Provider images and
+  native packages require a matching checksum-locked CLI release; source
+  publication does not deploy or migrate Runtime volumes.
+
+### Removed
+
+- Breaking for Go import consumers: the former CLI Browser/Agent implementation
+  packages moved to Plugin's `packages/browser-runtime` and
+  `packages/agent-adapters`. Import those packages from the Plugin module;
+  standalone CLI users retain the existing command surface.
+
 ## v0.2.0-rc.1 - Unreleased
 
 ### Added
