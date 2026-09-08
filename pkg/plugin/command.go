@@ -11,6 +11,8 @@ import (
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/pluginbridge"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 	"github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agent"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agentdelegation"
+	"github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agenthost"
 	"github.com/OpenLinker-ai/openlinker-plugin/packages/browser-runtime/browserclient"
 	"github.com/OpenLinker-ai/openlinker-plugin/packages/browser-runtime/browserplugin"
 	"github.com/OpenLinker-ai/openlinker-plugin/packages/browser-runtime/browserprotocol"
@@ -22,6 +24,10 @@ func New(ioStreams shared.IO, options *shared.GlobalOptions, agentService *agent
 	command.AddCommand(newServeCommand(ioStreams, options, agentService))
 	command.AddCommand(newBrowserServeCommand(ioStreams))
 	command.AddCommand(newBrowserProxyCommand(ioStreams))
+	command.AddCommand(newDelegationProxyCommand(ioStreams))
+	command.AddCommand(&cobra.Command{Use: "capabilities", Hidden: true, Args: cobra.NoArgs, RunE: func(command *cobra.Command, args []string) error {
+		return shared.WriteJSON(ioStreams.Stdout, agenthost.SupportedCapabilities())
+	}})
 	return command
 }
 
@@ -136,4 +142,29 @@ func browserToolGetenv(getenv func(string) string) func(string) string {
 			return getenv(name)
 		}
 	}
+}
+
+func newDelegationProxyCommand(ioStreams shared.IO) *cobra.Command {
+	var host string
+	command := &cobra.Command{Use: "delegation-proxy", Hidden: true, Args: cobra.NoArgs,
+		Short: "Proxy stdio to the active Attempt delegation broker",
+		RunE: func(command *cobra.Command, args []string) error {
+			if host != "codex" && host != "claude" {
+				return errors.New("delegation-proxy requires --host codex or --host claude")
+			}
+			getenv := ioStreams.Getenv
+			if getenv == nil {
+				getenv = os.Getenv
+			}
+			socket := getenv(agentdelegation.SocketEnvironment)
+			for _, name := range []string{"CODEX_API_KEY", "ANTHROPIC_API_KEY", "OPENLINKER_AGENT_TOKEN", "OPENLINKER_USER_TOKEN"} {
+				_ = os.Unsetenv(name)
+			}
+			ctx, stop := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return agentdelegation.Proxy(ctx, ioStreams.Stdin, ioStreams.Stdout, socket)
+		},
+	}
+	command.Flags().StringVar(&host, "host", "", "native host: codex or claude")
+	return command
 }

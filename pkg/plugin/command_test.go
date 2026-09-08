@@ -79,3 +79,14 @@ func TestBrowserToolEnvironmentRedactsProviderAndOpenLinkerCredentials(t *testin
 		t.Fatal("Browser control setting was redacted")
 	}
 }
+
+func TestDelegationProxyRequiresHostAndPrivateSocket(t *testing.T) {
+	for _, args := range [][]string{{"delegation-proxy"}, {"delegation-proxy", "--host", "unknown"}, {"delegation-proxy", "--host", "codex"}} {
+		var output bytes.Buffer
+		command := New(shared.IO{Stdin: strings.NewReader(""), Stdout: &output, Stderr: &output, Getenv: func(string) string { return "" }}, nil, nil)
+		command.SetArgs(args)
+		if err := command.ExecuteContext(context.Background()); err == nil {
+			t.Fatalf("accepted missing authority: %v", args)
+		}
+	}
+}

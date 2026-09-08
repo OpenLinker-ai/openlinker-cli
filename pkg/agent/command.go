@@ -30,7 +30,8 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	var capacity int64
 	var timeout int
 	var webSearch, sessionReuse, enabled bool
-	var allowedTools shared.StringList
+	var allowedTools, delegationTargets shared.StringList
+	var delegationProxyBin, delegationBrokerRoot string
 	command := &cobra.Command{
 		Use:   "configure",
 		Short: "Write non-secret Agent mode configuration",
@@ -45,6 +46,7 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 				SessionReuse: &sessionReuse, WebSearch: &webSearch, Enabled: &enabled,
 				CodexBaseURL: codexBaseURL, CodexSandbox: sandbox, CodexApproval: approval,
 				ClaudePermission: permission, AllowedTools: allowedTools,
+				DelegationTargets: delegationTargets, DelegationProxyBin: delegationProxyBin, DelegationBrokerRoot: delegationBrokerRoot,
 				ExecutionProfile: executionProfile, BrowserInteractionPolicy: browserInteractionPolicy,
 				BrowserClientMode: browserClientMode, BrowserPluginBin: browserPluginBin,
 				BrowserNativePlugin: browserNativePlugin, BrowserSocket: browserSocket,
@@ -77,6 +79,9 @@ func newConfigureCommand(ioStreams shared.IO) *cobra.Command {
 	command.Flags().StringVar(&sandbox, "codex-sandbox", "read-only", "Codex sandbox mode: read-only, workspace-write, or danger-full-access for externally isolated runtimes")
 	command.Flags().StringVar(&approval, "codex-approval", "never", "Codex approval mode")
 	command.Flags().StringVar(&permission, "claude-permission", "dontAsk", "Claude permission mode")
+	command.Flags().Var(&delegationTargets, "delegation-target", "allowed target Agent UUID; repeatable, empty clears delegation")
+	command.Flags().StringVar(&delegationProxyBin, "delegation-proxy-bin", "", "OpenLinker CLI binary used for delegated Agent tools")
+	command.Flags().StringVar(&delegationBrokerRoot, "delegation-broker-root", "", "private local directory for Attempt delegation sockets")
 	command.Flags().Var(&allowedTools, "allowed-tool", "Claude allowed tool; repeatable")
 	command.Flags().StringVar(&executionProfile, "execution-profile", "standard", "Agent execution profile: standard or browser")
 	command.Flags().StringVar(&browserInteractionPolicy, "browser-interaction-policy", "restricted", "Browser interaction policy: restricted or full")
