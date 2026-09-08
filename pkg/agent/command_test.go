@@ -182,3 +182,47 @@ func TestConfigureCommandPersistsCompleteBrowserProfile(t *testing.T) {
 		t.Fatalf("Browser configuration = %#v, want %#v", config, want)
 	}
 }
+
+func TestConfigureDelegationTargetsPreserveAndClear(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "agent.json")
+	configure := func(args ...string) error {
+		command := newConfigureCommand(shared.IO{Getenv: func(key string) string {
+			if key == "OPENLINKER_AGENT_CONFIG" {
+				return path
+			}
+			return ""
+		}, Stdout: &bytes.Buffer{}})
+		command.SetArgs(args)
+		return command.Execute()
+	}
+	if err := configure("--provider", "codex", "--agent-id", "11111111-1111-4111-8111-111111111111", "--workspace", directory, "--delegation-target", "22222222-2222-4222-8222-222222222222"); err != nil {
+		t.Fatal(err)
+	}
+	if err := configure("--model", "test-model"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	var config agentapp.Config
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.DelegationTargets) != 1 {
+		t.Fatal("omitted flag cleared targets")
+	}
+	before := string(raw)
+	if err := configure("--delegation-target", "11111111-1111-4111-8111-111111111111"); err == nil {
+		t.Fatal("self delegation accepted")
+	}
+	raw, _ = os.ReadFile(path)
+	if string(raw) != before {
+		t.Fatal("invalid targets changed stored config")
+	}
+	if err := configure("--delegation-target="); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if strings.Contains(string(raw), "delegation_targets") {
+		t.Fatal("empty flag did not disable delegation")
+	}
+}

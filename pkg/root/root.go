@@ -72,7 +72,7 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, `Usage:
   openlinker [global flags] context
-  openlinker agent configure --provider codex|claude --agent-id uuid --workspace path
+  openlinker agent configure --provider codex|claude --agent-id uuid --workspace path [--delegation-target uuid]
   openlinker agent serve [--provider codex|claude]
   openlinker agent status
   openlinker agent doctor
