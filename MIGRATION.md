@@ -16,8 +16,9 @@ Existing caller commands, User Token grants, JSON output and Core API behavior r
 Install the matching Plugin package before replacing the legacy all-in-one CLI in
 an existing native Plugin installation. Old packages whose launcher still resolves
 `openlinker` require their old pinned CLI; upgrading that CLI alone breaks their
-execution entry. New Plugin releases bundle their own host for Linux/macOS/Windows
-amd64 and arm64, verify its SHA-256 and capability metadata, and never fall back to CLI.
+execution entry. New Plugin packages provide an explicit `setup-plugin-host` installer for the pinned
+Linux/macOS/Windows amd64 or arm64 release, verify its SHA-256 and capability metadata,
+and never fall back to CLI. Complete host installation before restarting native MCP.
 
 The Plugin host consumes the existing v1 Plugin configuration, Agent/Node identity,
 credentials, session and state directories. Stop/drain the old Worker before
