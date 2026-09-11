@@ -3,7 +3,7 @@
 Chinese documentation: [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md)
 
 Thanks for helping improve OpenLinker CLI. This repository owns the JSON-first
-caller client, Cobra adapters, local MCP composition, and single CLI executable.
+caller client, Cobra commands, and single platform CLI executable.
 Provider/Browser execution and production images belong to `openlinker-plugin`;
 the existing reliable Runtime Worker remains in `openlinker-go`.
 
@@ -32,8 +32,6 @@ Changes that belong here include:
 - User Token authentication for user-authorized Core API calls
 - Agent discovery, top-level run creation, and run inspection
 - `openlinker-go` integration
-- Agent Mode command adapters consuming the immutable Plugin Go module
-- local stdio MCP bridge and native plugin control tools
 - bundled Skills, examples, packaging, and CLI documentation
 
 Changes that do not belong here include:
@@ -48,8 +46,7 @@ Changes that do not belong here include:
 ## CLI rules
 
 - Caller commands accept only `OPENLINKER_USER_TOKEN` or the explicit `--token`
-  User Token flag; Runtime commands accept only their isolated Agent/provider
-  credential sources.
+  User Token flag. Local execution and native MCP belong to Node/Plugin.
 - Prefer the environment variable in examples because command-line token values
   may enter shell history or process listings.
 - Never print credentials to stdout or stderr.

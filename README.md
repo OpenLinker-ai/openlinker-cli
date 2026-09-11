@@ -2,35 +2,14 @@
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 
-JSON-first CLI for OpenLinker, delivered as one executable. Caller commands use
-`openlinker-go`; Agent and Browser command adapters consume the reusable
-`openlinker-plugin` Go module with two credential-isolated modes:
+JSON-first platform client for discovering Agents, creating tasks, starting runs
+and inspecting results through the public Core API and `openlinker-go`.
+It accepts User Tokens; stdout contains JSON and diagnostics go to stderr.
 
-- stdout is always JSON;
-- diagnostics and errors go to stderr;
-- caller commands accept only an OpenLinker User Token;
-- `agent serve` accepts only an Agent Token plus the selected provider's auth;
-- command implementations are split by subcommand under `pkg/`.
-
-`agent serve` uses Plugin-owned application composition to run the existing
-official SDK Runtime Worker, including
-WebSocket/pull selection, durable delivery, cancellation, and token-only
-registration. The Codex and Claude adapters reuse private provider sessions by
-Core-owned conversation. `plugin serve` exposes the caller and Agent Mode
-control surface as a local stdio MCP server for native plugins. Caller and
-Runtime credentials are never interchangeable.
-
-The CLI calls the public Core contract in either a self-hosted or Hosted
-deployment. It does not call hosted service-listing, order, wallet, billing, or
-marketplace-operation APIs.
-
-
-Source boundary: CLI owns commands, JSON/MCP composition, and the single executable.
-Provider execution, Browser Runtime, containers, and compose definitions live in
-[Plugin](https://github.com/OpenLinker-ai/openlinker-plugin). The SDK retains the
-sole Runtime Worker. Standalone Agents do not require native plugin installation;
-Browser remains a separate process/image. Release the Plugin module, then CLI,
-then update the native CLI lock and images; an old lock does not prove new image readiness.
+Local Codex/Claude bridging belongs to [Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node).
+Native MCP, Agent Mode and Browser execution belong to [Plugin](https://github.com/OpenLinker-ai/openlinker-plugin).
+This CLI has no local Worker, Provider adapter, Browser server or forwarding command.
+See [MIGRATION.md](./MIGRATION.md) before replacing an older all-in-one CLI.
 
 ## Status and installation
 
@@ -70,68 +49,6 @@ export OPENLINKER_TRACE_ID=44444444-4444-4444-8444-444444444444
 ```
 
 These values are context only. They do not authorize runtime delegation.
-
-### Runtime Agent configuration
-
-The minimum required values for a foreground provider are:
-
-```bash
-export OPENLINKER_URL=https://openlinker.example
-export OPENLINKER_AGENT_ID=22222222-2222-4222-8222-222222222222
-export OPENLINKER_AGENT_TOKEN=ol_agent_xxx
-export OPENLINKER_WORKSPACE=/absolute/minimal/workspace
-export CODEX_API_KEY=... # Codex; use ANTHROPIC_API_KEY for Claude
-
-openlinker agent serve --provider codex
-```
-
-`OPENLINKER_NODE_ID` is optional. The CLI generates it once and persists it in
-the owner-only Agent state directory. Every direct secret also supports a
-mutually exclusive `_FILE` form. Provider login state may replace the API key
-for a trusted local installation; official production images require provider
-API-key authentication. Agent Mode configuration never stores credentials.
-
-Useful non-secret settings include `OPENLINKER_AGENT_STATE_DIR`,
-`OPENLINKER_AGENT_TRANSPORT`, `OPENLINKER_AGENT_CAPACITY`,
-`OPENLINKER_AGENT_TIMEOUT_SECONDS`, `OPENLINKER_AGENT_SESSION_REUSE`,
-provider-specific `OPENLINKER_CODEX_MODEL` / `OPENLINKER_CLAUDE_MODEL`, web
-search, sandbox, and permission variables. See
-[`deploy/.env.providers.example`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/.env.providers.example).
-
-The packaged Browser profile accepts
-`OPENLINKER_BROWSER_CLIENT_MODE=auto|official-chrome|isolated-native|isolated-mcp|native|mcp`.
-For Linux Codex, an omitted value defaults to `auto` and tries, before the
-Provider starts: image-baked Official Chrome with the native Plugin, isolated
-Chromium with the native Plugin, then isolated Chromium with direct MCP.
-`official-chrome`, `isolated-native`, and `isolated-mcp` are strict modes;
-`native` and `mcp` remain strict aliases for the two isolated modes. Claude and
-non-Linux defaults retain their existing behavior. A Provider Session still
-receives exactly one `browser_session` surface, and a selected backend never
-changes after preflight.
-
-Official Chrome is supplied only as an immutable build input. Use
-[`Dockerfile.browser.native-chrome`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/Dockerfile.browser.native-chrome) and
-[`deploy/compose.codex.native-chrome.yml`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/compose.codex.native-chrome.yml)
-to bake the locked Chrome, signed extension CRX, Native Messaging Host, and
-asset manifest into an operator image. Chrome force-installs the extension from
-the image-local CRX through an image-local Omaha update manifest and managed
-policy; the Linux external-extension manifest remains independently verified.
-None of those native assets is
-mounted or downloaded at runtime; encrypted Profiles continue to use the
-existing persistent Browser-state volume. If the locked native assets or startup handshake are
-unavailable, `auto` selects the next backend; strict `official-chrome` fails.
-
-Packaged Browser Agents require the Agent Token and Provider API key but not a
-User Token. `OPENLINKER_USER_TOKEN` is rejected by the official Browser
-entrypoint and is never forwarded to the child Provider or Browser Runtime.
-
-When Codex uses an OpenAI-compatible router, set the non-secret
-`OPENLINKER_CODEX_BASE_URL` (for example, `https://router.example/v1`) or pass
-`--codex-base-url` to `openlinker agent configure`. The value must be an
-absolute HTTP(S) URL without credentials, a query, or a fragment. The native
-MCP `configure_agent_mode` tool exposes the same setting as `codex_base_url`.
-Codex executions allow non-Git workspaces and reuse the same configured Base
-URL for both new and resumed sessions.
 
 ## User Token grants
 
@@ -215,24 +132,6 @@ openlinker runs artifacts --id 33333333-3333-4333-8333-333333333333
 openlinker runs cancel --id 33333333-3333-4333-8333-333333333333
 ```
 
-Configure, diagnose, and run this host as an Agent:
-
-```bash
-openlinker agent configure --provider codex \
-  --agent-id 22222222-2222-4222-8222-222222222222 \
-  --workspace /absolute/minimal/workspace \
-  --url https://openlinker.example
-openlinker agent doctor --provider codex
-openlinker agent serve --provider codex
-```
-
-Run the native plugin bridge (normally started by a plugin manifest):
-
-```bash
-openlinker plugin serve --host codex
-openlinker plugin serve --host claude
-```
-
 `runs children` is backed by `openlinker-go`'s `ListRunChildren` method. The
 CLI can inspect child runs but does not create delegated child calls.
 
@@ -255,9 +154,6 @@ pkg/root
 pkg/shared
 pkg/context
 pkg/buildinfo
-pkg/agent
-pkg/plugin
-pkg/pluginbridge
 pkg/run
 pkg/tasks/create
 pkg/agents/search

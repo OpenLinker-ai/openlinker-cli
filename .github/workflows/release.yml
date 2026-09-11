@@ -49,7 +49,7 @@ jobs:
           set -euo pipefail
           GOWORK=off go mod download
           GOWORK=off go mod verify
-          test "$(GOWORK=off go list -m -f '{{.Replace}}' github.com/OpenLinker-ai/openlinker-plugin)" = '<nil>'
+          GOWORK=off go test ./cmd/openlinker -run TestPlatformClientDependencyBoundary -count=1
           test -z "$(git status --porcelain --untracked-files=all)"
           version="${GITHUB_REF_NAME}"
           if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then

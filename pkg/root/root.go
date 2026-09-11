@@ -5,16 +5,12 @@ import (
 	"io"
 	"os"
 
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/agent"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agents"
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/buildinfo"
 	contextcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/context"
-	"github.com/OpenLinker-ai/openlinker-cli/pkg/plugin"
 	runcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/run"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/runs"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/tasks"
-	agentapp "github.com/OpenLinker-ai/openlinker-plugin/packages/agent-adapters/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -58,10 +54,7 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 	root.PersistentFlags().StringVar(&opts.UserToken, "token", opts.UserToken, "OpenLinker User Token")
 	root.PersistentFlags().DurationVar(&opts.Timeout, "timeout", opts.Timeout, "request timeout")
 
-	agentService := agentapp.NewService(ioStreams.Getenv, nil, buildinfo.Version)
 	root.AddCommand(contextcmd.New(ioStreams, opts))
-	root.AddCommand(agent.New(ioStreams, agentService))
-	root.AddCommand(plugin.New(ioStreams, opts, agentService))
 	root.AddCommand(agents.New(ioStreams, opts))
 	root.AddCommand(runcmd.New(ioStreams, opts))
 	root.AddCommand(runs.New(ioStreams, opts))
@@ -72,11 +65,6 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, `Usage:
   openlinker [global flags] context
-  openlinker agent configure --provider codex|claude --agent-id uuid --workspace path [--delegation-target uuid]
-  openlinker agent serve [--provider codex|claude]
-  openlinker agent status
-  openlinker agent doctor
-  openlinker plugin serve --host codex|claude
   openlinker [global flags] agents search [--query q] [--tag tag] [--callable]
   openlinker [global flags] agents get --slug slug
   openlinker [global flags] agents card --slug slug [--extended]

@@ -2,8 +2,7 @@
 
 English documentation: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-感谢你改进 OpenLinker CLI。本仓库维护 JSON-first 调用客户端、Cobra 适配器、本地 MCP
-组合和单 CLI 可执行文件。Provider/Browser 执行与生产镜像属于 `openlinker-plugin`；
+感谢你改进 OpenLinker CLI。本仓库维护 JSON-first 调用客户端、Cobra 命令和平台 CLI 可执行文件。Provider/Browser 执行与生产镜像属于 `openlinker-plugin`；
 现有可靠 Runtime Worker 保留在 `openlinker-go`。
 
 ## 开发环境
@@ -29,8 +28,6 @@ endpoint、本地 `.env`、客户输入，或包含敏感数据的响应 payload
 - 用于用户授权 Core API 调用的 User Token 鉴权
 - Agent 发现、顶层 Run 创建和 Run 查看
 - `openlinker-go` 集成
-- 消费固定版本 Plugin Go module 的 Agent Mode 命令适配器
-- 本地 stdio MCP bridge 与原生插件控制工具
 - CLI 自带的 Skill、示例、打包和文档
 
 不适合放在这里：
@@ -43,8 +40,7 @@ endpoint、本地 `.env`、客户输入，或包含敏感数据的响应 payload
 
 ## CLI 规则
 
-- 调用方命令只接受 `OPENLINKER_USER_TOKEN` 或 `--token` User Token；Runtime 命令只
-  接受隔离的 Agent/Provider 凭据来源。
+- 调用方命令只接受 `OPENLINKER_USER_TOKEN` 或 `--token` User Token。普通 Agent 接入归 Node，原生 MCP/深度执行归 Plugin。
 - 示例优先使用环境变量，因为命令行里的 token 可能进入 shell history 或进程列表。
 - stdout 和 stderr 都不能打印凭据。
 - 成功响应的 stdout 必须保持为机器可读 JSON；诊断信息写入 stderr。
