@@ -2,28 +2,13 @@
 
 English documentation: [README.md](./README.md)
 
-OpenLinker CLI 是单一可执行文件交付的 JSON-first 客户端。调用方使用 `openlinker-go`，
-Agent/Browser 命令适配器调用可复用的 `openlinker-plugin` Go module，并严格分离两类凭据：
+CLI 是平台命令行客户端：通过公开 Core API 和 `openlinker-go` 查询 Agent、创建任务、发起运行和查看结果。
+使用 User Token，stdout 输出 JSON，诊断写入 stderr。
 
-- stdout 始终输出 JSON；
-- 诊断信息和错误写入 stderr；
-- 调用方命令只接受 OpenLinker User Token；
-- `agent serve` 只接受 Agent Token 和所选 Provider 的鉴权；
-- 每个子命令的实现分别放在 `pkg/` 下。
-
-`agent serve` 通过 Plugin 所有的应用装配运行现有官方 SDK Runtime Worker，支持 WebSocket/pull 选择、可靠交付、
-取消和 token-only 注册。Codex 与 Claude Adapter 按 Core 管理的 conversation 复用私有
-Provider session。`plugin serve` 为原生插件提供本地 stdio MCP 调用与 Agent Mode 控制面。
-调用方凭据与 Runtime 凭据不可互换。
-
-CLI 只调用自托管或 Hosted 部署中的 Core 公共契约，不调用 Hosted 的服务商品、订单、钱包、
-计费或市场运营 API。
-
-
-源码边界：CLI 保留命令、JSON/MCP 组合和单二进制交付；Provider 执行、Browser Runtime、
-容器与 compose 位于 [Plugin 仓库](https://github.com/OpenLinker-ai/openlinker-plugin)。
-SDK 保留唯一 Runtime Worker。独立 Agent 无须安装原生 Plugin；Browser 仍是独立进程/镜像。
-模块发布须先 Plugin、后 CLI、再更新 native CLI lock 和镜像；当前旧 lock 不代表新镜像已就绪。
+本地 Codex／Claude 接入使用 [Agent Node](https://github.com/OpenLinker-ai/openlinker-agent-node)。
+原生 MCP、Agent Mode 和浏览器执行由 [Plugin](https://github.com/OpenLinker-ai/openlinker-plugin) 提供。
+CLI 不包含本地 Worker、Provider 适配器、浏览器服务或执行转发命令。
+升级旧版一体化 CLI 前请阅读 [迁移说明](./MIGRATION.md)。
 
 ## 状态与安装
 
@@ -61,59 +46,6 @@ export OPENLINKER_TRACE_ID=44444444-4444-4444-8444-444444444444
 ```
 
 这些值只是上下文，不提供 runtime 子调用权限。
-
-### Runtime Agent 配置
-
-前台 Provider 的最少必填项：
-
-```bash
-export OPENLINKER_URL=https://openlinker.example
-export OPENLINKER_AGENT_ID=22222222-2222-4222-8222-222222222222
-export OPENLINKER_AGENT_TOKEN=ol_agent_xxx
-export OPENLINKER_WORKSPACE=/absolute/minimal/workspace
-export CODEX_API_KEY=... # Claude 使用 ANTHROPIC_API_KEY
-
-openlinker agent serve --provider codex
-```
-
-`OPENLINKER_NODE_ID` 可省略；CLI 会生成一次并保存到 owner-only Agent 状态目录。每个
-直接 secret 都支持互斥的 `_FILE` 形式。本机可信环境可以使用 Provider 已登录状态代替
-API Key；官方生产镜像要求 Provider API Key。Agent Mode 配置文件从不保存凭据。
-
-非敏感配置包括 `OPENLINKER_AGENT_STATE_DIR`、`OPENLINKER_AGENT_TRANSPORT`、
-`OPENLINKER_AGENT_CAPACITY`、`OPENLINKER_AGENT_TIMEOUT_SECONDS`、
-`OPENLINKER_AGENT_SESSION_REUSE`，以及 Provider 对应的 model、web search、sandbox
-和 permission 变量。完整示例见
-[`deploy/.env.providers.example`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/.env.providers.example)。
-
-封装 Browser Profile 支持
-`OPENLINKER_BROWSER_CLIENT_MODE=auto|official-chrome|isolated-native|isolated-mcp|native|mcp`。
-Linux Codex 省略该配置时默认使用 `auto`，并在 Provider 启动前依次尝试：镜像内置
-Official Chrome + Native Plugin、隔离 Chromium + Native Plugin、隔离 Chromium +
-Direct MCP。`official-chrome`、`isolated-native`、`isolated-mcp` 都是严格模式；
-`native` 与 `mcp` 保留为后两种隔离模式的严格别名。Claude 与非 Linux 的默认行为
-不变。一个 Provider Session 仍只暴露一个 `browser_session`，preflight 选定后不会
-在会话中途切换后端。
-
-Official Chrome 只作为不可变构建输入提供。使用
-[`Dockerfile.browser.native-chrome`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/Dockerfile.browser.native-chrome) 与
-[`deploy/compose.codex.native-chrome.yml`](https://github.com/OpenLinker-ai/openlinker-plugin/blob/main/deploy/compose.codex.native-chrome.yml)
-可把锁定的 Chrome、签名扩展 CRX、Native Messaging Host 和资产清单打包进 Operator
-镜像；Chrome 通过镜像内 Linux external-extension manifest 安装扩展。运行时不挂载、
-不下载这些原生资产；加密 Profile 继续使用既有 Browser 状态持久卷。
-`auto` 在锁定资产或启动握手不可用时才会在 Provider 启动前选择下一候选；严格
-`official-chrome` 会直接失败。
-
-封装 Browser Agent 需要 Agent Token 和 Provider API Key，但不需要 User Token。
-官方 Browser Entrypoint 会拒绝 `OPENLINKER_USER_TOKEN`，也不会把它转发给子
-Provider 或 Browser Runtime。
-
-Codex 使用 OpenAI-compatible 路由时，可设置非敏感变量
-`OPENLINKER_CODEX_BASE_URL`（例如 `https://router.example/v1`），或向
-`openlinker agent configure` 传入 `--codex-base-url`。该值必须是绝对 HTTP(S)
-URL，且不能包含凭据、查询参数或 fragment。原生 MCP 的
-`configure_agent_mode` 工具提供同名语义的 `codex_base_url` 参数。新建和恢复
-Codex 会话都会使用该 Base URL，并支持非 Git 工作目录。
 
 ## User Token 权限
 
@@ -195,24 +127,6 @@ openlinker runs artifacts --id 33333333-3333-4333-8333-333333333333
 openlinker runs cancel --id 33333333-3333-4333-8333-333333333333
 ```
 
-配置、诊断并把当前宿主作为 Agent 运行：
-
-```bash
-openlinker agent configure --provider codex \
-  --agent-id 22222222-2222-4222-8222-222222222222 \
-  --workspace /absolute/minimal/workspace \
-  --url https://openlinker.example
-openlinker agent doctor --provider codex
-openlinker agent serve --provider codex
-```
-
-原生插件 bridge（通常由插件 manifest 自动启动）：
-
-```bash
-openlinker plugin serve --host codex
-openlinker plugin serve --host claude
-```
-
 `runs children` 调用 `openlinker-go` 的 `ListRunChildren`。CLI 可以查看 child
 Run，但不会创建 Agent 子调用。
 
@@ -234,9 +148,6 @@ pkg/root
 pkg/shared
 pkg/context
 pkg/buildinfo
-pkg/agent
-pkg/plugin
-pkg/pluginbridge
 pkg/run
 pkg/tasks/create
 pkg/agents/search

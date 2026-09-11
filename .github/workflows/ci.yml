@@ -39,7 +39,7 @@ jobs:
           GOWORK=off go build -mod=readonly -buildvcs=true -trimpath -ldflags="-s -w" ./cmd/openlinker
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 GOWORK=off go build -mod=readonly -buildvcs=true -trimpath -o "${RUNNER_TEMP}/openlinker.exe" ./cmd/openlinker
 
-      - name: Verify immutable Plugin module dependency
+      - name: Verify platform client dependency boundary
         run: |
-          test "$(GOWORK=off go list -m -f '{{.Replace}}' github.com/OpenLinker-ai/openlinker-plugin)" = '<nil>'
+          GOWORK=off go test ./cmd/openlinker -run TestPlatformClientDependencyBoundary -count=1
           GOWORK=off go mod verify

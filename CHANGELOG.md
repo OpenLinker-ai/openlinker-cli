@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — platform client boundary
+
+- Remove local `agent` and `plugin` commands and their Plugin module dependency.
+- Move native MCP, deep Agent control and Browser/proxy entry points to Plugin's
+  `openlinker-plugin-host`; ordinary Codex/Claude bridging uses Agent Node.
+- Keep caller commands and JSON contracts. See [MIGRATION.md](./MIGRATION.md)
+  before upgrading an older native Plugin or Worker installation.
+
+
 All notable changes to `openlinker-cli` will be documented in this file.
 
 The CLI is pre-1.0. Breaking changes may occur while the OpenLinker API and
