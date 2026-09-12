@@ -26,3 +26,9 @@ starting the host against the same state. This is an executable change, not a st
 reset. Moving a deployment to Agent Node is a separate configuration migration;
 do not assume its defaults or paths equal Plugin's. Keep the previous executable
 for rollback and never run two Workers against the same state directory.
+
+## Unused implementation helper
+
+The unused `pkg/shared.SplitCSV` helper has been removed. It was not a CLI command
+or SDK API; command names, arguments and JSON output are unchanged. Go consumers
+that imported this implementation helper should split and trim values locally.
