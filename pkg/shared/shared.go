@@ -125,17 +125,6 @@ func ParseOptionalJSON(raw string) (any, error) {
 	return out, nil
 }
 
-func SplitCSV(raw string) []string {
-	fields := strings.Split(raw, ",")
-	out := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if value := strings.TrimSpace(field); value != "" {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
 func FirstArg(args []string) string {
 	if len(args) == 0 {
 		return ""
