@@ -8,12 +8,12 @@ OpenLinker CLI 从 `main` 发布，前提是 CI 和本地发布门禁都通过�
 
 ## 跨仓发布顺序
 
-先发布并验证不可变 Plugin Go module；CLI 再固定该版本与真实 module checksum，使用
-`GOWORK=off` 完成六平台测试/构建后发布。最后更新 Plugin 的 CLI archive/checksum lock，
-显式发布 native 包和兼容镜像。不得把相对 `replace`、未发布候选版本或临时本地代理验证
-当成公开发布成功。Plugin 自身 module CI/发布不依赖新 CLI archive。旧 lock 必须让新
-Provider 镜像的 build-info 门禁失败，直到包含 Plugin 依赖及真实 `vcs.revision` 的 CLI 发布。
-保留上一组不可变 CLI/Plugin/image 以回滚，不迁移或删除运行时卷，不自动部署。
+先验证不可变 Go SDK module；CLI 再固定该版本与公开 module checksum，使用
+`GOWORK=off` 完成六平台测试/构建后发布。CLI 的模块图和包图必须排除 Node 与 Plugin。
+验证真实 CLI 发布归档后，更新 Plugin 中独立调用客户端的 CLI archive/checksum lock。
+Plugin 自己构建并发布执行宿主，宿主和 Provider 镜像分别校验源码与产物。
+不得把相对 `replace`、未发布候选版本或临时本地代理验证当成公开发布成功。
+保留上一组不可变产物以回滚；源码发布不会自动部署或修改运行时状态。
 
 ## 发布前检查
 
