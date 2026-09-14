@@ -3,7 +3,7 @@ module github.com/OpenLinker-ai/openlinker-cli
 go 1.26.4
 
 require (
-	github.com/OpenLinker-ai/openlinker-go v0.2.0-rc8.0.20260908135527-31afbf9c1a18
+	github.com/OpenLinker-ai/openlinker-go v0.2.0-rc8.0.20260914135716-6da420c00979
 	github.com/spf13/cobra v1.10.2
 )
 

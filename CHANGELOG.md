@@ -2,6 +2,10 @@
 
 ## Unreleased — platform client boundary
 
+- Pin the shared SDK contract synchronization commit `6da420c00979`. This
+  updates module identity and contract metadata; the Go SDK production sources
+  and existing command, credential, session, and persistent-state behavior are unchanged.
+
 - Remove local `agent` and `plugin` commands and their Plugin module dependency.
 - Move native MCP, deep Agent control and Browser/proxy entry points to Plugin's
   `openlinker-plugin-host`; ordinary Codex/Claude bridging uses Agent Node.
