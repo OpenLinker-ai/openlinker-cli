@@ -2,6 +2,10 @@
 
 ## Unreleased — platform client boundary
 
+- Pin the verified Go SDK module at `63fc87d73406`, adopting the gRPC
+  1.83.2 and protobuf dependency updates while retaining the SDK Go 1.25 baseline.
+  Command, credential, session and persistent-state contracts are unchanged.
+
 - Pin the shared SDK contract synchronization commit `6da420c00979`. This
   updates module identity and contract metadata; the Go SDK production sources
   and existing command, credential, session, and persistent-state behavior are unchanged.

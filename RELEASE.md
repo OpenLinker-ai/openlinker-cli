@@ -9,16 +9,15 @@ versioning, record notable changes under `Unreleased` in
 
 ## Cross-repository release order
 
-Publish and verify the immutable Plugin Go module first. Pin that exact version
-and real module checksums in CLI, then test/build all six CLI targets with
-`GOWORK=off` before releasing. Finally update Plugin's CLI archive/checksum lock
-and explicitly publish native packages and compatible images. Relative `replace`,
-unpublished candidates, and temporary local proxy validation are not public
-release evidence. Plugin module CI/publication must not require a new CLI archive.
-Old locks must fail the new Provider image build-info gate until a CLI containing
-the Plugin dependency and real `vcs.revision` is published. Keep the previous
-immutable CLI/Plugin/image set for rollback; do not migrate/delete runtime volumes
-or automatically deploy as part of a source release.
+Verify the immutable Go SDK module first. Pin that exact version and its public
+module checksums in CLI, then test/build all six CLI targets with `GOWORK=off`
+before releasing. CLI module and package graphs must exclude Node and Plugin.
+After verifying the published CLI archives, update Plugin's independent caller
+CLI archive/checksum locks. Plugin builds and releases its own execution host;
+its host and Provider images have separate source and artifact checks.
+Relative `replace`, unpublished candidates, and temporary local proxy validation
+are not public release evidence. Keep prior immutable artifacts for rollback;
+source releases do not automatically deploy or modify runtime state.
 
 ## Pre-release checklist
 
