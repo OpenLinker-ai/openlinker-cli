@@ -82,3 +82,5 @@ rm -rf "$tmpdir"
 ## 许可证
 
 贡献即表示你同意贡献内容使用本仓库的 Apache-2.0 许可证。
+
+浏览器登录仅保存 Core 签发的 User Token；优先级为显式 `--token`、`OPENLINKER_USER_TOKEN`、当前 API 实例保存的凭据。不得保存网页登录 JWT 或 Runtime 凭据。

@@ -6,7 +6,9 @@ import (
 	"os"
 
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/agents"
+	authcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/auth"
 	contextcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/context"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/credentials"
 	runcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/run"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/runs"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
@@ -54,6 +56,29 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 	root.PersistentFlags().StringVar(&opts.UserToken, "token", opts.UserToken, "OpenLinker User Token")
 	root.PersistentFlags().DurationVar(&opts.Timeout, "timeout", opts.Timeout, "request timeout")
 
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		entry := cmd
+		for entry.Parent() != nil && entry.Parent() != root {
+			entry = entry.Parent()
+		}
+		switch entry.Name() {
+		case "agents", "run", "runs", "tasks":
+		default:
+			return nil
+		}
+		if opts.UserToken != "" || cmd.Flags().Changed("token") {
+			return nil
+		}
+		token, err := credentials.Resolve(opts.APIBase, ioStreams.Getenv)
+		if err != nil {
+			fmt.Fprintf(ioStreams.Stderr, "Warning: %v; continuing without a saved credential.\n", err)
+			return nil
+		}
+		opts.UserToken = token
+		opts.SavedCredential = token != ""
+		return nil
+	}
+	root.AddCommand(authcmd.New(ioStreams, opts))
 	root.AddCommand(contextcmd.New(ioStreams, opts))
 	root.AddCommand(agents.New(ioStreams, opts))
 	root.AddCommand(runcmd.New(ioStreams, opts))
@@ -64,6 +89,9 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 
 func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, `Usage:
+  openlinker [global flags] auth login [--device-code] [--no-browser] [--credential-store keyring|file]
+  openlinker [global flags] auth status
+  openlinker [global flags] auth logout
   openlinker [global flags] context
   openlinker [global flags] agents search [--query q] [--tag tag] [--callable]
   openlinker [global flags] agents get --slug slug

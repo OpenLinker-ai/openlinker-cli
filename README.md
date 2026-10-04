@@ -27,6 +27,54 @@ go install github.com/OpenLinker-ai/openlinker-cli/cmd/openlinker@v0.x.y
 
 Replace `v0.x.y` with the release you have chosen.
 
+## Browser login
+
+```bash
+openlinker --api https://your-instance.example auth login
+openlinker --api https://your-instance.example auth status
+openlinker --api https://your-instance.example auth logout
+```
+
+Login opens the system browser. Confirm the account, instance, code and requested
+permissions on the website. Core issues a revocable User Token valid for 30 days;
+the browser's JWT stays in the browser. Core migration 094 and the matching Web
+`/cli/authorize` page are required. This does not log in Claude/Codex, start a
+Worker or load Plugin Browser services.
+
+Use `auth login --device-code` over SSH or on a headless machine, and open the
+printed URL from another device. `--no-browser` keeps the local callback flow
+but lets you open the URL yourself on the same machine. Login prompts go to
+stderr; successful stdout remains JSON and never contains the credential.
+`--scopes agents:read,runs:read` requests only those permissions; the default also
+includes `agents:run`, `runs:cancel` and `tasks:create`. These grants still obey
+Core's ownership and visibility checks.
+
+The default store is the OS keyring (macOS Keychain, Windows Credential Manager,
+Linux Secret Service). An unavailable keyring fails instead of saving plaintext.
+On POSIX systems, `--credential-store=file` explicitly selects a private 0600
+plaintext file, suitable for a headless account with a private home directory.
+Windows requires the keyring. Metadata lives under the OS user config directory
+in `openlinker/auth`; `OPENLINKER_CONFIG_DIR` can select an absolute private
+configuration directory. Keep this directory private (0700 on POSIX).
+
+Credential precedence is **`--token` > `OPENLINKER_USER_TOKEN` > saved login for
+that exact API instance**. Existing API defaults and scripts are unchanged;
+commands never launch a browser implicitly. `context` remains offline. Each API
+instance has one saved account; use logout before changing that account. A saved
+credential is never sent to another instance or through an HTTP redirect.
+
+`auth status` checks the effective credential online and prints safe account,
+issuer, grants and expiration metadata. `auth logout` revokes the saved token
+before removing it; if revocation cannot be confirmed, it retains the local
+record for retry. It does not clear or revoke a separate environment/flag token.
+Expired/revoked tokens are removed on logout; sign in again afterward. Browser
+User Token settings can also revoke a CLI token, including after a lost exchange
+response. No automatic refresh or plaintext credential export is provided.
+
+Saved login is optional for existing commands: when no valid saved credential is available, they continue anonymously (with a warning for an unreadable or expired record). `auth status` reports login problems directly. Ctrl-C cancels an in-progress login and removes its lock. SIGKILL or power loss may leave an instance-specific `.lock` file to remove after confirming no login/logout process is active.
+
+If a keyring entry was deleted or its metadata was damaged, first revoke the affected OpenLinker CLI token in website settings. After confirming no login/logout is running, remove only that instance's JSON record under `openlinker/auth` (match its `api` field; if unreadable, the filename is the SHA-256 hex of the normalized API URL). Then sign in again. Unlock a locked keyring before attempting recovery; deleting the local record alone does not revoke a token.
+
 ## Configuration
 
 ```bash
@@ -52,7 +100,7 @@ These values are context only. They do not authorize runtime delegation.
 
 ## User Token grants
 
-Create and manage User Tokens outside this CLI, either in Core Web under
+Manage User Tokens outside this CLI, either in Core Web under
 `/settings/user-tokens` or through Core's JWT-protected `/api/v1/user-tokens`
 API. Give each token only the Core grants needed for the commands it will run:
 

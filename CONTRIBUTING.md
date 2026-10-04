@@ -45,8 +45,8 @@ Changes that do not belong here include:
 
 ## CLI rules
 
-- Caller commands accept only `OPENLINKER_USER_TOKEN` or the explicit `--token`
-  User Token flag. Local execution and native MCP belong to Node/Plugin.
+- Caller commands accept only User Tokens: the explicit `--token` flag,
+  `OPENLINKER_USER_TOKEN`, or an instance-bound browser login, in that order. Local execution and native MCP belong to Node/Plugin.
 - Prefer the environment variable in examples because command-line token values
   may enter shell history or process listings.
 - Never print credentials to stdout or stderr.
