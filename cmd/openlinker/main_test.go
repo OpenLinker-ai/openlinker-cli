@@ -61,20 +61,41 @@ func TestDefaultOptionsUseOnlyCanonicalEnvironment(t *testing.T) {
 		"OPENLINKER_RUNTIME_TOKEN": "legacy-runtime-token",
 		"OPENLINKER_AGENT_TOKEN":   "legacy-agent-token",
 	}))
-	if legacyOnly.APIBase != "http://localhost:8080" || legacyOnly.UserToken != "" {
+	if legacyOnly.APIBase != "https://openlinker.ai" || legacyOnly.UserToken != "" {
 		t.Fatalf("legacy aliases were accepted: %#v", legacyOnly)
 	}
 }
 
 func TestContextReportsEffectiveDefaultAPIBase(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-	code := runCLI([]string{"context"}, strings.NewReader(""), stdout, stderr, testEnv(nil))
-	if code != 0 {
-		t.Fatalf("runCLI() code = %d stderr=%s", code, stderr.String())
+	tests := []struct {
+		name string
+		args []string
+		env  map[string]string
+		want string
+	}{
+		{name: "hosted default", want: "https://openlinker.ai"},
+		{name: "empty environment", env: map[string]string{"OPENLINKER_API_BASE": "", "OPENLINKER_URL": ""}, want: "https://openlinker.ai"},
+		{name: "URL environment", env: map[string]string{"OPENLINKER_URL": "http://localhost:8080"}, want: "http://localhost:8080"},
+		{name: "API environment takes precedence", env: map[string]string{"OPENLINKER_API_BASE": "https://core.example", "OPENLINKER_URL": "https://fallback.example"}, want: "https://core.example"},
+		{name: "flag takes precedence", args: []string{"--api", "https://override.example"}, env: map[string]string{"OPENLINKER_API_BASE": "https://core.example", "OPENLINKER_URL": "https://fallback.example"}, want: "https://override.example"},
 	}
-	if !strings.Contains(stdout.String(), `"api_base": "http://localhost:8080"`) {
-		t.Fatalf("stdout = %s", stdout.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+			args := append(append([]string{}, tt.args...), "context")
+			if code := runCLI(args, strings.NewReader(""), stdout, stderr, testEnv(tt.env)); code != 0 {
+				t.Fatalf("runCLI() code = %d stderr=%s", code, stderr.String())
+			}
+			var result struct {
+				APIBase string `json:"api_base"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.APIBase != tt.want {
+				t.Fatalf("api_base = %q, want %q", result.APIBase, tt.want)
+			}
+		})
 	}
 }
 

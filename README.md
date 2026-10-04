@@ -58,10 +58,12 @@ in `openlinker/auth`; `OPENLINKER_CONFIG_DIR` can select an absolute private
 configuration directory. Keep this directory private (0700 on POSIX).
 
 Credential precedence is **`--token` > `OPENLINKER_USER_TOKEN` > saved login for
-that exact API instance**. Existing API defaults and scripts are unchanged;
+that exact API instance**. API flags and environment overrides retain their precedence;
 commands never launch a browser implicitly. `context` remains offline. Each API
 instance has one saved account; use logout before changing that account. A saved
 credential is never sent to another instance or through an HTTP redirect.
+`https://openlinker.ai` and `https://api.openlinker.ai` have separate saved logins;
+use the same API address for login and subsequent commands.
 
 `auth status` checks the effective credential online and prints safe account,
 issuer, grants and expiration metadata. `auth logout` revokes the saved token
@@ -76,6 +78,10 @@ Saved login is optional for existing commands: when no valid saved credential is
 If a keyring entry was deleted or its metadata was damaged, first revoke the affected OpenLinker CLI token in website settings. After confirming no login/logout is running, remove only that instance's JSON record under `openlinker/auth` (match its `api` field; if unreadable, the filename is the SHA-256 hex of the normalized API URL). Then sign in again. Unlock a locked keyring before attempting recovery; deleting the local record alone does not revoke a token.
 
 ## Configuration
+
+Without an API flag or environment override, the CLI connects to `https://openlinker.ai`.
+Precedence is **`--api` > `OPENLINKER_API_BASE` > `OPENLINKER_URL` > `https://openlinker.ai`**.
+For a local Core instance, set the address explicitly:
 
 ```bash
 export OPENLINKER_API_BASE=http://localhost:8080
