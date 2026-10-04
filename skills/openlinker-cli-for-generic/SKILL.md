@@ -13,7 +13,8 @@ The CLI uses Cobra/pflag syntax. Always use double-dash long flags such as `--ap
 
 ## Environment
 
-The API base is optional and defaults to the local Core API:
+The API base is optional and defaults to `https://openlinker.ai`. Precedence is
+`--api` > `OPENLINKER_API_BASE` > `OPENLINKER_URL` > the default. For a local Core:
 
 ```bash
 OPENLINKER_API_BASE=http://localhost:8080

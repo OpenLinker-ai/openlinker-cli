@@ -1,51 +1,55 @@
 # Changelog
 
-## Unreleased — platform client boundary
+## v0.2.0 — 2026-10-04
 
-- Pin the verified Go SDK module at `63fc87d73406`, adopting the gRPC
-  1.83.2 and protobuf dependency updates while retaining the SDK Go 1.25 baseline.
-  Command, credential, session and persistent-state contracts are unchanged.
+This formal release includes the platform-client migration and browser login
+from the v0.2.0 prereleases. The CLI is pre-1.0; read
+[MIGRATION.md](./MIGRATION.md) before replacing an older all-in-one installation.
 
-- Pin the shared SDK contract synchronization commit `6da420c00979`. This
-  updates module identity and contract metadata; the Go SDK production sources
-  and existing command, credential, session, and persistent-state behavior are unchanged.
+### Breaking changes
 
-- Remove local `agent` and `plugin` commands and their Plugin module dependency.
-- Move native MCP, deep Agent control and Browser/proxy entry points to Plugin's
-  `openlinker-plugin-host`; ordinary Codex/Claude bridging uses Agent Node.
-- Keep caller commands and JSON contracts. See [MIGRATION.md](./MIGRATION.md)
-  before upgrading an older native Plugin or Worker installation.
+- Default to `https://openlinker.ai` when no API flag or environment override is
+  supplied. Precedence remains `--api` > `OPENLINKER_API_BASE` > `OPENLINKER_URL`.
+  Local/self-hosted scripts that relied on `http://localhost:8080` must now select
+  it explicitly. Saved credentials stay bound to their original API instance.
+- Remove local `agent` and `plugin` commands, Worker/Provider/Browser execution,
+  and the Plugin module dependency. Native MCP, deep Agent control and Browser
+  entry points use Plugin's `openlinker-plugin-host`; ordinary local bridging
+  uses Agent Node. There is no forwarding or automatic execution migration.
+- Go import consumers must replace the removed CLI Browser/Agent implementation
+  packages with the appropriate Plugin packages. The unused implementation
+  helper `pkg/shared.SplitCSV` has also been removed.
+- Remove the `delegate` command, `--runtime-token`/`OPENLINKER_RUNTIME_TOKEN`,
+  and the legacy `OPENLINKER_TOKEN`, `OPENLINKER_DEMO_JWT`, `OPENLINKER_API_URL`
+  and `OPENLINKER_AGENT_TOKEN` aliases. Use `OPENLINKER_USER_TOKEN` and
+  `OPENLINKER_API_BASE`/`OPENLINKER_URL` for explicit caller configuration.
+- Existing native Plugin packages that launch the old CLI must retain their
+  pinned executable until the matching Plugin host package is installed.
+  Preserve identities, credentials, sessions and state, and stop/drain the old
+  Worker before starting a replacement. Never share a data directory between
+  two running Workers; source installation does not migrate live state.
 
+### Added and retained
 
-All notable changes to `openlinker-cli` will be documented in this file.
+- Add browser and device-code `auth login`, online `auth status`, and revoking
+  `auth logout`. Core migration 094 and the matching authorization page are
+  required. Credentials default to the OS keyring; POSIX plaintext file storage
+  requires explicit selection. Saved logins are isolated by API instance.
+- Retain platform `context`, `agents`, `tasks`, `run`, and `runs` commands, User
+  Token grants, JSON output, asynchronous calls, cancellation and idempotency.
+  The CLI does not accept Runtime credentials or provide delegated execution.
+- Pin the verified Go SDK revision `63fc87d73406`, including synchronized public
+  contracts and dependency updates. CLI source builds require Go 1.26.4;
+  the SDK retains its Go 1.25 baseline.
+- Publish six platform archives with adjacent SHA-256 files and exact build
+  metadata, bilingual documentation, and caller Skills.
 
-The CLI is pre-1.0. Breaking changes may occur while the OpenLinker API and
-runtime boundaries are stabilizing.
+The preview history below describes earlier builds. Its execution packages,
+Plugin dependency and Browser images are superseded by the migration above and
+are not part of the v0.2.0 platform CLI. The preview's Removed entries remain
+effective and are included in the breaking changes above.
 
-## Unreleased
-
-### Changed
-
-- Browser Runtime, Codex/Claude execution adapters, native assets and portable
-  image/deployment definitions now belong to `openlinker-plugin`. CLI remains
-  the single public executable and command/MCP composition layer; CLI commands,
-  flags and Agent registration identity are unchanged by this extraction.
-- Pin the Plugin implementation to the immutable
-  `v0.1.58-0.20260905174434-1fea781f2b48` module with verified checksums. The Go
-  SDK remains pinned to `v0.2.0-rc7` and is still the sole Runtime Worker
-  lifecycle, assignment/ACK and spool implementation.
-- Publish Plugin source before dependent CLI artifacts. Provider images and
-  native packages require a matching checksum-locked CLI release; source
-  publication does not deploy or migrate Runtime volumes.
-
-### Removed
-
-- Breaking for Go import consumers: the former CLI Browser/Agent implementation
-  packages moved to Plugin's `packages/browser-runtime` and
-  `packages/agent-adapters`. Import those packages from the Plugin module;
-  standalone CLI users retain the existing command surface.
-
-## v0.2.0-rc.1 - Unreleased
+## v0.2.0-rc.1 — historical preview
 
 ### Added
 

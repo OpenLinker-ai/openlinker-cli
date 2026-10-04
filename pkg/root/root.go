@@ -106,7 +106,7 @@ func printUsage(stderr io.Writer) {
   openlinker [global flags] runs cancel --id run_id
 
 Global flags:
-  --api             OpenLinker Core API base URL, default OPENLINKER_API_BASE or http://localhost:8080
+  --api             OpenLinker Core API base URL, default OPENLINKER_API_BASE, OPENLINKER_URL, or https://openlinker.ai
   --token           OpenLinker User Token, default OPENLINKER_USER_TOKEN
   --timeout         request timeout
 

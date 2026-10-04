@@ -42,7 +42,7 @@ func DefaultGlobalOptions(getenv func(string) string) GlobalOptions {
 		getenv = os.Getenv
 	}
 	return GlobalOptions{
-		APIBase:   FirstNonEmpty(getenv("OPENLINKER_API_BASE"), getenv("OPENLINKER_URL"), "http://localhost:8080"),
+		APIBase:   FirstNonEmpty(getenv("OPENLINKER_API_BASE"), getenv("OPENLINKER_URL"), "https://openlinker.ai"),
 		UserToken: strings.TrimSpace(getenv("OPENLINKER_USER_TOKEN")),
 		Timeout:   60 * time.Second,
 	}

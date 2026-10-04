@@ -29,7 +29,8 @@ The CLI accepts one credential:
 OPENLINKER_USER_TOKEN
 ```
 
-The API base is optional and defaults to the local Core API:
+The API base is optional and defaults to `https://openlinker.ai`. Precedence is
+`--api` > `OPENLINKER_API_BASE` > `OPENLINKER_URL` > the default. Override with:
 
 ```bash
 OPENLINKER_API_BASE

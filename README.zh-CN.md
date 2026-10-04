@@ -50,9 +50,11 @@ Service。钥匙串不可用时不会自动降级。POSIX 用户可以显式使�
 `OPENLINKER_CONFIG_DIR` 指定私有目录（POSIX 要求 0700）。
 
 优先级：**`--token` > `OPENLINKER_USER_TOKEN` > 当前 API 实例保存的登录凭据**。
-现有 API 默认值和脚本用法保持不变，普通调用不会隐式打开浏览器；`context` 仍离线。
+API 参数和环境变量的覆盖优先级保持不变，普通调用不会隐式打开浏览器；`context` 仍离线。
 一个 API 实例保存一个账号，切换账号先退出登录。不会向其他实例或 HTTP 重定向转发
 保存的凭据。`auth status` 在线验证实际凭据，只显示账号、签发实例、权限和有效期。
+`https://openlinker.ai` 与 `https://api.openlinker.ai` 分别保存登录；登录和后续命令
+应使用同一个 API 地址。
 
 `auth logout` 先撤销本实例保存的 Token，再移除本地记录；网络失败无法确认撤销时保留
 记录供重试。它不会清除或撤销另外通过环境变量/参数传入的 Token。已过期或撤销的
@@ -64,6 +66,10 @@ Service。钥匙串不可用时不会自动降级。POSIX 用户可以显式使�
 如果钥匙串条目被删除或元数据损坏，先到网页撤销对应的 OpenLinker CLI Token。确认没有登录/退出进程后，只删除 `openlinker/auth` 中该实例的 JSON 记录（通过 `api` 字段匹配；记录不可读时，文件名为规范化 API URL 的 SHA-256 十六进制值），然后重新登录。钥匙串只是锁定时应先解锁；仅删除本地记录不会撤销远端 Token。
 
 ## 配置
+
+未指定 API 参数或环境变量时，CLI 默认连接 `https://openlinker.ai`。
+优先级为 **`--api` > `OPENLINKER_API_BASE` > `OPENLINKER_URL` > `https://openlinker.ai`**。
+使用本地 Core 时，请显式指定地址：
 
 ```bash
 export OPENLINKER_API_BASE=http://localhost:8080
