@@ -6,6 +6,9 @@ const SurfaceVersion = "openlinker.cli.v1"
 var Version = "dev"
 
 var capabilities = []string{
+	"auth.login",
+	"auth.logout",
+	"auth.status",
 	"agents.card",
 	"agents.get",
 	"agents.search",

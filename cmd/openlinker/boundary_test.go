@@ -42,12 +42,12 @@ func TestPlatformClientDependencyBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, goos := range []string{"linux", "darwin", "windows"} {
-		t.Run(goos, func(t *testing.T) {
+	for _, target := range []struct{ os, arch string }{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}, {"windows", "amd64"}, {"windows", "arm64"}} {
+		t.Run(target.os+"/"+target.arch, func(t *testing.T) {
 			for _, args := range [][]string{{"mod", "edit", "-json"}, {"mod", "graph"}, {"list", "-m", "-mod=readonly", "all"}, {"list", "-deps", "-test", "-mod=readonly", "-f", "{{.ImportPath}}", "./..."}} {
 				command := exec.Command("go", args...)
 				command.Dir = root
-				command.Env = append(os.Environ(), "GOWORK=off", "GOOS="+goos, "GOARCH=amd64", "CGO_ENABLED=0")
+				command.Env = append(os.Environ(), "GOWORK=off", "GOOS="+target.os, "GOARCH="+target.arch, "CGO_ENABLED=0")
 				output, err := command.CombinedOutput()
 				if err != nil || len(bytes.TrimSpace(output)) == 0 {
 					t.Fatalf("go %v: %v\n%s", args, err, output)

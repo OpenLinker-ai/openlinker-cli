@@ -24,9 +24,10 @@ type IO struct {
 }
 
 type GlobalOptions struct {
-	APIBase   string
-	UserToken string
-	Timeout   time.Duration
+	APIBase         string
+	UserToken       string
+	SavedCredential bool
+	Timeout         time.Duration
 }
 
 func (io IO) Env(key string) string {
@@ -53,6 +54,9 @@ func ContextForOptions(opts GlobalOptions) (context.Context, context.CancelFunc)
 
 func UserClient(opts GlobalOptions) (*openlinker.Client, error) {
 	httpClient := &http.Client{Timeout: opts.Timeout}
+	if opts.SavedCredential {
+		httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
 	options := []openlinker.Option{
 		openlinker.WithHTTPClient(httpClient),
 		openlinker.WithSDKAgent(SDKAgent),
