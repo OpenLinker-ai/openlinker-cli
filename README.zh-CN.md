@@ -27,7 +27,7 @@ go install github.com/OpenLinker-ai/openlinker-cli/cmd/openlinker@v0.x.y
 
 ## 平台技能包
 
-技能详情的安装页提供固定版本 `npx skills@1.7.1` 命令，把 ZIP 安装到 Claude Code / Codex 本地技能目录。先阅读文件，在目标项目执行；安装器在 Agent 环境可能自动安装。`openlinker skills` 负责 Core 平台资源，不运行本地安装器或 Agent。
+`npx skills add https://github.com/OWNER/REPO --skill NAME` 按 skills.sh 的方式直接从原仓库安装。技能安装页仅在兼容版本声明明确的 GitHub 技能目录时提供此命令。安装的是上游当前内容，可能与平台固定版本不同；运行前核对原仓库，按安装器提示选择客户端与范围。Agent 环境可能不提示直接安装，运行前先核对来源。`openlinker skills` 管理 **Core 平台资源**，不会运行该安装器或任何本地 Agent。
 
 ```bash
 openlinker skills list --query report
