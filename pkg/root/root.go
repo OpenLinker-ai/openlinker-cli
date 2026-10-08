@@ -12,6 +12,7 @@ import (
 	runcmd "github.com/OpenLinker-ai/openlinker-cli/pkg/run"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/runs"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/skills"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/tasks"
 	"github.com/spf13/cobra"
 )
@@ -62,6 +63,13 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 			entry = entry.Parent()
 		}
 		switch entry.Name() {
+		case "skills":
+			if cmd.Name() == "list" || cmd.Name() == "get" || cmd.Name() == "download" {
+				owned, _ := cmd.Flags().GetBool("owned")
+				if !owned {
+					return nil
+				}
+			}
 		case "agents", "run", "runs", "tasks":
 		default:
 			return nil
@@ -84,6 +92,7 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 	root.AddCommand(runcmd.New(ioStreams, opts))
 	root.AddCommand(runs.New(ioStreams, opts))
 	root.AddCommand(tasks.New(ioStreams, opts))
+	root.AddCommand(skills.New(ioStreams, opts))
 	return root
 }
 
@@ -92,6 +101,13 @@ func printUsage(stderr io.Writer) {
   openlinker [global flags] auth login [--device-code] [--no-browser] [--credential-store keyring|file]
   openlinker [global flags] auth status
   openlinker [global flags] auth logout
+  openlinker [global flags] skills list [--owned] [--query q]
+  openlinker [global flags] skills get --id package_id [--version version_id] [--owned]
+  openlinker [global flags] skills download --id package_id --version version_id --output new_file [--digest sha256] [--owned]
+  openlinker [global flags] skills import --id package_id --version version_id --digest sha256
+  openlinker [global flags] skills bindings --agent agent_id
+  openlinker [global flags] skills bind --agent agent_id --id private_package_id --version version_id
+  openlinker [global flags] skills unbind --agent agent_id --id private_package_id
   openlinker [global flags] context
   openlinker [global flags] agents search [--query q] [--tag tag] [--callable]
   openlinker [global flags] agents get --slug slug

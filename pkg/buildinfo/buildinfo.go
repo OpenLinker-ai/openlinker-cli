@@ -20,6 +20,8 @@ var capabilities = []string{
 	"runs.get",
 	"runs.messages",
 	"runs.sync",
+	"skills.list", "skills.get", "skills.download", "skills.import",
+	"skills.bindings", "skills.bind", "skills.unbind",
 	"tasks.create",
 }
 
