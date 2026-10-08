@@ -29,7 +29,7 @@ Replace `v0.x.y` with the release you have chosen.
 
 ## Platform Skill packages
 
-`npx skills@1.7.1` installs a published Skill ZIP into a local Claude Code or Codex skill directory. Copy its fixed-version command from the Skill install page, read the files first, then run it in your target project. `openlinker skills` manages **Core platform resources** and never runs that installer or any local Agent.
+`npx skills add https://github.com/OWNER/REPO --skill NAME` installs directly from the upstream repository, following skills.sh. The Skill install page provides this command when a compatible version declares an explicit GitHub Skill directory. It installs current upstream contents, which may differ from the fixed platform version; review that source before running and follow the installer to choose your client and scope. In Agent environments it may install without prompting; review the source first. `openlinker skills` manages **Core platform resources** and never runs that installer or any local Agent.
 
 ```bash
 openlinker skills list --query report
