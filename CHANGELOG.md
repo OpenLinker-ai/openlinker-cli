@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add platform Skill package discovery, metadata, verified canonical download, published-version private import and owned Agent binding commands. Skill permissions are explicit opt-in; login defaults stay unchanged. Local installation remains an external `npx skills` operation.
+
 ## v0.2.0 — 2026-10-04
 
 This formal release includes the platform-client migration and browser login

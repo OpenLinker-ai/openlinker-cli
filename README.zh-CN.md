@@ -25,6 +25,27 @@ go install github.com/OpenLinker-ai/openlinker-cli/cmd/openlinker@v0.x.y
 
 请把 `v0.x.y` 替换成实际选择的 release。
 
+## 平台技能包
+
+技能详情的安装页提供固定版本 `npx skills@1.7.1` 命令，把 ZIP 安装到 Claude Code / Codex 本地技能目录。先阅读文件，在目标项目执行；安装器在 Agent 环境可能自动安装。`openlinker skills` 负责 Core 平台资源，不运行本地安装器或 Agent。
+
+```bash
+openlinker skills list --query report
+openlinker skills get --id PACKAGE_UUID --version VERSION_UUID
+openlinker skills download --id PACKAGE_UUID --version VERSION_UUID --digest SHA256 --output skill-bundle.json
+openlinker auth login --scopes skill-packages:read,skill-packages:import,skill-bindings:read,skill-bindings:manage
+openlinker skills import --id PUBLISHED_PACKAGE_UUID --version PUBLISHED_VERSION_UUID --digest SHA256
+openlinker skills bind --agent OWNED_AGENT_UUID --id PRIVATE_PACKAGE_UUID --version PRIVATE_VERSION_UUID
+openlinker skills bindings --agent OWNED_AGENT_UUID
+openlinker skills unbind --agent OWNED_AGENT_UUID --id PRIVATE_PACKAGE_UUID
+```
+
+参数需替换成 UUID 和可信固定引用中的小写 SHA-256。公开查询和下载匿名调用，不发送已配置的 Token；`list/get/download --owned` 访问自己的私有包。自有列表使用 Core 原列表（最多 200 包），公开列表支持 `--query/--page/--limit`（每页 1–50）。固定版本 get 返回元数据，download 保存规范 bundle JSON，不安装客户端文件。
+
+新技能权限需匹配新版 Core 与授权页面，**明确申请**；原登录默认权限及已有 Token 不变。上述登录只申请四项技能权限并替换本实例保存的 CLI 凭据，若还需运行等原权限，请显式加上。`skill-packages:read` 可读取自己的**全部私有技能文件内容**；`skill-packages:import` 把公开或不列出的已发布版本复制到私有空间。`skill-bindings:read/manage` 仅查看或修改自有 Agent 关联，设置页创建的 Token 可限定 Agent UUID。这些权限不能上传、发布或改变可见性。
+
+下载核验 Core 原始规范 JSON 字节；`--digest` 额外固定调用者期望内容。只从同一服务器取摘要不能证明发布者可信。输出必须是无符号链接父路径下的新文件；以 0600 写完、同步，再用硬链接原子发布，已有文件/链接不能覆盖。不支持硬链接时明确失败。ZIP 摘要不等于 bundle 摘要。发布者撤回会使公开下载不可用，已有私有副本保留；Agent 关联固定指定版本并保留现有归属、生命周期与兼容检查。
+
 ## 浏览器登录
 
 ```bash

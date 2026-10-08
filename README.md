@@ -27,6 +27,27 @@ go install github.com/OpenLinker-ai/openlinker-cli/cmd/openlinker@v0.x.y
 
 Replace `v0.x.y` with the release you have chosen.
 
+## Platform Skill packages
+
+`npx skills@1.7.1` installs a published Skill ZIP into a local Claude Code or Codex skill directory. Copy its fixed-version command from the Skill install page, read the files first, then run it in your target project. `openlinker skills` manages **Core platform resources** and never runs that installer or any local Agent.
+
+```bash
+openlinker skills list --query report
+openlinker skills get --id PACKAGE_UUID --version VERSION_UUID
+openlinker skills download --id PACKAGE_UUID --version VERSION_UUID --digest SHA256 --output skill-bundle.json
+openlinker auth login --scopes skill-packages:read,skill-packages:import,skill-bindings:read,skill-bindings:manage
+openlinker skills import --id PUBLISHED_PACKAGE_UUID --version PUBLISHED_VERSION_UUID --digest SHA256
+openlinker skills bind --agent OWNED_AGENT_UUID --id PRIVATE_PACKAGE_UUID --version PRIVATE_VERSION_UUID
+openlinker skills bindings --agent OWNED_AGENT_UUID
+openlinker skills unbind --agent OWNED_AGENT_UUID --id PRIVATE_PACKAGE_UUID
+```
+
+Use UUIDs and the lowercase SHA-256 from a trusted fixed-version reference. Public list/get/download calls are anonymous, including when a token is configured. Add `--owned` to list/get/download for your private packages. Owned list returns the Core list (up to 200 packages); public discovery supports `--query`, `--page` and `--limit` (1–50). Fixed-version `get` returns metadata; `download` saves canonical bundle JSON rather than installing client files.
+
+Skill permissions are **opt-in** and require the matching new Core/API and authorization UI; existing CLI login defaults and stored grants are unchanged. The login command above requests only four skill scopes and replaces the instance's saved credential, so include your other required scopes when replacing an existing login. `skill-packages:read` includes **all your private skill file contents**; `skill-packages:import` copies published public/unlisted versions into private space. `skill-bindings:read/manage` inspect/change bindings only on owned Agents; a manually created token can restrict them to specific owned Agent UUIDs. Skills cannot be uploaded, published or made public using these scopes.
+
+Download verifies the exact canonical bytes against Core metadata, and `--digest` additionally pins the caller's expected content. A digest from the same server alone does not establish publisher trust. Output must be a new file in an existing directory without symlink ancestors; bytes are published atomically with mode 0600 using a no-overwrite hard link. Existing files/symlinks are rejected; unsupported hard-link filesystems fail without fallback. A ZIP's bytes have a different digest and do not use the bundle digest. Withdrawal makes public download unavailable; imported private copies remain usable. Bindings pin an explicit version and preserve Core's compatibility, owner and lifecycle checks.
+
 ## Browser login
 
 ```bash
