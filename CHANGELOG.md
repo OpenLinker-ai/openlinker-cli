@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Pin Go SDK `v0.2.1-0.20261108071305-2c5fa0b19319` (openlinker-go main `2c5fa0b1`).
+  The CLI uses the SDK client only, so command behavior is unchanged; the pin keeps
+  the CLI and Plugin on one public SDK version.
 - Add platform Skill package discovery, metadata, verified canonical download, published-version private import and owned Agent binding commands. Skill permissions are explicit opt-in; login defaults stay unchanged. Local installation remains an external `npx skills` operation.
 
 ## v0.2.0 — 2026-10-04
