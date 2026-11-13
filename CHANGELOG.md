@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add `openlinker workflows` (alias `workflow`): `list`, `get` (current or
+  `--version`), `run` (queued; `--input`/`--input-file`/`--text`,
+  `--version`, `--wait` follows the run and exits non-zero unless it
+  succeeds), `runs`, `status` and `cancel`. The commands call the platform
+  API with the CLI's own HTTP client, sending the same user token and never
+  forwarding a saved credential across redirects; the SDK is unchanged.
 - Pin Go SDK `v0.2.1-0.20261108071305-2c5fa0b19319` (openlinker-go main `2c5fa0b1`).
   The CLI uses the SDK client only, so command behavior is unchanged; the pin keeps
   the CLI and Plugin on one public SDK version.

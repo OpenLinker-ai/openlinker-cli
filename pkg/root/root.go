@@ -14,6 +14,7 @@ import (
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/shared"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/skills"
 	"github.com/OpenLinker-ai/openlinker-cli/pkg/tasks"
+	"github.com/OpenLinker-ai/openlinker-cli/pkg/workflows"
 	"github.com/spf13/cobra"
 )
 
@@ -70,7 +71,7 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 					return nil
 				}
 			}
-		case "agents", "run", "runs", "tasks":
+		case "agents", "run", "runs", "tasks", "workflows":
 		default:
 			return nil
 		}
@@ -93,6 +94,7 @@ func NewCommand(ioStreams shared.IO, opts *shared.GlobalOptions) *cobra.Command 
 	root.AddCommand(runs.New(ioStreams, opts))
 	root.AddCommand(tasks.New(ioStreams, opts))
 	root.AddCommand(skills.New(ioStreams, opts))
+	root.AddCommand(workflows.New(ioStreams, opts))
 	return root
 }
 
